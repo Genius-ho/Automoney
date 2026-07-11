@@ -1,0 +1,13 @@
+{
+  "default_margin_rate": 0.25,
+  "platforms": {
+    "coupang": {
+      "fee_rate": 0.11,
+      "round_to": 10
+    },
+    "smartstore": {
+      "fee_rate": 0.06,
+      "round_to": 10
+    }
+  }
+}
