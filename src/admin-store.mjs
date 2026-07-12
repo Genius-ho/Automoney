@@ -6,6 +6,7 @@ import { createHash } from 'node:crypto';
 import { computeImagePromptState } from './image-prompt-state.mjs';
 import { getDetailPageSections } from './manual-ai/detail-sections.mjs';
 import { getApprovedManualMainImage, listManualMainImages } from './manual-ai/workflow-store.mjs';
+import { getApprovedManualDetailSet, listManualDetailSets } from './manual-ai/detail-workflow-store.mjs';
 
 const VALID_STATUSES = new Set(['draft', 'needs_review', 'blocked', 'approved']);
 const VALID_MARKETPLACES = new Set(['coupang', 'naver']);
@@ -593,8 +594,9 @@ export async function exportProductDraft(db, id, channel) {
   const optimization = await getRegistrationOptimization(db, id);
   const imagePromptRequests = await getImagePromptRequests(db, id);
   const approvedManualMainImage=await getApprovedManualMainImage(db,id);
-  if (channel === 'coupang') return toCoupangExport(draft, optimization, imagePromptRequests,approvedManualMainImage);
-  if (channel === 'naver') return toNaverExport(draft, optimization, imagePromptRequests,approvedManualMainImage);
+  const approvedManualDetailSet=await getApprovedManualDetailSet(db,id);
+  if (channel === 'coupang') return toCoupangExport(draft, optimization, imagePromptRequests,approvedManualMainImage,approvedManualDetailSet);
+  if (channel === 'naver') return toNaverExport(draft, optimization, imagePromptRequests,approvedManualMainImage,approvedManualDetailSet);
   throw new Error(`Invalid export channel: ${channel}`);
 }
 
@@ -603,8 +605,9 @@ export async function buildDebugExport(db, id) {
   const requests = await getImagePromptRequests(db, id);
   const templates = await db.query('select * from image_prompt_templates where is_active = true');
   const manualAiMainImages=await listManualMainImages(db,id);
+  const manualAiDetailSets=await listManualDetailSets(db,id);
   const byType = (type) => { const request=requests.find(x=>x.requestType===type)||null; const template=templates.rows.find(x=>x.template_type===type)||null; return { request, template }; };
-  return { draftId:draft.id, product:{name:draft.sellingTitle||draft.rawName}, htmlDetailPage:{exists:Boolean(draft.generatedDetailHtml),length:draft.generatedDetailHtml.length,generatedDetailHtml:draft.generatedDetailHtml,updatedAt:draft.updatedAt||null}, imagePromptState:{mainImage:byType('main_image'),detailPage:byType('detail_page')}, images:{mainImages:imageUrlsByType(draft,['main']),detailImages:imageUrlsByType(draft,['detail','regenerated_detail_asset']),detailSourceFullImages:imageUrlsByType(draft,['detail_source_full','detail_full']),generatedAiImages:manualAiMainImages}, manualAiMainImages,generatedAiImageCount:manualAiMainImages.length };
+  return { draftId:draft.id, product:{name:draft.sellingTitle||draft.rawName}, htmlDetailPage:{exists:Boolean(draft.generatedDetailHtml),length:draft.generatedDetailHtml.length,generatedDetailHtml:draft.generatedDetailHtml,updatedAt:draft.updatedAt||null}, imagePromptState:{mainImage:byType('main_image'),detailPage:byType('detail_page')}, images:{mainImages:imageUrlsByType(draft,['main']),detailImages:imageUrlsByType(draft,['detail','regenerated_detail_asset']),detailSourceFullImages:imageUrlsByType(draft,['detail_source_full','detail_full']),generatedAiImages:manualAiMainImages}, manualAiMainImages,generatedAiImageCount:manualAiMainImages.length,manualAiDetailSets,approvedAiDetailSet:manualAiDetailSets.find((set)=>set.status==='approved')||null };
 }
 
 export async function getImagePromptRequests(db, productDraftId) {
@@ -998,7 +1001,7 @@ function toDraftDetail(row, images, options) {
   };
 }
 
-function toCoupangExport(draft, optimization = null, imagePromptRequests = [],approvedManualMainImage=null) {
+function toCoupangExport(draft, optimization = null, imagePromptRequests = [],approvedManualMainImage=null,approvedManualDetailSet=null) {
   return {
     channel: 'coupang',
     exportBlocked: draft.status === 'blocked' || draft.filterStatus === 'blocked',
@@ -1023,6 +1026,7 @@ function toCoupangExport(draft, optimization = null, imagePromptRequests = [],ap
     shippingFee: draft.shippingFee,
     expectedProfit: draft.coupangExpectedProfit,
     detailHtml: draft.generatedDetailHtml,
+    ...approvedDetailExport(approvedManualDetailSet),
     readyToRegister: false,
     aiImageStatus: toAiImageStatus(imagePromptRequests),
     registrationOptimization: {
@@ -1048,7 +1052,7 @@ function toCoupangExport(draft, optimization = null, imagePromptRequests = [],ap
   };
 }
 
-function toNaverExport(draft, optimization = null, imagePromptRequests = [],approvedManualMainImage=null) {
+function toNaverExport(draft, optimization = null, imagePromptRequests = [],approvedManualMainImage=null,approvedManualDetailSet=null) {
   return {
     channel: 'naver',
     exportBlocked: draft.status === 'blocked' || draft.filterStatus === 'blocked',
@@ -1072,6 +1076,7 @@ function toNaverExport(draft, optimization = null, imagePromptRequests = [],appr
     deliveryFee: draft.shippingFee,
     expectedProfit: draft.naverExpectedProfit,
     detailContent: draft.generatedDetailHtml,
+    ...approvedDetailExport(approvedManualDetailSet),
     readyToRegister: false,
     aiImageStatus: toAiImageStatus(imagePromptRequests),
     registrationOptimization: {
@@ -1126,6 +1131,7 @@ function imageUrlsByType(draft, types) {
 }
 
 function preferredMainImages(draft,approvedManualMainImage){return[approvedManualMainImage?.coupangStoredUrl,...imageUrlsByType(draft,['main'])].filter((value,index,all)=>value&&all.indexOf(value)===index);}
+function approvedDetailExport(set){return{approvedAiDetailImages:set?.images?.map((image)=>image.normalizedStoredUrl)||[],approvedAiDetailImageCount:set?.images?.length||0,approvedAiDetailSetVersion:set?.setVersion||null,approvedAiDetailProvider:set?.providerCode||null,approvedAiDetailPromptRevision:set?.promptRevision||null};}
 
 function toExportImage(image) {
   return {
