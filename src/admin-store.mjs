@@ -418,9 +418,9 @@ async function saveRegistrationOptimization(db, id, optimization, { createGenera
       insert into seo_keyword_analysis (
         product_draft_id, marketplace, base_keyword, extracted_keywords, generated_keywords, selected_keywords,
         forbidden_keywords, naver_total_results, naver_lowest_price, naver_top_titles,
-        datalab_score, datalab_trend_direction, reasons, updated_at
+        datalab_score, datalab_trend_direction, reasons, keyword_scores, removed_supplier_labels, updated_at
       )
-      values ($1, $2, $3, $4::jsonb, $5::jsonb, $6::jsonb, $7::jsonb, $8, $9, $10::jsonb, $11, $12, $13::jsonb, now())
+      values ($1, $2, $3, $4::jsonb, $5::jsonb, $6::jsonb, $7::jsonb, $8, $9, $10::jsonb, $11, $12, $13::jsonb, $14::jsonb, $15::jsonb, now())
       on conflict (product_draft_id, marketplace) do update set
         base_keyword = excluded.base_keyword,
         extracted_keywords = excluded.extracted_keywords,
@@ -433,6 +433,8 @@ async function saveRegistrationOptimization(db, id, optimization, { createGenera
         datalab_score = excluded.datalab_score,
         datalab_trend_direction = excluded.datalab_trend_direction,
         reasons = excluded.reasons,
+        keyword_scores = excluded.keyword_scores,
+        removed_supplier_labels = excluded.removed_supplier_labels,
         updated_at = now()
     `,
     [
@@ -449,6 +451,8 @@ async function saveRegistrationOptimization(db, id, optimization, { createGenera
       optimization.seo.datalabScore,
       optimization.seo.datalabTrendDirection,
       JSON.stringify(optimization.seo.reasons),
+      JSON.stringify(optimization.seo.keywordScores || []),
+      JSON.stringify(optimization.seo.removedSupplierLabels || []),
     ],
   );
   await db.query(
@@ -1221,6 +1225,8 @@ function toSeoAnalysis(row) {
     datalabScore: row.datalab_score == null ? null : Number(row.datalab_score),
     datalabTrendDirection: row.datalab_trend_direction,
     reasons: row.reasons || [],
+    keywordScores: row.keyword_scores || [],
+    removedSupplierLabels: row.removed_supplier_labels || [],
   };
 }
 

@@ -179,6 +179,8 @@ create table if not exists seo_keyword_analysis (
 );
 
 alter table seo_keyword_analysis add column if not exists extracted_keywords jsonb not null default '[]'::jsonb;
+alter table seo_keyword_analysis add column if not exists keyword_scores jsonb not null default '[]'::jsonb;
+alter table seo_keyword_analysis add column if not exists removed_supplier_labels jsonb not null default '[]'::jsonb;
 
 create table if not exists category_mapping (
   id bigserial primary key,

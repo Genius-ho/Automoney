@@ -1,7 +1,9 @@
 const SUPPLIER_NOISE_PATTERNS = [
-  /\[[^\]]*(GS마켓|싸더라|신상꿀템|도매|마켓)[^\]]*\]/gi,
   /\((당일출고|특가|추천|인기)[^)]+\)/gi,
-  /\b(당일출고|특가|추천|인기|무료배송|국내배송)\b/gi,
+  // \b only anchors on ASCII word characters, so it never matches around Korean
+  // text; use a Unicode letter/number boundary instead so bare noise words are
+  // actually stripped, not just excluded later as stopwords during scoring.
+  /(?<![\p{L}\p{N}])(당일출고|특가|추천|인기|무료배송|국내배송)(?![\p{L}\p{N}])/gu,
 ];
 
 const FORBIDDEN_KEYWORDS = [
@@ -28,17 +30,23 @@ const STOPWORDS = new Set([
   '인기',
 ]);
 
+const LEADING_BRACKET_LABEL = /^\s*\[([^\]]+)\]\s*/;
+
 export function buildRegistrationOptimization({ draft, naverResearch }) {
   const searchRaw = naverResearch?.raw?.searchRaw || {};
   const naverItems = Array.isArray(searchRaw.items) ? searchRaw.items : [];
   const topTitles = naverItems.slice(0, 20).map((item) => stripHtml(item.title || '')).filter(Boolean);
-  const baseKeyword = cleanSourceTitle(draft.sellingTitle || draft.cleanedName || draft.rawName || draft.originalProductName || '');
-  const generatedKeywords = extractKeywords([baseKeyword, ...topTitles]);
+  const rawTitle = draft.sellingTitle || draft.cleanedName || draft.rawName || draft.originalProductName || '';
+  const { labels: removedSupplierLabels, remainder } = extractLeadingSupplierLabels(rawTitle);
+  const baseKeyword = cleanSourceTitle(remainder, removedSupplierLabels);
+
+  const scoredKeywords = scoreKeywords([baseKeyword, ...topTitles], removedSupplierLabels);
+  const generatedKeywords = scoredKeywords.map((entry) => entry.keyword);
   const forbiddenKeywords = generatedKeywords.filter((keyword) =>
     FORBIDDEN_KEYWORDS.some((forbidden) => keyword.toLowerCase().includes(forbidden.toLowerCase())),
   );
   const selectedKeywords = generatedKeywords.filter((keyword) => !forbiddenKeywords.includes(keyword)).slice(0, 12);
-  const titleResult = buildOptimizedTitles({ draft, selectedKeywords, baseKeyword });
+  const titleResult = buildOptimizedTitles({ draft, selectedKeywords, baseKeyword, removedSupplierLabels });
   const detailHtml = buildOptimizedDetailHtml({ draft, title: titleResult.naverTitle || titleResult.coupangTitle });
   const imagePrompts = buildImagePrompts({ draft, title: titleResult.naverTitle || titleResult.coupangTitle });
   const category = inferCategory({ draft, naverItems });
@@ -49,7 +57,9 @@ export function buildRegistrationOptimization({ draft, naverResearch }) {
     seo: {
       marketplace: 'naver',
       baseKeyword,
+      removedSupplierLabels,
       generatedKeywords,
+      keywordScores: scoredKeywords,
       selectedKeywords,
       forbiddenKeywords,
       naverTotalResults: Number(searchRaw.total || naverResearch?.competitorCount || 0),
@@ -68,31 +78,68 @@ export function buildRegistrationOptimization({ draft, naverResearch }) {
   };
 }
 
-export function cleanSourceTitle(value) {
+// Domeme/Domeggook raw titles conventionally lead with "[공급처명]" or "[이벤트명]".
+// Deriving the label from the product's own title (instead of a hardcoded brand
+// whitelist) removes any past seller's brand mark, not just previously seen ones.
+export function extractLeadingSupplierLabels(value) {
+  let remainder = String(value || '');
+  const labels = [];
+  let match = remainder.match(LEADING_BRACKET_LABEL);
+  while (match) {
+    const label = match[1].trim();
+    if (label) labels.push(label);
+    remainder = remainder.slice(match[0].length);
+    match = remainder.match(LEADING_BRACKET_LABEL);
+  }
+  return { labels, remainder: remainder.trim() };
+}
+
+export function cleanSourceTitle(value, supplierLabels = []) {
   let text = String(value || '');
   for (const pattern of SUPPLIER_NOISE_PATTERNS) text = text.replace(pattern, ' ');
+  for (const label of supplierLabels) {
+    if (!label) continue;
+    text = text.split(`[${label}]`).join(' ').split(label).join(' ');
+  }
   return text.replace(/\s+/g, ' ').trim();
 }
 
-export function extractKeywords(values) {
-  const counts = new Map();
-  for (const value of values) {
-    const cleaned = cleanSourceTitle(stripHtml(value));
-    for (const token of cleaned.split(/[\s,/|+_-]+/)) {
+// Popularity score = share of today's top Naver listings (plus the product's own
+// cleaned title) that contain the keyword at least once, so a word repeated many
+// times inside a single title can no longer outrank a word that many different
+// competitors actually use.
+export function scoreKeywords(documents, supplierLabels = []) {
+  const excluded = new Set(supplierLabels.filter(Boolean));
+  const docs = (Array.isArray(documents) ? documents : [])
+    .map((value) => cleanSourceTitle(stripHtml(value), supplierLabels))
+    .filter(Boolean);
+  const documentCount = docs.length || 1;
+  const documentFrequency = new Map();
+  for (const doc of docs) {
+    const seenInDoc = new Set();
+    for (const token of doc.split(/[\s,/|+_-]+/)) {
       const keyword = token.trim();
-      if (!keyword || keyword.length < 2 || /^\d+$/.test(keyword) || STOPWORDS.has(keyword)) continue;
-      counts.set(keyword, (counts.get(keyword) || 0) + 1);
+      if (!keyword || keyword.length < 2 || /^\d+$/.test(keyword) || STOPWORDS.has(keyword) || excluded.has(keyword)) continue;
+      seenInDoc.add(keyword);
     }
+    for (const keyword of seenInDoc) documentFrequency.set(keyword, (documentFrequency.get(keyword) || 0) + 1);
   }
-  return [...counts.entries()]
-    .sort((a, b) => b[1] - a[1] || b[0].length - a[0].length || a[0].localeCompare(b[0], 'ko'))
-    .map(([keyword]) => keyword)
+  return [...documentFrequency.entries()]
+    .map(([keyword, frequency]) => ({
+      keyword,
+      documentFrequency: frequency,
+      score: roundToTwoDecimals(frequency / documentCount),
+    }))
+    .sort((a, b) => b.score - a.score
+      || b.documentFrequency - a.documentFrequency
+      || b.keyword.length - a.keyword.length
+      || a.keyword.localeCompare(b.keyword, 'ko'))
     .slice(0, 30);
 }
 
-export function buildOptimizedTitles({ draft, selectedKeywords, baseKeyword }) {
+export function buildOptimizedTitles({ draft, selectedKeywords, baseKeyword, removedSupplierLabels = [] }) {
   const warnings = [];
-  const source = cleanSourceTitle(baseKeyword);
+  const source = cleanSourceTitle(baseKeyword, removedSupplierLabels);
   const titleParts = unique([
     ...selectedKeywords.slice(0, 6),
     ...source.split(/\s+/).filter(Boolean).slice(0, 4),
@@ -224,4 +271,8 @@ function formatMoney(value) {
 
 function labelMarket(value) {
   return { domeme: '도매매', domeggook: '도매꾹', unknown: 'unknown' }[value] || value || 'unknown';
+}
+
+function roundToTwoDecimals(value) {
+  return Math.round(value * 100) / 100;
 }
