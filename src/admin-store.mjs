@@ -628,7 +628,8 @@ export async function getManualMainImageWorkflowContext(db, productDraftId) {
 export async function getManualDetailWorkflowContext(db, productDraftId) {
   const sections = getDetailPageSections();
   const draft = await getProductDraft(db, productDraftId);
-  if (!draft) return { draft: null, request: null, sections, mainImage: null, detailImages: [], originalDetailFull: [], sourceSlices: [], extractedReferences: {}, sectionReferenceHints: {}, referenceImages: [] };
+  if (!draft) return { draft: null, request: null, sections, mainImage: null, rawMainImage: null, detailImages: [], originalDetailFull: [], sourceSlices: [], extractedReferences: {}, sectionReferenceHints: {}, referenceImages: [] };
+  const approvedMainImage = await getApprovedManualMainImage(db, productDraftId);
 
   const selectedRequest = (await getImagePromptRequests(db, productDraftId))
     .find((item) => item.requestType === 'detail_page') || null;
@@ -665,7 +666,10 @@ export async function getManualDetailWorkflowContext(db, productDraftId) {
   };
 
   const sourceMainImage = draft.images.find((image) => image.imageType === 'main') || null;
-  const mainImage = sourceMainImage ? { ...sourceMainImage, url: preferredUrl(sourceMainImage) } : null;
+  const rawMainImage = sourceMainImage ? { ...sourceMainImage, url: preferredUrl(sourceMainImage) } : null;
+  const mainImage = approvedMainImage
+    ? { url: approvedMainImage.coupangStoredUrl, storedUrl: approvedMainImage.coupangStoredUrl, imageType: 'main', approved: true }
+    : rawMainImage;
   imageAliases(sourceMainImage).forEach((value) => selectedUrls.add(value));
 
   const detailPriority = new Map([
@@ -692,13 +696,13 @@ export async function getManualDetailWorkflowContext(db, productDraftId) {
   const sourceSlices = detailImages
     .filter((image) => ['detail_source_slice', 'detail_slice'].includes(image.imageType))
     .sort((left, right) => Number(left.sliceIndex || 0) - Number(right.sliceIndex || 0));
-  const extractedReferences = buildDetailReferenceCandidates(sourceSlices, detailImages, mainImage);
+  const extractedReferences = buildDetailReferenceCandidates(sourceSlices, detailImages, rawMainImage);
   const sectionReferenceHints = buildSectionReferenceHints(sections, sourceSlices);
 
   const referenceImages = [];
   for (const url of request?.competitorImageUrls || []) addUrl(referenceImages, url);
 
-  return { draft, request, sections, mainImage, detailImages, originalDetailFull, sourceSlices, extractedReferences, sectionReferenceHints, referenceImages };
+  return { draft, request, sections, mainImage, rawMainImage, detailImages, originalDetailFull, sourceSlices, extractedReferences, sectionReferenceHints, referenceImages };
 }
 
 function buildDetailReferenceCandidates(sourceSlices, detailImages, mainImage) {

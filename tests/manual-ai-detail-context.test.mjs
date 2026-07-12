@@ -12,10 +12,15 @@ import { getManualDetailWorkflowContext } from '../src/admin-store.mjs';
 const TEMPLATE_BODY = 'detail page prompt template';
 const TEMPLATE_HASH = createHash('sha256').update(TEMPLATE_BODY).digest('hex');
 
-function detailContextDb({ activeTemplateVersion = 1 } = {}) {
+function detailContextDb({ activeTemplateVersion = 1, approvedMainImageRow = null } = {}) {
   return {
     async query(sql, params = []) {
       const text = String(sql).replace(/\s+/g, ' ').trim();
+
+      if (text.includes('from generated_ai_images')) {
+        assert.deepEqual(params, [64]);
+        return { rows: approvedMainImageRow ? [approvedMainImageRow] : [] };
+      }
 
       if (text.includes('from product_drafts d')) {
         assert.deepEqual(params, [64]);
@@ -192,6 +197,33 @@ test('detail context reports a stale prompt when the active template version adv
 
   assert.equal(context.request.revision, 1);
   assert.equal(context.request.state, 'stale_template_version');
+});
+
+test('detail context falls back to the raw source main image when no manual result is approved', async () => {
+  const context = await getManualDetailWorkflowContext(detailContextDb(), 64);
+  assert.equal(context.mainImage.url, '/original-images/main.jpg');
+  assert.equal(context.mainImage.approved, undefined);
+  assert.equal(context.rawMainImage.url, '/original-images/main.jpg');
+});
+
+test('detail context prefers the approved manual main image while keeping the raw original for provenance', async () => {
+  const context = await getManualDetailWorkflowContext(detailContextDb({
+    approvedMainImageRow: {
+      id: 9,
+      product_draft_id: 64,
+      task_type: 'main_image',
+      status: 'approved',
+      coupang_stored_url: '/generated-ai-images/drafts/64/main/manual/r1-v2/manual-r2-v2-coupang-1000x1000.jpg',
+      coupang_mime_type: 'image/jpeg',
+      coupang_file_size: 500_000,
+      width: 1000,
+      height: 1000,
+    },
+  }), 64);
+
+  assert.equal(context.mainImage.url, '/generated-ai-images/drafts/64/main/manual/r1-v2/manual-r2-v2-coupang-1000x1000.jpg');
+  assert.equal(context.mainImage.approved, true);
+  assert.equal(context.rawMainImage.url, '/original-images/main.jpg');
 });
 
 test('detail context prefers local source-full assets and de-duplicates all selected URLs', async () => {

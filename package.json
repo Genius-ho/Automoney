@@ -18,6 +18,7 @@
     "verify:admin-ui": "node scripts/verify-admin-ui.mjs",
     "verify:ai-settings": "node scripts/verify-ai-provider-settings.mjs",
     "verify:manual-main-image": "node scripts/verify-manual-main-image.mjs",
+    "verify:manual-detail-page": "node scripts/verify-manual-detail-page.mjs",
     "test": "node tests/manual-ai-workflow-store.test.mjs && node tests/manual-ai-image-processing.test.mjs && node tests/manual-ai-package.test.mjs && node tests/manual-ai-http.test.mjs && node tests/manual-ai-workflow-service.test.mjs && node tests/manual-ai-admin-html.test.mjs && node --test tests/manual-ai-detail-context.test.mjs tests/manual-ai-detail-store.test.mjs tests/manual-ai-detail-image-processing.test.mjs tests/manual-ai-detail-multipart.test.mjs tests/manual-ai-detail-package.test.mjs && node tests/ai-provider-framework.test.mjs && node tests/processing.test.mjs && node tests/domeme-client.test.mjs && node tests/pipeline.test.mjs && node tests/postgres-store.test.mjs && node tests/admin-store.test.mjs && node tests/generated-detail-v2.test.mjs && node tests/image-retention.test.mjs && node tests/original-image-archive.test.mjs && node tests/public-assets.test.mjs && node tests/winner-score.test.mjs && node tests/naver-research.test.mjs",
     "process:test-products": "node scripts/process-test-products.mjs",
     "test:import": "node scripts/test-import.js",

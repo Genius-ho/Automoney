@@ -23,7 +23,18 @@ const SECTIONS = [
   { index: 10, key: 'product_info', label: 'Product Info' },
 ];
 
-function detailPackageContext() {
+function sliceAssets(count) {
+  return Array.from({ length: count }, (_, offset) => ({
+    url: `https://supplier.test/slice-${String(offset + 1).padStart(2, '0')}.png`,
+  }));
+}
+
+function detailPackageContext({ sliceCount = 10, mainImage, rawMainImage } = {}) {
+  const resolvedMainImage = mainImage !== undefined ? mainImage : {
+    url: '/original-images/main.jpg',
+    storedUrl: '/original-images/main.jpg',
+    originalUrl: 'https://supplier.test/main.jpg',
+  };
   return {
     draft: {
       id: 64,
@@ -56,37 +67,18 @@ function detailPackageContext() {
       authorization: 'do-not-serialize-request-secret',
     },
     sections: SECTIONS.map((section) => ({ ...section })),
-    mainImage: {
-      url: '/original-images/main.jpg',
-      storedUrl: '/original-images/main.jpg',
-      originalUrl: 'https://supplier.test/main.jpg',
-    },
-    detailImages: [
-      {
-        url: 'https://supplier.test/detail-full.webp',
-        storedUrl: '/original-images/detail-full.webp',
-        originalUrl: 'https://supplier.test/detail-full.webp',
-      },
-      { url: 'https://supplier.test/detail-full.webp' },
-      { url: 'https://supplier.test/detail.png' },
-      { url: 'https://supplier.test/detail.png' },
-    ],
+    mainImage: resolvedMainImage,
+    rawMainImage: rawMainImage !== undefined ? rawMainImage : resolvedMainImage,
+    detailImages: [],
     originalDetailFull: [{ url: 'https://supplier.test/detail-full.webp', storedUrl: '/original-images/detail-full.webp' }],
-    sourceSlices: [
-      { url: 'https://supplier.test/detail.png' },
-      { url: 'https://supplier.test/detail-full.webp', storedUrl: '/original-images/detail-full.webp' },
-    ],
+    sourceSlices: sliceAssets(sliceCount),
     extractedReferences: {
-      heroCandidates: [{ url: 'https://supplier.test/detail.png' }],
+      heroCandidates: [{ url: 'https://supplier.test/hero-candidate.png' }],
       reviewStyleCandidates: [{ url: 'https://supplier.test/detail-full.webp', storedUrl: '/original-images/detail-full.webp' }],
       pointCandidates: [], comparisonCandidates: [], sizeOptionCandidates: [],
     },
     sectionReferenceHints: { hero: ['source-slices/source-slice-01'], review: ['source-slices/source-slice-02'] },
-    referenceImages: [
-      { url: 'https://supplier.test/detail.png' },
-      { url: 'https://reference.test/unavailable.jpg' },
-      { url: 'https://reference.test/competitor.jpg' },
-    ],
+    referenceImages: [],
   };
 }
 
@@ -100,93 +92,138 @@ function response(buffer, { ok = true, status = 200 } = {}) {
   };
 }
 
-test('detail package snapshots revision one and ten expected sections', async () => {
-  const context = detailPackageContext();
-  const result = await buildDetailPagePackage(context, {
-    readLocalAsset: async (url) => url.endsWith('.webp') ? PNG : JPEG,
-    fetchImpl: async (url) => {
-      if (url.endsWith('unavailable.jpg')) return response(Buffer.alloc(0), { ok: false, status: 404 });
-      return response(url.endsWith('.png') ? PNG : JPEG);
-    },
-  });
+function trackedLoaders() {
+  const localReads = [];
+  const remoteFetches = [];
+  const readLocalAsset = async (url) => {
+    localReads.push(url);
+    return url.endsWith('.webp') ? WEBP : PNG;
+  };
+  const fetchImpl = async (url) => {
+    remoteFetches.push(url);
+    if (url.endsWith('unavailable.jpg')) return response(Buffer.alloc(0), { ok: false, status: 404 });
+    return response(url.endsWith('.png') ? PNG : JPEG);
+  };
+  return { localReads, remoteFetches, readLocalAsset, fetchImpl };
+}
+
+test('the download attaches only the prompt, one main image, and seven auto-selected references at the zip root', async () => {
+  const context = detailPackageContext({ sliceCount: 10 });
+  const { readLocalAsset, fetchImpl, remoteFetches } = trackedLoaders();
+  const result = await buildDetailPagePackage(context, { readLocalAsset, fetchImpl });
 
   assert.equal(result.filename, 'draft-64-detail-page-r1.zip');
   assert.ok(result.buffer.subarray(0, 2).equals(Buffer.from('PK')));
-  assert.deepEqual(result.entries.slice(0, 4).map((entry) => entry.name), [
-    '01-prompt-rendered.txt',
-    '02-prompt-original.txt',
-    '03-product-info.json',
-    '04-instructions.txt',
-  ]);
-  assert.ok(result.entries.some((entry) => entry.name === 'original-detail-full/source-detail-full-01.png'));
-  assert.ok(result.entries.some((entry) => entry.name === 'source-slices/source-slice-01.png'));
-  assert.ok(result.entries.some((entry) => entry.name === 'extracted-references/hero-candidates/candidate-01.png'));
 
-  const info = JSON.parse(result.entries.find((entry) => entry.name === '03-product-info.json').data);
+  const rootEntries = result.entries.filter((entry) => !entry.name.startsWith('sources/'));
+  assert.deepEqual(rootEntries.map((entry) => entry.name), [
+    'prompt-rendered.txt',
+    'main-image.png',
+    'reference-01.png',
+    'reference-02.png',
+    'reference-03.png',
+    'reference-04.png',
+    'reference-05.png',
+    'reference-06.png',
+    'reference-07.png',
+  ]);
+  assert.equal(rootEntries.length, 9, 'only the files the user attaches live at the zip root');
+
+  // Ten slices evenly sampled down to seven: indices 1,3,4,6,7,9,10 are picked first (root
+  // references), the remaining 2,5,8 are only fetched afterward while dumping full provenance.
+  assert.deepEqual(remoteFetches.slice(0, 10), [
+    'https://supplier.test/slice-01.png',
+    'https://supplier.test/slice-03.png',
+    'https://supplier.test/slice-04.png',
+    'https://supplier.test/slice-06.png',
+    'https://supplier.test/slice-07.png',
+    'https://supplier.test/slice-09.png',
+    'https://supplier.test/slice-10.png',
+    'https://supplier.test/slice-02.png',
+    'https://supplier.test/slice-05.png',
+    'https://supplier.test/slice-08.png',
+  ]);
+});
+
+test('everything the user never needs to open is filed under sources/', async () => {
+  const context = detailPackageContext({ sliceCount: 10 });
+  const { readLocalAsset, fetchImpl } = trackedLoaders();
+  const result = await buildDetailPagePackage(context, { readLocalAsset, fetchImpl });
+
+  const sourceNames = result.entries.filter((entry) => entry.name.startsWith('sources/')).map((entry) => entry.name);
+  assert.ok(sourceNames.includes('sources/prompt-original.txt'));
+  assert.ok(sourceNames.includes('sources/product-info.json'));
+  assert.ok(sourceNames.includes('sources/instructions.txt'));
+  assert.ok(sourceNames.includes('sources/main-image/source-main-image.png'));
+  assert.ok(sourceNames.includes('sources/original-detail-full/source-detail-full-01.webp'));
+  assert.ok(sourceNames.includes('sources/extracted-references/hero-candidates/candidate-01.png'));
+
+  const allTenSlices = Array.from({ length: 10 }, (_, i) => `sources/source-slices/source-slice-${String(i + 1).padStart(2, '0')}.png`);
+  for (const name of allTenSlices) assert.ok(sourceNames.includes(name), `missing ${name}`);
+
+  const info = JSON.parse(result.entries.find((entry) => entry.name === 'sources/product-info.json').data);
   assert.equal(info.draftId, 64);
   assert.equal(info.productName, 'Draft 64 product');
   assert.equal(info.requestId, 8);
   assert.equal(info.expectedImageCount, 10);
+  assert.equal(info.referenceImageCount, 7);
   assert.equal(info.promptRevision, 1);
   assert.equal(info.templateVersion, 1);
   assert.equal(info.promptHash, '1234567890abcdef');
   assert.equal(info.workflowMode, 'manual_external_ai');
   assert.deepEqual(info.sections, SECTIONS);
   assert.deepEqual(info.sectionReferenceHints.hero, ['source-slices/source-slice-01']);
-  assert.deepEqual(info.sections.map((section) => section.index), [1, 2, 3, 4, 5, 6, 7, 8, 9, 10]);
-  assert.deepEqual(info.options, [{
-    index: 1,
-    name: '색상',
-    value: '파랑',
-    additionalPrice: 500,
-  }]);
+  assert.deepEqual(info.options, [{ index: 1, name: '색상', value: '파랑', additionalPrice: 500 }]);
 
   assert.equal(
-    result.entries.find((entry) => entry.name === '01-prompt-rendered.txt').data.toString(),
+    result.entries.find((entry) => entry.name === 'prompt-rendered.txt').data.toString(),
     'rendered detail page prompt',
   );
   assert.equal(
-    result.entries.find((entry) => entry.name === '02-prompt-original.txt').data.toString(),
+    result.entries.find((entry) => entry.name === 'sources/prompt-original.txt').data.toString(),
     'original detail page prompt',
   );
-  const instructions = result.entries.find((entry) => entry.name === '04-instructions.txt').data.toString();
-  assert.match(instructions, /원래 10장 구성/);
+  const instructions = result.entries.find((entry) => entry.name === 'sources/instructions.txt').data.toString();
   assert.match(instructions, /review\/평점/);
   assert.match(instructions, /source material/);
 });
 
-test('detail package prefers local assets, de-duplicates aliases, and skips unavailable optional remotes', async () => {
-  const localReads = [];
-  const remoteFetches = [];
-  const result = await buildDetailPagePackage(detailPackageContext(), {
-    readLocalAsset: async (url) => {
-      localReads.push(url);
-      return url.endsWith('.webp') ? WEBP : JPEG;
-    },
-    fetchImpl: async (url) => {
-      remoteFetches.push(url);
-      if (url.endsWith('unavailable.jpg')) return response(Buffer.alloc(0), { ok: false, status: 503 });
-      return response(url.endsWith('.png') ? PNG : JPEG);
-    },
-  });
+test('fewer than seven candidate images are all attached without padding or failure', async () => {
+  const context = detailPackageContext({ sliceCount: 3 });
+  const { readLocalAsset, fetchImpl } = trackedLoaders();
+  const result = await buildDetailPagePackage(context, { readLocalAsset, fetchImpl });
 
-  assert.deepEqual(localReads, [
-    '/original-images/main.jpg',
-    '/original-images/detail-full.webp',
-  ]);
-  assert.deepEqual(remoteFetches, ['https://supplier.test/detail.png']);
-  assert.deepEqual(result.entries.slice(4).map((entry) => entry.name), [
-    'main-image/source-main-image.jpg',
-    'original-detail-full/source-detail-full-01.webp',
-    'source-slices/source-slice-01.png',
-    'source-slices/source-slice-02.webp',
-    'extracted-references/hero-candidates/candidate-01.png',
-    'extracted-references/review-style-candidates/candidate-01.webp',
-  ]);
+  const rootReferenceNames = result.entries
+    .filter((entry) => !entry.name.startsWith('sources/') && entry.name.startsWith('reference-'))
+    .map((entry) => entry.name);
+  assert.deepEqual(rootReferenceNames, ['reference-01.png', 'reference-02.png', 'reference-03.png']);
+});
+
+test('an approved representative image is used at the root while the raw original is kept under sources/', async () => {
+  const approved = { url: '/generated-ai-images/drafts/64/main/manual/r1-v2/detail-r1-v2-01-registered.jpg', storedUrl: '/generated-ai-images/drafts/64/main/manual/r1-v2/detail-r1-v2-01-registered.jpg' };
+  const raw = { url: '/original-images/main.jpg', storedUrl: '/original-images/main.jpg' };
+  const context = detailPackageContext({ sliceCount: 1, mainImage: approved, rawMainImage: raw });
+  context.originalDetailFull = [];
+  context.extractedReferences = { heroCandidates: [], reviewStyleCandidates: [], pointCandidates: [], comparisonCandidates: [], sizeOptionCandidates: [] };
+  const localReads = [];
+  const readLocalAsset = async (url) => {
+    localReads.push(url);
+    return JPEG;
+  };
+  const fetchImpl = async (url) => response(url.endsWith('.png') ? PNG : JPEG);
+  const result = await buildDetailPagePackage(context, { readLocalAsset, fetchImpl });
+
+  assert.ok(result.entries.some((entry) => entry.name === 'main-image.jpg'));
+  assert.ok(result.entries.some((entry) => entry.name === 'sources/main-image/source-main-image.jpg'));
+  assert.deepEqual(localReads, [approved.storedUrl, raw.storedUrl]);
 });
 
 test('detail package requires a current rendered prompt and at least one usable image', async () => {
-  const context = detailPackageContext();
+  const context = detailPackageContext({ sliceCount: 0 });
+  context.originalDetailFull = [];
+  context.extractedReferences = { heroCandidates: [], reviewStyleCandidates: [], pointCandidates: [], comparisonCandidates: [], sizeOptionCandidates: [] };
+  context.mainImage = null;
+  context.rawMainImage = null;
   const options = {
     readLocalAsset: async () => {
       throw new Error('missing local file');
@@ -223,9 +260,13 @@ test('detail package has no credential dependency and excludes secret-bearing co
     get apiKey() { return forbiddenOption(); },
   };
   const context = {
-    ...detailPackageContext(),
+    ...detailPackageContext({ sliceCount: 0 }),
     mainImage: null,
-    detailImages: [{ url: 'https://supplier.test/detail.png' }],
+    rawMainImage: null,
+    sourceSlices: [],
+    detailImages: [{ url: 'https://supplier.test/detail.png', imageType: 'detail' }],
+    originalDetailFull: [],
+    extractedReferences: { heroCandidates: [], reviewStyleCandidates: [], pointCandidates: [], comparisonCandidates: [], sizeOptionCandidates: [] },
     referenceImages: [],
   };
 
