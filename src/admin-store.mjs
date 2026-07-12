@@ -4,6 +4,7 @@ import { buildDetailHtml, cleanProductName } from './processing.mjs';
 import { renderImagePrompt } from './image-prompt-templates.mjs';
 import { createHash } from 'node:crypto';
 import { computeImagePromptState } from './image-prompt-state.mjs';
+import { getDetailPageSections } from './manual-ai/detail-sections.mjs';
 import { getApprovedManualMainImage, listManualMainImages } from './manual-ai/workflow-store.mjs';
 
 const VALID_STATUSES = new Set(['draft', 'needs_review', 'blocked', 'approved']);
@@ -619,6 +620,72 @@ export async function getManualMainImageWorkflowContext(db, productDraftId) {
   const sourceMainImage=draft.images.find((image)=>image.imageType==='main')||null;
   const referenceImages=draft.images.filter((image)=>image.imageType!=='main'&&image.sourceSection==='detail').slice(0,2).map((image)=>({url:image.storedUrl||image.url}));
   return{draft,request,sourceMainImage:sourceMainImage?{...sourceMainImage,url:sourceMainImage.storedUrl||sourceMainImage.url}:null,referenceImages};
+}
+
+export async function getManualDetailWorkflowContext(db, productDraftId) {
+  const sections = getDetailPageSections();
+  const draft = await getProductDraft(db, productDraftId);
+  if (!draft) return { draft: null, request: null, sections, mainImage: null, detailImages: [], referenceImages: [] };
+
+  const selectedRequest = (await getImagePromptRequests(db, productDraftId))
+    .find((item) => item.requestType === 'detail_page') || null;
+  const active = (await db.query("select * from image_prompt_templates where template_type='detail_page' and is_active=true order by version desc limit 1")).rows[0] || null;
+  const request = selectedRequest ? {
+    ...selectedRequest,
+    state: computeImagePromptState({
+      template_version: selectedRequest.templateVersion,
+      template_hash: selectedRequest.templateHash,
+      prompt_original: selectedRequest.promptOriginal,
+      prompt_rendered: selectedRequest.promptRendered,
+    }, active).state,
+  } : null;
+
+  const selectedUrls = new Set();
+  const preferredUrl = (image) => image?.storedUrl || image?.originalUrl || image?.url || null;
+  const imageAliases = (image) => [image?.storedUrl, image?.originalUrl, image?.url].filter(Boolean);
+  const hasLocalStoredUrl = (image) => Boolean(image?.storedUrl && image.storedUrl !== image.originalUrl && image.storedUrl !== image.url);
+  const addImage = (target, image) => {
+    const url = preferredUrl(image);
+    const aliases = imageAliases(image);
+    if (!url || aliases.some((value) => selectedUrls.has(value))) return;
+    aliases.forEach((value) => selectedUrls.add(value));
+    target.push({ ...image, url });
+  };
+  const addUrl = (target, value) => {
+    const url = typeof value === 'string' ? value : value?.url;
+    if (!url || selectedUrls.has(url)) return;
+    selectedUrls.add(url);
+    target.push({ url });
+  };
+
+  const sourceMainImage = draft.images.find((image) => image.imageType === 'main') || null;
+  const mainImage = sourceMainImage ? { ...sourceMainImage, url: preferredUrl(sourceMainImage) } : null;
+  imageAliases(sourceMainImage).forEach((value) => selectedUrls.add(value));
+
+  const detailPriority = new Map([
+    ['detail_source_full', 0],
+    ['detail_full', 0],
+    ['detail', 1],
+    ['regenerated_detail_asset', 1],
+    ['detail_source_slice', 2],
+    ['detail_slice', 2],
+  ]);
+  const detailImages = draft.images
+    .map((image, order) => ({ image, order }))
+    .filter(({ image }) => detailPriority.has(image.imageType))
+    .sort((left, right) => detailPriority.get(left.image.imageType) - detailPriority.get(right.image.imageType)
+      || Number(hasLocalStoredUrl(right.image)) - Number(hasLocalStoredUrl(left.image))
+      || left.order - right.order)
+    .reduce((assets, { image }) => {
+      addImage(assets, image);
+      return assets;
+    }, []);
+  for (const url of request?.sourceImageUrls || []) addUrl(detailImages, url);
+
+  const referenceImages = [];
+  for (const url of request?.competitorImageUrls || []) addUrl(referenceImages, url);
+
+  return { draft, request, sections, mainImage, detailImages, referenceImages };
 }
 
 export async function createImagePromptRequest(db, productDraftId, requestType) {
