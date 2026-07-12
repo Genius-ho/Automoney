@@ -289,6 +289,100 @@ create table if not exists product_image_generation_requests (
   updated_at timestamptz not null default now(),
   unique (product_draft_id, request_type)
 );
+alter table product_image_generation_requests add column if not exists template_version integer;
+alter table product_image_generation_requests add column if not exists template_hash text;
+alter table product_image_generation_requests add column if not exists source_file_name text;
+alter table product_image_generation_requests add column if not exists revision integer not null default 1;
+alter table product_image_generation_requests add column if not exists regenerated_at timestamptz;
+alter table product_image_generation_requests add column if not exists approved_at timestamptz;
+alter table product_image_generation_requests add column if not exists rejected_at timestamptz;
+create table if not exists product_image_generation_request_revisions (
+ id bigserial primary key, request_id bigint not null references product_image_generation_requests(id) on delete cascade, revision integer not null, template_id bigint, template_version integer, template_hash text, source_file_name text, prompt_original text not null, prompt_rendered text not null, warnings_json jsonb not null default '[]'::jsonb, status text not null, archived_at timestamptz not null default now()
+);
+
+create table if not exists ai_provider_configs (
+  id bigserial primary key,
+  provider_code text not null unique check (provider_code in ('openai','google','anthropic','custom')),
+  display_name text not null,
+  enabled boolean not null default false,
+  api_key_ciphertext text,
+  api_key_iv text,
+  api_key_auth_tag text,
+  base_url text,
+  organization_id text,
+  project_id text,
+  default_text_model text,
+  default_vision_model text,
+  default_image_model text,
+  capabilities jsonb not null default '[]'::jsonb,
+  extra_config jsonb not null default '{}'::jsonb,
+  last_test_status text not null default 'not_tested',
+  last_test_message text,
+  last_tested_at timestamptz,
+  created_at timestamptz not null default now(),
+  updated_at timestamptz not null default now()
+);
+
+create table if not exists ai_task_routing (
+  task_type text primary key,
+  provider_code text not null check (provider_code in ('openai','google','anthropic','custom')),
+  model text,
+  enabled boolean not null default false,
+  quality text,
+  size text,
+  max_images_per_request integer not null default 1,
+  max_retries integer not null default 0,
+  fallback_provider_code text,
+  fallback_enabled boolean not null default false,
+  created_at timestamptz not null default now(),
+  updated_at timestamptz not null default now()
+);
+
+create table if not exists ai_cost_safety_settings (
+  id integer primary key default 1 check (id=1),
+  monthly_budget_krw integer,
+  daily_budget_krw integer,
+  max_cost_per_product_krw integer,
+  max_main_image_versions integer not null default 1,
+  max_detail_images integer not null default 10,
+  automatic_retry_enabled boolean not null default false,
+  require_human_approval boolean not null default true,
+  updated_at timestamptz not null default now()
+);
+insert into ai_cost_safety_settings(id) values(1) on conflict(id) do nothing;
+
+create table if not exists generated_ai_images (
+  id bigserial primary key,
+  product_draft_id bigint not null references product_drafts(id) on delete cascade,
+  prompt_request_id bigint not null references product_image_generation_requests(id) on delete restrict,
+  prompt_revision integer not null,
+  task_type text not null check (task_type = 'main_image'),
+  workflow_mode text not null check (workflow_mode = 'manual_external_ai'),
+  provider_code text not null check (provider_code in ('chatgpt','google_gemini','anthropic_claude','custom')),
+  provider_display_name text,
+  version integer not null,
+  original_stored_url text not null,
+  coupang_stored_url text not null,
+  original_file_size integer not null,
+  coupang_file_size integer not null check (coupang_file_size < 3000000),
+  original_mime_type text not null check (original_mime_type in ('image/png','image/jpeg','image/webp')),
+  coupang_mime_type text not null default 'image/jpeg' check (coupang_mime_type = 'image/jpeg'),
+  original_width integer not null,
+  original_height integer not null,
+  width integer not null default 1000 check (width = 1000),
+  height integer not null default 1000 check (height = 1000),
+  sha256 text not null,
+  status text not null default 'uploaded' check (status in ('uploaded','approved','rejected','superseded')),
+  notes text,
+  approval_note text,
+  created_at timestamptz not null default now(),
+  approved_at timestamptz,
+  rejected_at timestamptz,
+  superseded_at timestamptz,
+  superseded_by_image_id bigint references generated_ai_images(id) on delete set null,
+  unique(product_draft_id, task_type, version)
+);
+create unique index if not exists uq_generated_ai_images_one_approved_main on generated_ai_images(product_draft_id, task_type) where status = 'approved';
 
 insert into shipping_policy_templates (
   name,

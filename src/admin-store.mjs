@@ -2,6 +2,9 @@ import { calculateWinnerScore } from './winner-score.mjs';
 import { buildRegistrationOptimization } from './registration-optimization.mjs';
 import { buildDetailHtml, cleanProductName } from './processing.mjs';
 import { renderImagePrompt } from './image-prompt-templates.mjs';
+import { createHash } from 'node:crypto';
+import { computeImagePromptState } from './image-prompt-state.mjs';
+import { getApprovedManualMainImage, listManualMainImages } from './manual-ai/workflow-store.mjs';
 
 const VALID_STATUSES = new Set(['draft', 'needs_review', 'blocked', 'approved']);
 const VALID_MARKETPLACES = new Set(['coupang', 'naver']);
@@ -588,9 +591,19 @@ export async function exportProductDraft(db, id, channel) {
   if (!draft) return null;
   const optimization = await getRegistrationOptimization(db, id);
   const imagePromptRequests = await getImagePromptRequests(db, id);
-  if (channel === 'coupang') return toCoupangExport(draft, optimization, imagePromptRequests);
-  if (channel === 'naver') return toNaverExport(draft, optimization, imagePromptRequests);
+  const approvedManualMainImage=await getApprovedManualMainImage(db,id);
+  if (channel === 'coupang') return toCoupangExport(draft, optimization, imagePromptRequests,approvedManualMainImage);
+  if (channel === 'naver') return toNaverExport(draft, optimization, imagePromptRequests,approvedManualMainImage);
   throw new Error(`Invalid export channel: ${channel}`);
+}
+
+export async function buildDebugExport(db, id) {
+  const draft = await getProductDraft(db, id); if (!draft) return null;
+  const requests = await getImagePromptRequests(db, id);
+  const templates = await db.query('select * from image_prompt_templates where is_active = true');
+  const manualAiMainImages=await listManualMainImages(db,id);
+  const byType = (type) => { const request=requests.find(x=>x.requestType===type)||null; const template=templates.rows.find(x=>x.template_type===type)||null; return { request, template }; };
+  return { draftId:draft.id, product:{name:draft.sellingTitle||draft.rawName}, htmlDetailPage:{exists:Boolean(draft.generatedDetailHtml),length:draft.generatedDetailHtml.length,generatedDetailHtml:draft.generatedDetailHtml,updatedAt:draft.updatedAt||null}, imagePromptState:{mainImage:byType('main_image'),detailPage:byType('detail_page')}, images:{mainImages:imageUrlsByType(draft,['main']),detailImages:imageUrlsByType(draft,['detail','regenerated_detail_asset']),detailSourceFullImages:imageUrlsByType(draft,['detail_source_full','detail_full']),generatedAiImages:manualAiMainImages}, manualAiMainImages,generatedAiImageCount:manualAiMainImages.length };
 }
 
 export async function getImagePromptRequests(db, productDraftId) {
@@ -598,8 +611,21 @@ export async function getImagePromptRequests(db, productDraftId) {
   return result.rows.map(toImagePromptRequest);
 }
 
+export async function getManualMainImageWorkflowContext(db, productDraftId) {
+  const draft=await getProductDraft(db,productDraftId);if(!draft)return{draft:null,request:null,sourceMainImage:null,referenceImages:[]};
+  const request=(await getImagePromptRequests(db,productDraftId)).find((item)=>item.requestType==='main_image')||null;
+  const active=(await db.query("select * from image_prompt_templates where template_type='main_image' and is_active=true order by version desc limit 1")).rows[0]||null;
+  if(request){const raw={template_version:request.templateVersion,template_hash:request.templateHash,prompt_original:request.promptOriginal,prompt_rendered:request.promptRendered};request.state=computeImagePromptState(raw,active).state;}
+  const sourceMainImage=draft.images.find((image)=>image.imageType==='main')||null;
+  const referenceImages=draft.images.filter((image)=>image.imageType!=='main'&&image.sourceSection==='detail').slice(0,2).map((image)=>({url:image.storedUrl||image.url}));
+  return{draft,request,sourceMainImage:sourceMainImage?{...sourceMainImage,url:sourceMainImage.storedUrl||sourceMainImage.url}:null,referenceImages};
+}
+
 export async function createImagePromptRequest(db, productDraftId, requestType) {
   if (!['main_image', 'detail_page'].includes(requestType)) throw new Error(`Invalid image prompt request type: ${requestType}`);
+  const existing = await getImagePromptRequests(db, productDraftId);
+  const found = existing.find((request) => request.requestType === requestType);
+  if (found) return { created: false, request: found };
   const draft = await getProductDraft(db, productDraftId); if (!draft) return null;
   const templateResult = await db.query('select * from image_prompt_templates where template_type = $1 and is_active = true', [requestType]);
   const template = templateResult.rows[0]; if (!template) throw new Error(`Active ${requestType} template not found. Run prompts:import-docx first.`);
@@ -607,14 +633,26 @@ export async function createImagePromptRequest(db, productDraftId, requestType) 
   const competitorImageUrls = (naver.rows[0]?.raw_json?.searchRaw?.items || []).map((item) => item.image).filter(Boolean);
   const sourceImageUrls = draft.images.filter((i) => i.sourceSection === 'detail' || i.imageType === 'detail_source_full').map((i) => i.storedUrl || i.url).filter(Boolean);
   const rendered = renderImagePrompt(template.template_body, { optimizedTitle: draft.optimizedCoupangTitle || draft.optimizedNaverTitle || draft.sellingTitle || draft.rawName, storeName: '와우픽', options: draft.options, originalDetailHtml: draft.originalDetailHtml, sourceImageUrls, competitorImageUrls });
-  const result = await db.query(`insert into product_image_generation_requests (product_draft_id,request_type,template_id,prompt_original,prompt_rendered,status,source_image_urls_json,competitor_image_urls_json,warnings_json,updated_at) values ($1,$2,$3,$4,$5,'draft',$6::jsonb,$7::jsonb,$8::jsonb,now()) on conflict (product_draft_id,request_type) do update set template_id=excluded.template_id,prompt_original=excluded.prompt_original,prompt_rendered=excluded.prompt_rendered,status='draft',source_image_urls_json=excluded.source_image_urls_json,competitor_image_urls_json=excluded.competitor_image_urls_json,warnings_json=excluded.warnings_json,updated_at=now() returning *`, [productDraftId, requestType, template.id, template.template_body, rendered.prompt, JSON.stringify(sourceImageUrls), JSON.stringify(competitorImageUrls), JSON.stringify(rendered.warnings)]);
-  return toImagePromptRequest({ ...result.rows[0], template_type: template.template_type, template_name: template.template_name, version: template.version });
+  const hash=createHash('sha256').update(template.template_body).digest('hex');
+  const result = await db.query(`insert into product_image_generation_requests (product_draft_id,request_type,template_id,template_version,template_hash,source_file_name,prompt_original,prompt_rendered,status,source_image_urls_json,competitor_image_urls_json,warnings_json,revision,updated_at) values ($1,$2,$3,$4,$5,$6,$7,$8,'draft',$9::jsonb,$10::jsonb,$11::jsonb,1,now()) returning *`, [productDraftId, requestType, template.id,template.version,hash,template.source_file_name, template.template_body, rendered.prompt, JSON.stringify(sourceImageUrls), JSON.stringify(competitorImageUrls), JSON.stringify(rendered.warnings)]);
+  return { created: true, request: toImagePromptRequest({ ...result.rows[0], template_type: template.template_type, template_name: template.template_name, version: template.version }) };
 }
 
 export async function setImagePromptRequestStatus(db, productDraftId, requestType, status) {
   if (!['draft', 'approved', 'rejected'].includes(status)) throw new Error(`Invalid image prompt status: ${status}`);
   const result = await db.query('update product_image_generation_requests set status = $3, updated_at = now() where product_draft_id = $1 and request_type = $2 returning *', [productDraftId, requestType, status]);
   return result.rows[0] ? toImagePromptRequest(result.rows[0]) : null;
+}
+
+export async function regenerateImagePromptRequest(db, productDraftId, requestType, { confirm = false } = {}) {
+  const existing=(await getImagePromptRequests(db,productDraftId)).find(x=>x.requestType===requestType); if(!existing) return createImagePromptRequest(db,productDraftId,requestType);
+  if(existing.status==='approved'&&!confirm) { const error=new Error('confirm=true is required to regenerate an approved request'); error.code='CONFIRM_REQUIRED'; throw error; }
+  await db.query('insert into product_image_generation_request_revisions (request_id,revision,template_id,template_version,template_hash,source_file_name,prompt_original,prompt_rendered,warnings_json,status) values ($1,$2,$3,$4,$5,$6,$7,$8,$9::jsonb,$10)',[existing.id,existing.revision||1,existing.templateId,existing.templateVersion,existing.templateHash||null,existing.sourceFileName||null,existing.promptOriginal,existing.promptRendered,JSON.stringify(existing.warnings),existing.status]);
+  await db.query('delete from product_image_generation_requests where id=$1',[existing.id]);
+  const result=await createImagePromptRequest(db,productDraftId,requestType);
+  await db.query('update product_image_generation_requests set revision=$2, regenerated_at=now(), status=$3 where id=$1',[result.request.id,(existing.revision||1)+1,'draft']);
+  const refreshed=(await getImagePromptRequests(db,productDraftId)).find(x=>x.requestType===requestType);
+  return { created:false, request:refreshed, regenerated:true };
 }
 
 export async function getMarketResearch(db, productDraftId, marketplace) {
@@ -893,7 +931,7 @@ function toDraftDetail(row, images, options) {
   };
 }
 
-function toCoupangExport(draft, optimization = null, imagePromptRequests = []) {
+function toCoupangExport(draft, optimization = null, imagePromptRequests = [],approvedManualMainImage=null) {
   return {
     channel: 'coupang',
     exportBlocked: draft.status === 'blocked' || draft.filterStatus === 'blocked',
@@ -918,8 +956,8 @@ function toCoupangExport(draft, optimization = null, imagePromptRequests = []) {
     shippingFee: draft.shippingFee,
     expectedProfit: draft.coupangExpectedProfit,
     detailHtml: draft.generatedDetailHtml,
-    imagePrompts: toImagePrompts(draft),
-    ...toImagePromptExport(imagePromptRequests),
+    readyToRegister: false,
+    aiImageStatus: toAiImageStatus(imagePromptRequests),
     registrationOptimization: {
       titleKeywords: draft.titleKeywords,
       titleWarnings: draft.titleWarnings,
@@ -928,7 +966,7 @@ function toCoupangExport(draft, optimization = null, imagePromptRequests = []) {
       notice: optimization?.notice || [],
       shippingPolicies: optimization?.shippingPolicies || [],
     },
-    mainImages: imageUrlsByType(draft, ['main']),
+    mainImages: preferredMainImages(draft,approvedManualMainImage),
     detailImages: imageUrlsByType(draft, ['detail', 'regenerated_detail_asset']),
     detailSourceFullImages: imageUrlsByType(draft, ['detail_source_full', 'detail_full']),
     regeneratedDetailAssets: imageUrlsByType(draft, ['regenerated_detail_asset']),
@@ -943,7 +981,7 @@ function toCoupangExport(draft, optimization = null, imagePromptRequests = []) {
   };
 }
 
-function toNaverExport(draft, optimization = null, imagePromptRequests = []) {
+function toNaverExport(draft, optimization = null, imagePromptRequests = [],approvedManualMainImage=null) {
   return {
     channel: 'naver',
     exportBlocked: draft.status === 'blocked' || draft.filterStatus === 'blocked',
@@ -967,8 +1005,8 @@ function toNaverExport(draft, optimization = null, imagePromptRequests = []) {
     deliveryFee: draft.shippingFee,
     expectedProfit: draft.naverExpectedProfit,
     detailContent: draft.generatedDetailHtml,
-    imagePrompts: toImagePrompts(draft),
-    ...toImagePromptExport(imagePromptRequests),
+    readyToRegister: false,
+    aiImageStatus: toAiImageStatus(imagePromptRequests),
     registrationOptimization: {
       titleKeywords: draft.titleKeywords,
       titleWarnings: draft.titleWarnings,
@@ -977,7 +1015,7 @@ function toNaverExport(draft, optimization = null, imagePromptRequests = []) {
       notice: optimization?.notice || [],
       shippingPolicies: optimization?.shippingPolicies || [],
     },
-    mainImages: imageUrlsByType(draft, ['main']),
+    mainImages: preferredMainImages(draft,approvedManualMainImage),
     detailImages: imageUrlsByType(draft, ['detail', 'regenerated_detail_asset']),
     detailSourceFullImages: imageUrlsByType(draft, ['detail_source_full', 'detail_full']),
     regeneratedDetailAssets: imageUrlsByType(draft, ['regenerated_detail_asset']),
@@ -1002,13 +1040,14 @@ function toImagePrompts(draft) {
 }
 
 function toImagePromptRequest(row) {
-  return { id: Number(row.id), productDraftId: Number(row.product_draft_id), requestType: row.request_type, templateId: Number(row.template_id), templateType: row.template_type || row.request_type, templateName: row.template_name || null, templateVersion: row.version || null, promptOriginal: row.prompt_original, promptRendered: row.prompt_rendered, status: row.status, sourceImageUrls: row.source_image_urls_json || [], competitorImageUrls: row.competitor_image_urls_json || [], warnings: row.warnings_json || [], createdAt: row.created_at, updatedAt: row.updated_at };
+  return { id: Number(row.id), productDraftId: Number(row.product_draft_id), requestType: row.request_type, templateId: Number(row.template_id), templateType: row.template_type || row.request_type, templateName: row.template_name || null, templateVersion: row.template_version || row.version || null, templateHash: row.template_hash || null, sourceFileName: row.source_file_name || null, revision: row.revision || 1, promptOriginal: row.prompt_original, promptRendered: row.prompt_rendered, status: row.status, sourceImageUrls: row.source_image_urls_json || [], competitorImageUrls: row.competitor_image_urls_json || [], warnings: row.warnings_json || [], createdAt: row.created_at, updatedAt: row.updated_at, regeneratedAt:row.regenerated_at||null };
 }
 
 function toImagePromptExport(requests) {
   const main = requests.find((x) => x.requestType === 'main_image'); const detail = requests.find((x) => x.requestType === 'detail_page');
   return { imagePromptTemplates: requests.map((x) => ({ id: x.templateId, type: x.templateType, name: x.templateName, version: x.templateVersion })), mainImagePromptOriginal: main?.promptOriginal || null, mainImagePromptRendered: main?.promptRendered || null, detailPagePromptOriginal: detail?.promptOriginal || null, detailPagePromptRendered: detail?.promptRendered || null, imagePromptWarnings: [...new Set(requests.flatMap((x) => x.warnings))], imagePromptStatus: { main_image: main?.status || null, detail_page: detail?.status || null } };
 }
+function toAiImageStatus(requests) { const status=(type)=>requests.find(x=>x.requestType===type)?'prompt_only':'no_request'; return {mainImage:status('main_image'),detailPage:status('detail_page'),generatedImageCount:0}; }
 
 function imageUrlsByType(draft, types) {
   const wanted = new Set(types);
@@ -1018,6 +1057,8 @@ function imageUrlsByType(draft, types) {
     .sort((a, b) => (a.sortOrder ?? a.index ?? 0) - (b.sortOrder ?? b.index ?? 0))
     .map((image) => image.storedUrl || image.url);
 }
+
+function preferredMainImages(draft,approvedManualMainImage){return[approvedManualMainImage?.coupangStoredUrl,...imageUrlsByType(draft,['main'])].filter((value,index,all)=>value&&all.indexOf(value)===index);}
 
 function toExportImage(image) {
   return {

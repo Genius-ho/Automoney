@@ -23,6 +23,12 @@ export async function loadDatabaseUrl(rootDir = process.cwd()) {
   return databaseUrl;
 }
 
+export async function loadAiSecrets(rootDir = process.cwd()) {
+  const values = await loadEnvValues(rootDir);
+  const names = ['OPENAI_API_KEY','GOOGLE_API_KEY','ANTHROPIC_API_KEY','AUTOMONEY_CREDENTIAL_MASTER_KEY'];
+  return Object.fromEntries(names.map(name => [name, process.env[name] || values[name] || null]));
+}
+
 export async function loadNaverConfig(rootDir = process.cwd()) {
   const values = await loadEnvValues(rootDir);
   const clientId = values.NAVER_CLIENT_ID || process.env.NAVER_CLIENT_ID;

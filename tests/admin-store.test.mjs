@@ -328,6 +328,20 @@ test('exportProductDraft returns channel specific preview JSON', async () => {
   assert.deepEqual(naver.blockedReasons, ['blocked_low_margin']);
 });
 
+test('exports prefer only the approved Coupang-safe manual main image', async () => {
+  const db={async query(sql){
+    if(sql.includes('from product_drafts d'))return{rows:[{id:64,supplier_product_id:10,supplier_product_no:'64',raw_name:'raw',selling_title:'selling',cost:1,shipping_fee:0,min_order_qty:1,order_unit:1,coupang_sale_price:2,naver_sale_price:2,filter_status:'pass',block_reasons:[],review_reasons:[],status:'draft',generated_detail_html:'<p>same</p>',price_tiers:[],shipping_tiers:[]}]};
+    if(sql.includes('from product_images'))return{rows:[{id:1,image_index:0,image_type:'main',url:'https://source.test/original.jpg',stored_url:'https://source.test/original.jpg'}]};
+    if(sql.includes('from product_options'))return{rows:[]};
+    if(sql.includes("from generated_ai_images")&&sql.includes("status='approved'"))return{rows:[{id:7,product_draft_id:64,prompt_request_id:91,prompt_revision:2,task_type:'main_image',workflow_mode:'manual_external_ai',provider_code:'chatgpt',version:2,original_stored_url:'/generated-ai-images/original.webp',coupang_stored_url:'/generated-ai-images/drafts/64/main/manual/approved.jpg',original_file_size:100,coupang_file_size:2000000,original_mime_type:'image/webp',coupang_mime_type:'image/jpeg',original_width:1200,original_height:1200,width:1000,height:1000,sha256:'abc',status:'approved'}]};
+    return{rows:[]};
+  }};
+  const coupang=await exportProductDraft(db,64,'coupang');const naver=await exportProductDraft(db,64,'naver');
+  assert.equal(coupang.mainImages[0],'/generated-ai-images/drafts/64/main/manual/approved.jpg');
+  assert.equal(naver.mainImages[0],'/generated-ai-images/drafts/64/main/manual/approved.jpg');
+  assert.ok(!coupang.mainImages.includes('/generated-ai-images/original.webp'));
+});
+
 test('upsertMarketResearch calculates and stores winner result', async () => {
   const calls = [];
   const db = {

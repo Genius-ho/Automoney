@@ -15,7 +15,10 @@
     "images:archive-originals": "node scripts/archive-original-images.js",
     "prompts:import-docx": "node scripts/import-docx-prompts.js",
     "verify:image-prompts": "node scripts/verify-image-prompts.js",
-    "test": "node tests/processing.test.mjs && node tests/domeme-client.test.mjs && node tests/pipeline.test.mjs && node tests/postgres-store.test.mjs && node tests/admin-store.test.mjs && node tests/generated-detail-v2.test.mjs && node tests/image-retention.test.mjs && node tests/original-image-archive.test.mjs && node tests/public-assets.test.mjs && node tests/winner-score.test.mjs && node tests/naver-research.test.mjs",
+    "verify:admin-ui": "node scripts/verify-admin-ui.mjs",
+    "verify:ai-settings": "node scripts/verify-ai-provider-settings.mjs",
+    "verify:manual-main-image": "node scripts/verify-manual-main-image.mjs",
+    "test": "node tests/manual-ai-workflow-store.test.mjs && node tests/manual-ai-image-processing.test.mjs && node tests/manual-ai-package.test.mjs && node tests/manual-ai-http.test.mjs && node tests/manual-ai-workflow-service.test.mjs && node tests/manual-ai-admin-html.test.mjs && node tests/ai-provider-framework.test.mjs && node tests/processing.test.mjs && node tests/domeme-client.test.mjs && node tests/pipeline.test.mjs && node tests/postgres-store.test.mjs && node tests/admin-store.test.mjs && node tests/generated-detail-v2.test.mjs && node tests/image-retention.test.mjs && node tests/original-image-archive.test.mjs && node tests/public-assets.test.mjs && node tests/winner-score.test.mjs && node tests/naver-research.test.mjs",
     "process:test-products": "node scripts/process-test-products.mjs",
     "test:import": "node scripts/test-import.js",
     "debug:domeme-key": "node scripts/debug-domeme-key.js"
@@ -24,6 +27,7 @@
     "node": ">=24"
   },
   "dependencies": {
+    "archiver": "^8.0.0",
     "mammoth": "^1.12.0",
     "pg": "^8.13.1",
     "playwright": "^1.61.1",
