@@ -628,7 +628,7 @@ export async function getManualMainImageWorkflowContext(db, productDraftId) {
 export async function getManualDetailWorkflowContext(db, productDraftId) {
   const sections = getDetailPageSections();
   const draft = await getProductDraft(db, productDraftId);
-  if (!draft) return { draft: null, request: null, sections, mainImage: null, detailImages: [], referenceImages: [] };
+  if (!draft) return { draft: null, request: null, sections, mainImage: null, detailImages: [], originalDetailFull: [], sourceSlices: [], extractedReferences: {}, sectionReferenceHints: {}, referenceImages: [] };
 
   const selectedRequest = (await getImagePromptRequests(db, productDraftId))
     .find((item) => item.requestType === 'detail_page') || null;
@@ -650,8 +650,11 @@ export async function getManualDetailWorkflowContext(db, productDraftId) {
   const addImage = (target, image) => {
     const url = preferredUrl(image);
     const aliases = imageAliases(image);
-    if (!url || aliases.some((value) => selectedUrls.has(value))) return;
-    aliases.forEach((value) => selectedUrls.add(value));
+    const isSourceSlice = ['detail_source_slice', 'detail_slice'].includes(image?.imageType);
+    if (!url || (!isSourceSlice && aliases.some((value) => selectedUrls.has(value)))) return;
+    if (isSourceSlice && selectedUrls.has(`slice:${image.id}`)) return;
+    if (isSourceSlice) selectedUrls.add(`slice:${image.id}`);
+    else aliases.forEach((value) => selectedUrls.add(value));
     target.push({ ...image, url });
   };
   const addUrl = (target, value) => {
@@ -685,10 +688,45 @@ export async function getManualDetailWorkflowContext(db, productDraftId) {
     }, []);
   for (const url of request?.sourceImageUrls || []) addUrl(detailImages, url);
 
+  const originalDetailFull = detailImages.filter((image) => ['detail_source_full', 'detail_full'].includes(image.imageType));
+  const sourceSlices = detailImages
+    .filter((image) => ['detail_source_slice', 'detail_slice'].includes(image.imageType))
+    .sort((left, right) => Number(left.sliceIndex || 0) - Number(right.sliceIndex || 0));
+  const extractedReferences = buildDetailReferenceCandidates(sourceSlices, detailImages, mainImage);
+  const sectionReferenceHints = buildSectionReferenceHints(sections, sourceSlices);
+
   const referenceImages = [];
   for (const url of request?.competitorImageUrls || []) addUrl(referenceImages, url);
 
-  return { draft, request, sections, mainImage, detailImages, referenceImages };
+  return { draft, request, sections, mainImage, detailImages, originalDetailFull, sourceSlices, extractedReferences, sectionReferenceHints, referenceImages };
+}
+
+function buildDetailReferenceCandidates(sourceSlices, detailImages, mainImage) {
+  const candidates = (indices) => indices.map((index) => sourceSlices[index - 1]).filter(Boolean);
+  const regularDetail = detailImages.filter((image) => image.imageType === 'detail');
+  return {
+    heroCandidates: [mainImage, ...candidates([1, 2])].filter(Boolean),
+    reviewStyleCandidates: candidates([2, 3, 4]),
+    pointCandidates: [...candidates([3, 4, 5, 6]), ...regularDetail.slice(0, 1)],
+    comparisonCandidates: candidates([6, 7, 8]),
+    sizeOptionCandidates: candidates([8, 9, 10]),
+  };
+}
+
+function buildSectionReferenceHints(sections, sourceSlices) {
+  const names = (indices) => indices
+    .filter((index) => sourceSlices[index - 1])
+    .map((index) => `source-slices/source-slice-${String(index).padStart(2, '0')}`);
+  const fallback = sourceSlices.length ? names([1]) : [];
+  const preferred = {
+    hero: [1, 2], review: [2, 3, 4], core_values: [3, 4, 5],
+    point_01: [3, 4], point_02: [4, 5], point_03: [5, 6],
+    comparison: [6, 7, 8], detail: [6, 7], color_size: [8, 9], product_info: [8, 9, 10],
+  };
+  return Object.fromEntries((sections || []).map((section) => {
+    const hints = names(preferred[section.key] || []);
+    return [section.key, hints.length ? hints : fallback];
+  }));
 }
 
 export async function createImagePromptRequest(db, productDraftId, requestType) {

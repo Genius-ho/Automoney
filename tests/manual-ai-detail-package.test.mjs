@@ -71,6 +71,17 @@ function detailPackageContext() {
       { url: 'https://supplier.test/detail.png' },
       { url: 'https://supplier.test/detail.png' },
     ],
+    originalDetailFull: [{ url: 'https://supplier.test/detail-full.webp', storedUrl: '/original-images/detail-full.webp' }],
+    sourceSlices: [
+      { url: 'https://supplier.test/detail.png' },
+      { url: 'https://supplier.test/detail-full.webp', storedUrl: '/original-images/detail-full.webp' },
+    ],
+    extractedReferences: {
+      heroCandidates: [{ url: 'https://supplier.test/detail.png' }],
+      reviewStyleCandidates: [{ url: 'https://supplier.test/detail-full.webp', storedUrl: '/original-images/detail-full.webp' }],
+      pointCandidates: [], comparisonCandidates: [], sizeOptionCandidates: [],
+    },
+    sectionReferenceHints: { hero: ['source-slices/source-slice-01'], review: ['source-slices/source-slice-02'] },
     referenceImages: [
       { url: 'https://supplier.test/detail.png' },
       { url: 'https://reference.test/unavailable.jpg' },
@@ -107,7 +118,9 @@ test('detail package snapshots revision one and ten expected sections', async ()
     '03-product-info.json',
     '04-instructions.txt',
   ]);
-  assert.ok(result.entries.some((entry) => entry.name === 'detail-images/source-detail-01.png'));
+  assert.ok(result.entries.some((entry) => entry.name === 'original-detail-full/source-detail-full-01.png'));
+  assert.ok(result.entries.some((entry) => entry.name === 'source-slices/source-slice-01.png'));
+  assert.ok(result.entries.some((entry) => entry.name === 'extracted-references/hero-candidates/candidate-01.png'));
 
   const info = JSON.parse(result.entries.find((entry) => entry.name === '03-product-info.json').data);
   assert.equal(info.draftId, 64);
@@ -119,6 +132,7 @@ test('detail package snapshots revision one and ten expected sections', async ()
   assert.equal(info.promptHash, '1234567890abcdef');
   assert.equal(info.workflowMode, 'manual_external_ai');
   assert.deepEqual(info.sections, SECTIONS);
+  assert.deepEqual(info.sectionReferenceHints.hero, ['source-slices/source-slice-01']);
   assert.deepEqual(info.sections.map((section) => section.index), [1, 2, 3, 4, 5, 6, 7, 8, 9, 10]);
   assert.deepEqual(info.options, [{
     index: 1,
@@ -136,9 +150,9 @@ test('detail package snapshots revision one and ten expected sections', async ()
     'original detail page prompt',
   );
   const instructions = result.entries.find((entry) => entry.name === '04-instructions.txt').data.toString();
-  assert.match(instructions, /정확히 10장/);
-  assert.match(instructions, /세로형/);
-  assert.match(instructions, /순서/);
+  assert.match(instructions, /원래 10장 구성/);
+  assert.match(instructions, /review\/평점/);
+  assert.match(instructions, /source material/);
 });
 
 test('detail package prefers local assets, de-duplicates aliases, and skips unavailable optional remotes', async () => {
@@ -160,16 +174,14 @@ test('detail package prefers local assets, de-duplicates aliases, and skips unav
     '/original-images/main.jpg',
     '/original-images/detail-full.webp',
   ]);
-  assert.deepEqual(remoteFetches, [
-    'https://supplier.test/detail.png',
-    'https://reference.test/unavailable.jpg',
-    'https://reference.test/competitor.jpg',
-  ]);
+  assert.deepEqual(remoteFetches, ['https://supplier.test/detail.png']);
   assert.deepEqual(result.entries.slice(4).map((entry) => entry.name), [
     'main-image/source-main-image.jpg',
-    'detail-images/source-detail-01.webp',
-    'detail-images/source-detail-02.png',
-    'references/optional-reference-01.jpg',
+    'original-detail-full/source-detail-full-01.webp',
+    'source-slices/source-slice-01.png',
+    'source-slices/source-slice-02.webp',
+    'extracted-references/hero-candidates/candidate-01.png',
+    'extracted-references/review-style-candidates/candidate-01.webp',
   ]);
 });
 

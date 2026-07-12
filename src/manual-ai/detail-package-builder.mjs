@@ -4,6 +4,16 @@ import { PassThrough } from 'node:stream';
 import { detectImageType } from './image-processing.mjs';
 import { DETAIL_PAGE_EXPECTED_COUNT } from './detail-sections.mjs';
 
+const DETAIL_INSTRUCTIONS = `상세페이지 이미지 작업 지침
+- 01-prompt-rendered.txt의 원래 10장 구성과 순서를 그대로 유지합니다.
+- source material에서 필요한 제품 단독컷, 사용 장면, 구조·재질·사이즈·옵션 정보를 골라 재구성합니다.
+- 제품의 형태, 색상, 구조, 재질, 실제 옵션과 구성품을 변경하거나 임의로 추가하지 않습니다.
+- review/평점 섹션은 사실 단정형 수치·과장 광고보다 리뷰 연출용 시각 요소와 만족 포인트형 구성을 우선합니다.
+- 정보가 부족한 섹션은 source material 안에서 가장 유사한 정보를 조합하며, 사실처럼 새로운 사양을 만들지 않습니다.
+- source-slices와 extracted-references는 참고자료입니다. 원본 상세페이지의 문구나 디자인을 복제하지 마세요.
+- 1번부터 10번까지 순서대로 생성한 결과 10장을 Automoney에 다시 업로드합니다.
+`;
+
 const INSTRUCTIONS = `상세페이지 이미지 작업 지침
 
 - 모바일 화면에 맞는 세로형 이미지로 정확히 10장을 만듭니다.
@@ -21,6 +31,7 @@ export async function buildDetailPagePackage(context, {
 
   const entries = buildMetadataEntries(context);
   const selectedAliases = new Set();
+  const loadedByAlias = new Map();
   const attemptedUrls = new Set();
   let usableImageCount = 0;
 
@@ -32,25 +43,32 @@ export async function buildDetailPagePackage(context, {
     readLocalAsset,
     selectedAliases,
     attemptedUrls,
+    loadedByAlias,
   });
-  usableImageCount += await appendAssetGroup(entries, context.detailImages, {
-    directory: 'detail-images',
-    basename: 'source-detail',
+  usableImageCount += await appendAssetGroup(entries, context.originalDetailFull || [], {
+    directory: 'original-detail-full',
+    basename: 'source-detail-full',
     numbered: true,
     fetchImpl,
     readLocalAsset,
     selectedAliases,
     attemptedUrls,
+    loadedByAlias,
   });
-  usableImageCount += await appendAssetGroup(entries, context.referenceImages, {
-    directory: 'references',
-    basename: 'optional-reference',
+  usableImageCount += await appendAssetGroup(entries, context.sourceSlices || [], {
+    directory: 'source-slices',
+    basename: 'source-slice',
     numbered: true,
     fetchImpl,
     readLocalAsset,
     selectedAliases,
     attemptedUrls,
+    loadedByAlias,
+    allowAliasedAssets: true,
   });
+  for (const [directory, assets] of Object.entries(referenceGroups(context))) {
+    await appendAssetGroup(entries, assets, { directory: `extracted-references/${directory}`, basename: 'candidate', numbered: true, fetchImpl, readLocalAsset, selectedAliases: new Set(), attemptedUrls, loadedByAlias });
+  }
 
   if (usableImageCount === 0) {
     throw packageError(
@@ -115,13 +133,14 @@ function buildMetadataEntries(context) {
     workflowMode: 'manual_external_ai',
     expectedImageCount: DETAIL_PAGE_EXPECTED_COUNT,
     sections,
+    sectionReferenceHints: context.sectionReferenceHints || {},
   };
 
   return [
     { name: '01-prompt-rendered.txt', data: Buffer.from(request.promptRendered, 'utf8') },
     { name: '02-prompt-original.txt', data: Buffer.from(request.promptOriginal || '', 'utf8') },
     { name: '03-product-info.json', data: Buffer.from(JSON.stringify(info, null, 2), 'utf8') },
-    { name: '04-instructions.txt', data: Buffer.from(INSTRUCTIONS, 'utf8') },
+    { name: '04-instructions.txt', data: Buffer.from(DETAIL_INSTRUCTIONS, 'utf8') },
   ];
 }
 
@@ -129,13 +148,15 @@ async function appendAssetGroup(entries, assets, options) {
   let accepted = 0;
   for (const asset of Array.isArray(assets) ? assets : []) {
     const descriptor = describeAsset(asset);
-    if (!descriptor || descriptor.aliases.some((url) => options.selectedAliases.has(url))) continue;
+    if (!descriptor || (!options.allowAliasedAssets && descriptor.aliases.some((url) => options.selectedAliases.has(url)))) continue;
 
     const loaded = await loadFirstUsableAsset(descriptor.urls, options);
     if (!loaded) continue;
 
     descriptor.aliases.forEach((url) => options.selectedAliases.add(url));
     options.selectedAliases.add(loaded.url);
+    descriptor.aliases.forEach((url) => options.loadedByAlias?.set(url, loaded));
+    options.loadedByAlias?.set(loaded.url, loaded);
     accepted += 1;
     const suffix = options.numbered ? `-${String(accepted).padStart(2, '0')}` : '';
     entries.push({
@@ -159,12 +180,25 @@ function describeAsset(asset) {
 
 async function loadFirstUsableAsset(urls, options) {
   for (const url of urls) {
+    const cached = options.loadedByAlias?.get(url);
+    if (cached) return { ...cached, url };
     if (options.attemptedUrls.has(url)) continue;
     options.attemptedUrls.add(url);
     const loaded = await loadAsset(url, options);
     if (loaded) return { ...loaded, url };
   }
   return null;
+}
+
+function referenceGroups(context) {
+  const references = context.extractedReferences || {};
+  return {
+    'hero-candidates': references.heroCandidates || [],
+    'review-style-candidates': references.reviewStyleCandidates || [],
+    'point-candidates': references.pointCandidates || [],
+    'comparison-candidates': references.comparisonCandidates || [],
+    'size-option-candidates': references.sizeOptionCandidates || [],
+  };
 }
 
 async function loadAsset(url, { fetchImpl, readLocalAsset }) {
