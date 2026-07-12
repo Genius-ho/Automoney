@@ -38,6 +38,19 @@ export async function loadNaverConfig(rootDir = process.cwd()) {
   return { clientId, clientSecret };
 }
 
+export async function loadCoupangConfig(rootDir = process.cwd()) {
+  const values = await loadEnvValues(rootDir);
+  const pick = (name) => values[name] || process.env[name];
+  const accessKey = pick('COUPANG_ACCESS_KEY');
+  const secretKey = pick('COUPANG_SECRET_KEY');
+  const vendorId = pick('COUPANG_VENDOR_ID');
+  const vendorUserId = pick('COUPANG_VENDOR_USER_ID') || null;
+  if (!accessKey) throw new Error('COUPANG_ACCESS_KEY is missing in .env');
+  if (!secretKey) throw new Error('COUPANG_SECRET_KEY is missing in .env');
+  if (!vendorId) throw new Error('COUPANG_VENDOR_ID is missing in .env');
+  return { accessKey, secretKey, vendorId, vendorUserId };
+}
+
 export async function loadProductNumbers(csvPath) {
   const text = await readFile(csvPath, 'utf8');
   const lines = text
