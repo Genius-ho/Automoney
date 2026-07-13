@@ -460,3 +460,20 @@ values (
   '{"source":"domeme","notes":["use supplier shipping fee when present","review Jeju/island remote fees"]}'::jsonb
 )
 on conflict (name) do nothing;
+
+alter table product_options add column if not exists stock_quantity integer;
+
+create table if not exists coupang_product_registrations (
+  id bigserial primary key,
+  product_draft_id bigint not null references product_drafts(id) on delete cascade,
+  seller_product_id text,
+  request_hash text not null,
+  status text not null default 'pending',
+  requested boolean not null default false,
+  created_at timestamptz not null default now(),
+  updated_at timestamptz not null default now(),
+  unique (product_draft_id)
+);
+
+alter table coupang_product_registrations add column if not exists approval_response_message text;
+alter table coupang_product_registrations add column if not exists approval_requested_at timestamptz;

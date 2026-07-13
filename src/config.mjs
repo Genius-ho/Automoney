@@ -38,6 +38,22 @@ export async function loadNaverConfig(rootDir = process.cwd()) {
   return { clientId, clientSecret };
 }
 
+export async function loadR2Config(rootDir = process.cwd()) {
+  const values = await loadEnvValues(rootDir);
+  const pick = (name) => values[name] || process.env[name];
+  const accountId = pick('R2_ACCOUNT_ID');
+  const accessKeyId = pick('R2_ACCESS_KEY_ID');
+  const secretAccessKey = pick('R2_SECRET_ACCESS_KEY');
+  const bucket = pick('R2_BUCKET');
+  const publicBaseUrl = pick('R2_PUBLIC_BASE_URL');
+  if (!accountId) throw new Error('R2_ACCOUNT_ID is missing in .env');
+  if (!accessKeyId) throw new Error('R2_ACCESS_KEY_ID is missing in .env');
+  if (!secretAccessKey) throw new Error('R2_SECRET_ACCESS_KEY is missing in .env');
+  if (!bucket) throw new Error('R2_BUCKET is missing in .env');
+  if (!publicBaseUrl) throw new Error('R2_PUBLIC_BASE_URL is missing in .env');
+  return { accountId, accessKeyId, secretAccessKey, bucket, publicBaseUrl };
+}
+
 export async function loadCoupangConfig(rootDir = process.cwd()) {
   const values = await loadEnvValues(rootDir);
   const pick = (name) => values[name] || process.env[name];

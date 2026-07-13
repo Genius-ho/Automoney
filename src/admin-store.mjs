@@ -176,7 +176,7 @@ export async function getProductDraft(db, id) {
     ),
     db.query(
       `
-        select id, option_index, name, value, additional_price, raw_json
+        select id, option_index, name, value, additional_price, stock_quantity, raw_json
         from product_options
         where product_draft_id = $1
         order by option_index
@@ -1042,6 +1042,7 @@ function toDraftDetail(row, images, options) {
       name: option.name,
       value: option.value,
       additionalPrice: option.additional_price,
+      stockQuantity: option.stock_quantity == null ? null : Number(option.stock_quantity),
       raw: option.raw_json,
     })),
   };
@@ -1094,6 +1095,7 @@ function toCoupangExport(draft, optimization = null, imagePromptRequests = [],ap
       optionName: option.name,
       optionValue: option.value,
       additionalPrice: option.additionalPrice,
+      stockQuantity: option.stockQuantity,
     })),
   };
 }

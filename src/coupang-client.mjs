@@ -92,6 +92,37 @@ export class CoupangClient {
       operation: 'get_category_meta',
     });
   }
+
+  async createProduct(payload) {
+    return this.request('POST', '/v2/providers/seller_api/apis/api/v1/marketplace/seller-products', {
+      body: payload,
+      operation: 'create_product',
+    });
+  }
+
+  async getProduct(sellerProductId) {
+    return this.request('GET', `/v2/providers/seller_api/apis/api/v1/marketplace/seller-products/${sellerProductId}`, {
+      operation: 'get_product',
+    });
+  }
+
+  // Coupang's modify endpoint takes the same path as create (no id in the
+  // URL) and requires the *entire* product JSON resubmitted, with
+  // sellerProductId (and each item's sellerProductItemId) included so it's
+  // recognized as an update rather than a new product.
+  async updateProduct(payload) {
+    return this.request('PUT', '/v2/providers/seller_api/apis/api/v1/marketplace/seller-products', {
+      body: payload,
+      operation: 'update_product',
+    });
+  }
+
+  // Sale-approval request: no request body, just the signed PUT itself.
+  async requestApproval(sellerProductId) {
+    return this.request('PUT', `/v2/providers/seller_api/apis/api/v1/marketplace/seller-products/${sellerProductId}/approvals`, {
+      operation: 'request_approval',
+    });
+  }
 }
 
 // Coupang Wing Open API custom HMAC scheme: the signed message is the
