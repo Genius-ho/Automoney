@@ -106,6 +106,16 @@ export class CoupangClient {
     });
   }
 
+  // Response envelope is { code, message, nextToken, data: [...] } -- data is
+  // a plain array (confirmed against a live call), not a { content: [...] }
+  // wrapper like some other list endpoints use.
+  async listSellerProducts({ sellerProductName, statusCode, pageNum = 1, maxPerPage = 20 } = {}) {
+    return this.request('GET', '/v2/providers/seller_api/apis/api/v1/marketplace/seller-products', {
+      query: { vendorId: this.vendorId, sellerProductName, statusCode, pageNum, maxPerPage },
+      operation: 'list_seller_products',
+    });
+  }
+
   // Coupang's modify endpoint takes the same path as create (no id in the
   // URL) and requires the *entire* product JSON resubmitted, with
   // sellerProductId (and each item's sellerProductItemId) included so it's

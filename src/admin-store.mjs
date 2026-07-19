@@ -27,7 +27,7 @@ const FINAL_DECISION_SQL = `
   end
 `;
 
-export async function listProductDrafts(db, { status, importBatchId, collectedOnly, naverWinnerStatus, finalDecision } = {}) {
+export async function listProductDrafts(db, { status, importBatchId, collectedOnly, naverWinnerStatus, finalDecision, limit } = {}) {
   const params = [];
   const where = [];
   if (status) {
@@ -50,6 +50,11 @@ export async function listProductDrafts(db, { status, importBatchId, collectedOn
     if (!VALID_FINAL_DECISIONS.has(finalDecision)) throw new Error(`Invalid finalDecision: ${finalDecision}`);
     params.push(finalDecision);
     where.push(`${FINAL_DECISION_SQL} = $${params.length}`);
+  }
+  let parsedLimit = null;
+  if (limit !== undefined && limit !== null) {
+    parsedLimit = Number(limit);
+    if (!Number.isInteger(parsedLimit) || parsedLimit <= 0) throw new Error(`Invalid limit: ${limit}`);
   }
 
   const result = await db.query(
@@ -122,6 +127,7 @@ export async function listProductDrafts(db, { status, importBatchId, collectedOn
         d.naver_expected_profit desc nulls last,
         d.updated_at desc,
         d.id desc
+      ${parsedLimit ? `limit $${params.push(parsedLimit)}` : ''}
     `,
     params,
   );

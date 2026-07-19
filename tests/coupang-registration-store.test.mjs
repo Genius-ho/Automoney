@@ -1,0 +1,104 @@
+import assert from 'node:assert/strict';
+import test from 'node:test';
+
+import {
+  getCoupangRegistration,
+  linkCoupangRegistration,
+  listCoupangRegistrations,
+  recordImagesSwapped,
+  recordLiveSnapshot,
+} from '../src/coupang-registration-store.mjs';
+
+test('listCoupangRegistrations includes an onlyLinked clause only when requested', async () => {
+  const calls = [];
+  const db = { async query(sql, params = []) { calls.push({ sql, params }); return { rows: [] }; } };
+
+  await listCoupangRegistrations(db, { onlyLinked: true });
+  assert.match(calls[0].sql, /where r\.seller_product_id is not null\s*\n\s*order by/);
+
+  await listCoupangRegistrations(db, {});
+  assert.match(calls[1].sql, /where r\.seller_product_id is not null or \(/);
+});
+
+test('listCoupangRegistrations maps rows to camelCase', async () => {
+  const db = {
+    async query() {
+      return {
+        rows: [{
+          product_draft_id: '46',
+          selling_title: 'raw title',
+          optimized_coupang_title: 'optimized title',
+          seller_product_id: '16301910938',
+          seller_product_name: '무타공 레일선반',
+          linked_via: 'speedgo_lookup',
+          status: 'linked',
+          images_swapped_at: null,
+          last_synced_at: null,
+          live_status_name: null,
+          live_total_stock_quantity: null,
+          live_sale_price: null,
+        }],
+      };
+    },
+  };
+  const [row] = await listCoupangRegistrations(db);
+  assert.deepEqual(row, {
+    productDraftId: 46,
+    sellingTitle: 'raw title',
+    optimizedCoupangTitle: 'optimized title',
+    sellerProductId: '16301910938',
+    sellerProductName: '무타공 레일선반',
+    linkedVia: 'speedgo_lookup',
+    status: 'linked',
+    imagesSwappedAt: null,
+    lastSyncedAt: null,
+    liveStatusName: null,
+    liveTotalStockQuantity: null,
+    liveSalePrice: null,
+  });
+});
+
+test('getCoupangRegistration returns null when no row exists for the draft', async () => {
+  const db = { async query() { return { rows: [] }; } };
+  assert.equal(await getCoupangRegistration(db, 999), null);
+});
+
+test('linkCoupangRegistration requires a sellerProductId and upserts with linked_via=speedgo_lookup', async () => {
+  const db = {
+    async query(sql, params) {
+      assert.match(sql, /on conflict \(product_draft_id\) do update/);
+      assert.match(sql, /linked_via = 'speedgo_lookup'/);
+      assert.deepEqual(params, [46, '16301910938', '무타공 레일선반', 'speedgo:16301910938']);
+      return { rows: [{ product_draft_id: 46, seller_product_id: '16301910938', seller_product_name: '무타공 레일선반', linked_via: 'speedgo_lookup', status: 'linked' }] };
+    },
+  };
+  const result = await linkCoupangRegistration(db, 46, { sellerProductId: '16301910938', sellerProductName: '무타공 레일선반' });
+  assert.equal(result.sellerProductId, '16301910938');
+  assert.equal(result.linkedVia, 'speedgo_lookup');
+
+  await assert.rejects(() => linkCoupangRegistration(db, 46, {}), /sellerProductId is required/);
+});
+
+test('recordImagesSwapped sets status=images_swapped and stamps images_swapped_at', async () => {
+  const db = {
+    async query(sql, params) {
+      assert.match(sql, /status = 'images_swapped', images_swapped_at = now\(\)/);
+      assert.deepEqual(params, [46]);
+      return { rows: [{ product_draft_id: 46, status: 'images_swapped' }] };
+    },
+  };
+  const result = await recordImagesSwapped(db, 46);
+  assert.equal(result.status, 'images_swapped');
+});
+
+test('recordLiveSnapshot writes denormalized stock/price/status fields', async () => {
+  const db = {
+    async query(sql, params) {
+      assert.deepEqual(params, [46, '승인완료', 10, 33570, JSON.stringify([{ a: 1 }])]);
+      return { rows: [{ product_draft_id: 46, live_status_name: '승인완료', live_total_stock_quantity: 10, live_sale_price: 33570 }] };
+    },
+  };
+  const result = await recordLiveSnapshot(db, 46, { statusName: '승인완료', totalStockQuantity: 10, salePrice: 33570, itemSnapshotJson: [{ a: 1 }] });
+  assert.equal(result.liveStatusName, '승인완료');
+  assert.equal(result.liveTotalStockQuantity, 10);
+});

@@ -3,8 +3,10 @@ import test from 'node:test';
 
 import {
   buildCoupangProductPayload,
+  buildImageOnlyFragments,
   extractSupplierNoticeFields,
   formatKstDateTime,
+  mapLiveProductToUpdatePayload,
   mapOptionsToMandatoryAttributes,
 } from '../src/coupang-payload-builder.mjs';
 
@@ -129,6 +131,35 @@ test('mapOptionsToMandatoryAttributes fills stock quantities when provided and r
   assert.deepEqual(result.missingStock, []);
 });
 
+test('mapOptionsToMandatoryAttributes fills a third mandatory attribute (beyond 색상/size) from additionalAttributeValues', () => {
+  const result = mapOptionsToMandatoryAttributes({
+    draftOptions: [{ optionValue: '아이보리', additionalPrice: 0 }],
+    mandatoryOptionNames: ['색상', '사이즈', '수량'],
+    stockByOptionValue: { 아이보리: 10 },
+    sizeAttributeValue: '200 x 430 x 60mm',
+    additionalAttributeValues: { 수량: '2' },
+    exposed: 'NONE',
+  });
+
+  assert.deepEqual(result.items[0].attributes, [
+    { attributeTypeName: '색상', attributeValueName: '아이보리', exposed: 'NONE' },
+    { attributeTypeName: '사이즈', attributeValueName: '200 x 430 x 60mm', exposed: 'NONE' },
+    { attributeTypeName: '수량', attributeValueName: '2', exposed: 'NONE' },
+  ]);
+  assert.deepEqual(result.unresolvedMandatoryAttributes, []);
+});
+
+test('mapOptionsToMandatoryAttributes reports a third mandatory attribute unresolved when no override is supplied', () => {
+  const result = mapOptionsToMandatoryAttributes({
+    draftOptions: [{ optionValue: '아이보리', additionalPrice: 0 }],
+    mandatoryOptionNames: ['색상', '사이즈', '수량'],
+    stockByOptionValue: { 아이보리: 10 },
+    sizeAttributeValue: '200 x 430 x 60mm',
+  });
+
+  assert.deepEqual(result.unresolvedMandatoryAttributes, ['수량']);
+});
+
 function categoryMetaFixture() {
   return {
     displayCategoryCode: 71691,
@@ -234,7 +265,7 @@ test('buildCoupangProductPayload keeps items[].images to just the representation
   assert.equal(payload.items[0].contents.length, 1);
   assert.equal(payload.items[0].contents[0].contentDetails.length, 10);
   assert.deepEqual(payload.items[0].contents[0].contentDetails.map((detail) => detail.order), [1, 2, 3, 4, 5, 6, 7, 8, 9, 10]);
-  assert.equal(payload.items[0].contents[0].contentDetails[0].content, TEN_APPROVED_DETAIL_IMAGES[0]);
+  assert.equal(payload.items[0].contents[0].contentDetails[0].content, `<img src="${TEN_APPROVED_DETAIL_IMAGES[0]}" />`);
   assert.deepEqual(payload.items[1].contents, payload.items[0].contents);
 
   const notices = payload.items[0].notices;
@@ -326,6 +357,54 @@ test('buildCoupangProductPayload builds a single-item modify request with seller
   assert.equal(manufacturerNotice.content, '와우픽');
 });
 
+test('buildCoupangProductPayload fills notice fields a different template names (e.g. "기타 재화") via noticeContentOverrides', () => {
+  const draft = draft64Fixture();
+  const otherGoodsTemplate = {
+    displayCategoryCode: 80704,
+    noticeCategoryTemplates: [{
+      noticeCategoryName: '기타 재화',
+      noticeCategoryDetailNames: [
+        { noticeCategoryDetailName: '품명 및 모델명', required: 'MANDATORY' },
+        { noticeCategoryDetailName: '인증/허가 사항', required: 'MANDATORY' },
+        { noticeCategoryDetailName: '제조국(원산지)', required: 'MANDATORY' },
+        { noticeCategoryDetailName: '제조자(수입자)', required: 'MANDATORY' },
+        { noticeCategoryDetailName: '소비자상담 관련 전화번호', required: 'MANDATORY' },
+      ],
+    }],
+  };
+  const optionMapping = mapOptionsToMandatoryAttributes({
+    draftOptions: [{ optionValue: '아이보리', additionalPrice: 0 }],
+    mandatoryOptionNames: ['색상', '사이즈', '수량'],
+    stockByOptionValue: { 아이보리: 10 },
+    sizeAttributeValue: '200 x 430 x 60mm',
+    additionalAttributeValues: { 수량: '2' },
+    exposed: 'NONE',
+  });
+
+  const payload = buildCoupangProductPayload({
+    draft,
+    vendorId: 'A01550261',
+    displayCategoryCode: 80704,
+    categoryMeta: otherGoodsTemplate,
+    noticeCategoryTemplateName: '기타 재화',
+    supplierNoticeFields: { modelName: '레일선반', countryOfOrigin: '수입산 / 아시아 / 중국', manufacturer: '와우픽' },
+    noticeContentOverrides: { '인증/허가 사항': '해당없음' },
+    asPhoneNumber: '010-9092-8623',
+    optionMapping,
+    outboundShippingPlace: {},
+    returnShippingCenter: {},
+    approvedDetailImageUrls: TEN_APPROVED_DETAIL_IMAGES,
+    deliveryCompanyCode: 'CJGLS',
+  });
+
+  const notices = payload.items[0].notices;
+  assert.equal(notices.find((n) => n.noticeCategoryDetailName === '품명 및 모델명').content, '레일선반');
+  assert.equal(notices.find((n) => n.noticeCategoryDetailName === '인증/허가 사항').content, '해당없음');
+  assert.equal(notices.find((n) => n.noticeCategoryDetailName === '제조국(원산지)').content, '수입산 / 아시아 / 중국');
+  assert.equal(notices.find((n) => n.noticeCategoryDetailName === '제조자(수입자)').content, '와우픽');
+  assert.equal(notices.find((n) => n.noticeCategoryDetailName === '소비자상담 관련 전화번호').content, '010-9092-8623');
+});
+
 test('buildCoupangProductPayload marks imagesPubliclyHosted true only once every image is a real https URL', () => {
   const draft = draft64Fixture();
   const optionMapping = mapOptionsToMandatoryAttributes({
@@ -353,5 +432,151 @@ test('buildCoupangProductPayload marks imagesPubliclyHosted true only once every
   });
   assert.equal(hosted.imagesPubliclyHosted, true);
   assert.equal(hosted.items[0].images[0].vendorPath, 'https://pub-example.r2.dev/drafts/64/coupang/main.jpg');
-  assert.equal(hosted.items[0].contents[0].contentDetails[0].content, r2Urls[0]);
+  assert.equal(hosted.items[0].contents[0].contentDetails[0].content, `<img src="${r2Urls[0]}" />`);
+});
+
+test('buildImageOnlyFragments builds a REPRESENTATION+DETAIL images array and a TEXT/img contents array from plain URLs', () => {
+  const mainImageUrl = 'https://pub-example.r2.dev/drafts/46/coupang/main.jpg';
+  const detailImageUrls = Array.from({ length: 10 }, (_, i) => `https://pub-example.r2.dev/drafts/46/coupang/detail-${i}.jpg`);
+  const { images, contents } = buildImageOnlyFragments({
+    mainImageUrl,
+    detailImageUrls,
+    detailImageUrlsForImages: detailImageUrls.slice(0, 9),
+  });
+
+  assert.equal(images.length, 10);
+  assert.deepEqual(images[0], { imageOrder: 1, imageType: 'REPRESENTATION', vendorPath: mainImageUrl });
+  assert.equal(images.filter((image) => image.imageType === 'DETAIL').length, 9);
+  assert.deepEqual(images[1], { imageOrder: 1, imageType: 'DETAIL', vendorPath: detailImageUrls[0] });
+
+  assert.equal(contents.length, 1);
+  assert.equal(contents[0].contentsType, 'TEXT');
+  assert.equal(contents[0].contentDetails.length, 10);
+  assert.deepEqual(contents[0].contentDetails[0], { content: `<img src="${detailImageUrls[0]}" />`, detailType: 'TEXT', order: 1 });
+});
+
+test('buildImageOnlyFragments omits DETAIL images entirely when detailImageUrlsForImages is not passed (no silent auto-fill)', () => {
+  const { images } = buildImageOnlyFragments({
+    mainImageUrl: 'https://pub-example.r2.dev/main.jpg',
+    detailImageUrls: ['https://pub-example.r2.dev/d1.jpg', 'https://pub-example.r2.dev/d2.jpg'],
+  });
+  assert.equal(images.length, 1);
+  assert.equal(images[0].imageType, 'REPRESENTATION');
+});
+
+// Fixture mirrors a real getProduct() response, trimmed to the fields
+// mapLiveProductToUpdatePayload reads -- shape confirmed live against
+// sellerProductId 16301574570 and 16301910938 on 2026-07-14.
+function liveGetProductFixture(overrides = {}) {
+  return {
+    sellerProductId: 16301574570,
+    displayCategoryCode: 71691,
+    sellerProductName: '악세사리 주얼리함 보석함 수납함 주얼리 3단',
+    vendorId: 'A01550261',
+    vendorUserId: 'wowpick1',
+    saleStartedAt: '2026-07-13T10:25:00',
+    saleEndedAt: '2099-12-31T09:00:00',
+    displayProductName: '와우픽 3단 주얼리함 보석함 액세서리 수납함',
+    brand: '와우픽',
+    manufacture: '와우픽',
+    deliveryMethod: 'SEQUENCIAL',
+    deliveryCompanyCode: 'CJGLS',
+    deliveryChargeType: 'NOT_FREE',
+    deliveryCharge: 3000,
+    freeShipOverAmount: 0,
+    // Confirmed live: this always comes back 0 regardless of the real
+    // return-shipping charge -- returnCharge below is the reliable field.
+    deliveryChargeOnReturn: 0,
+    remoteAreaDeliverable: 'N',
+    unionDeliveryType: 'UNION_DELIVERY',
+    outboundShippingPlaceCode: 24466172,
+    returnCenterCode: '1002401151',
+    returnChargeName: '반품지1',
+    returnCharge: 6000,
+    companyContactNumber: '010-8795-2571',
+    returnZipCode: '04713',
+    returnAddress: '서울특별시 성동구 행당로 79',
+    returnAddressDetail: '119동 906호',
+    requested: false,
+    statusName: '승인완료',
+    productId: 9647805877,
+    trackingId: 'sample-tracking-id',
+    items: [
+      {
+        sellerProductItemId: 38201516160,
+        vendorItemId: 95768275023,
+        itemId: 28833869954,
+        itemName: '그레이',
+        originalPrice: 20930,
+        salePrice: 20930,
+        // No stockQuantity field on GET -- only maximumBuyCount.
+        maximumBuyCount: 10,
+        maximumBuyForPerson: 0,
+        maximumBuyForPersonPeriod: 1,
+        outboundShippingTimeDay: 1,
+        unitCount: 1,
+        taxType: 'TAX',
+        parallelImported: 'NOT_PARALLEL_IMPORTED',
+        overseasPurchased: 'NOT_OVERSEAS_PURCHASED',
+        adultOnly: 'EVERYONE',
+        attributes: [
+          { attributeTypeName: '제조년도', attributeValueName: '', exposed: 'NONE', editable: true },
+          { attributeTypeName: '색상', attributeValueName: '그레이', exposed: 'NONE', editable: true },
+          { attributeTypeName: '주얼리 사이즈', attributeValueName: '23.5 x 13.5 x 10.5cm', exposed: 'NONE', editable: true },
+        ],
+        notices: [{ noticeCategoryName: '패션잡화(모자/벨트/액세서리 등)', noticeCategoryDetailName: '종류', content: '악세사리 주얼리함 보석함 수납함 주얼리 3단' }],
+        searchTags: ['주얼리함', '보석함'],
+        images: [{ imageOrder: 1, imageType: 'REPRESENTATION', cdnPath: 'vendor_inventory/old.jpg', vendorPath: 'old.jpg' }],
+        contents: [{ contentsType: 'TEXT', contentDetails: [{ content: '<img src="old" />', detailType: 'TEXT', order: 1 }] }],
+      },
+    ],
+    ...overrides,
+  };
+}
+
+test('mapLiveProductToUpdatePayload derives deliveryChargeOnReturn from returnCharge, not the live field of the same name', () => {
+  const live = liveGetProductFixture();
+  const mapped = mapLiveProductToUpdatePayload(live, { images: [], contents: [] });
+  assert.equal(mapped.deliveryChargeOnReturn, 6000);
+});
+
+test('mapLiveProductToUpdatePayload translates maximumBuyCount into stockQuantity', () => {
+  const live = liveGetProductFixture();
+  const mapped = mapLiveProductToUpdatePayload(live, { images: [], contents: [] });
+  assert.equal(mapped.items[0].stockQuantity, 10);
+  assert.equal(mapped.items[0].maximumBuyCount, 10);
+});
+
+test('mapLiveProductToUpdatePayload drops blank attribute values and strips the editable flag', () => {
+  const live = liveGetProductFixture();
+  const mapped = mapLiveProductToUpdatePayload(live, { images: [], contents: [] });
+  assert.deepEqual(mapped.items[0].attributes, [
+    { attributeTypeName: '색상', attributeValueName: '그레이', exposed: 'NONE' },
+    { attributeTypeName: '주얼리 사이즈', attributeValueName: '23.5 x 13.5 x 10.5cm', exposed: 'NONE' },
+  ]);
+});
+
+test('mapLiveProductToUpdatePayload always submits requested=false regardless of the live value', () => {
+  const live = liveGetProductFixture({ requested: true });
+  const mapped = mapLiveProductToUpdatePayload(live, { images: [], contents: [] });
+  assert.equal(mapped.requested, false);
+});
+
+test('mapLiveProductToUpdatePayload replaces items[].images/contents with the caller-supplied fragments, dropping the live ones', () => {
+  const live = liveGetProductFixture();
+  const newImages = [{ imageOrder: 1, imageType: 'REPRESENTATION', vendorPath: 'https://pub-example.r2.dev/new.jpg' }];
+  const newContents = [{ contentsType: 'TEXT', contentDetails: [{ content: '<img src="new" />', detailType: 'TEXT', order: 1 }] }];
+  const mapped = mapLiveProductToUpdatePayload(live, { images: newImages, contents: newContents });
+  assert.deepEqual(mapped.items[0].images, newImages);
+  assert.deepEqual(mapped.items[0].contents, newContents);
+});
+
+test('mapLiveProductToUpdatePayload drops response-only fields not part of the update payload schema', () => {
+  const live = liveGetProductFixture();
+  const mapped = mapLiveProductToUpdatePayload(live, { images: [], contents: [] });
+  assert.equal('trackingId' in mapped, false);
+  assert.equal('productId' in mapped, false);
+  assert.equal('statusName' in mapped, false);
+  assert.equal('vendorItemId' in mapped.items[0], false);
+  assert.equal('itemId' in mapped.items[0], false);
 });
