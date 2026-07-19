@@ -1,0 +1,72 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "title": "AutomoneyPythonProductAnalysis",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["material", "dimensions", "colors", "components", "manufacturer", "countryOfOrigin", "handlingPrecautions", "unresolvedFields", "ocrMeta"],
+  "properties": {
+    "material": { "$ref": "#/definitions/singleField" },
+    "dimensions": { "$ref": "#/definitions/singleField" },
+    "manufacturer": { "$ref": "#/definitions/singleField" },
+    "countryOfOrigin": { "$ref": "#/definitions/singleField" },
+    "handlingPrecautions": { "$ref": "#/definitions/singleField" },
+    "colors": { "$ref": "#/definitions/multiField" },
+    "components": { "$ref": "#/definitions/multiField" },
+    "unresolvedFields": { "type": "array", "items": { "type": "string" } },
+    "ocrMeta": {
+      "type": "object",
+      "required": ["available", "version", "message", "imagesProcessed", "imagesOcrOk", "perImage"],
+      "properties": {
+        "available": { "type": "boolean" },
+        "version": { "type": ["string", "null"] },
+        "message": { "type": ["string", "null"] },
+        "imagesProcessed": { "type": "integer", "minimum": 0 },
+        "imagesOcrOk": { "type": "integer", "minimum": 0 },
+        "perImage": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "required": ["file", "sliceIndex", "text", "ok"],
+            "properties": {
+              "file": { "type": "string" },
+              "sliceIndex": { "type": ["integer", "null"] },
+              "text": { "type": ["string", "null"] },
+              "ok": { "type": "boolean" }
+            }
+          }
+        }
+      }
+    }
+  },
+  "definitions": {
+    "evidenceItem": {
+      "type": "object",
+      "required": ["file", "sliceIndex", "text"],
+      "properties": {
+        "file": { "type": ["string", "null"] },
+        "sliceIndex": { "type": ["integer", "null"] },
+        "text": { "type": ["string", "null"] }
+      }
+    },
+    "singleField": {
+      "type": "object",
+      "required": ["value", "confidence", "source", "evidence"],
+      "properties": {
+        "value": { "type": ["string", "null"] },
+        "confidence": { "type": "number", "minimum": 0, "maximum": 1 },
+        "source": { "type": ["string", "null"], "enum": ["raw_json", "html", "ocr", null] },
+        "evidence": { "type": "array", "items": { "$ref": "#/definitions/evidenceItem" } }
+      }
+    },
+    "multiField": {
+      "type": "object",
+      "required": ["values", "confidence", "source", "evidence"],
+      "properties": {
+        "values": { "type": "array", "items": { "type": "string" } },
+        "confidence": { "type": "number", "minimum": 0, "maximum": 1 },
+        "source": { "type": ["string", "null"], "enum": ["raw_json", "html", "ocr", null] },
+        "evidence": { "type": "array", "items": { "$ref": "#/definitions/evidenceItem" } }
+      }
+    }
+  }
+}

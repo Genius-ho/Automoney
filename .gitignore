@@ -7,3 +7,7 @@ data/*
 *.sqlite3-wal
 node_modules/
 artifacts/
+workers/python/tessdata/
+workers/python/.venv/
+__pycache__/
+*.pyc

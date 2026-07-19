@@ -18,6 +18,47 @@ test('getJobPaths isolates each draft under its own draft-{id} folder', () => {
   assert.notEqual(paths.root, otherDraft.root);
 });
 
+test('createProductJobFolder never creates or touches another draft\'s folder', async () => {
+  const jobDir = await mkdtemp(join(tmpdir(), 'automoney-jobs-'));
+  try {
+    const pathsA = await createProductJobFolder({ jobDir, draftId: 64 });
+    const pathsB = getJobPaths(jobDir, 46);
+    await assert.rejects(() => access(pathsB.inputDir), 'draft 46\'s folder must not exist just because draft 64\'s was created');
+    await access(pathsA.inputDir); // sanity: draft 64's own folder does exist
+  } finally {
+    await rm(jobDir, { recursive: true, force: true });
+  }
+});
+
+test('createProductJobFolder and buildAnalysisInputPackage work when the job dir path contains spaces (Windows-realistic)', async () => {
+  const rootDir = await mkdtemp(join(tmpdir(), 'automoney root '));
+  const jobDir = await mkdtemp(join(tmpdir(), 'automoney jobs '));
+  try {
+    const publicImagesDir = join(rootDir, 'public', 'generated-images', 'drafts', '999');
+    await import('node:fs/promises').then((m) => m.mkdir(publicImagesDir, { recursive: true }));
+    await writeFile(join(publicImagesDir, 'slice-001.jpg'), 'fake-image');
+
+    const draftRow = {
+      id: 999, supplierProductNo: 'sp-999', rawName: 'raw', cleanedName: 'clean', sellingTitle: 'title',
+      optimizedCoupangTitle: null, options: [],
+      images: [{ imageType: 'detail_slice', sliceIndex: 1, storedUrl: '/generated-images/drafts/999/slice-001.jpg' }],
+    };
+    const db = {
+      async query(sql) {
+        if (sql.includes('supplier_product_id from product_drafts')) return { rows: [{ supplier_product_id: 1 }] };
+        if (sql.includes('raw_json from supplier_products')) return { rows: [{ raw_json: {} }] };
+        throw new Error(`unexpected query: ${sql}`);
+      },
+    };
+    const result = await buildAnalysisInputPackage({ db, rootDir, jobDir, draftId: 999, getProductDraftImpl: async () => draftRow });
+    assert.equal(result.detailImagePaths.length, 1);
+    await access(result.detailImagePaths[0]);
+  } finally {
+    await rm(rootDir, { recursive: true, force: true });
+    await rm(jobDir, { recursive: true, force: true });
+  }
+});
+
 test('createProductJobFolder creates all subdirectories and is safe to call twice (re-run)', async () => {
   const jobDir = await mkdtemp(join(tmpdir(), 'automoney-jobs-'));
   try {

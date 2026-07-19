@@ -98,7 +98,17 @@ export async function loadJobPathsConfig(rootDir = process.cwd()) {
 export async function loadPythonConfig(rootDir = process.cwd()) {
   const values = await loadEnvValues(rootDir).catch(() => ({}));
   const pick = (name) => values[name] || process.env[name];
-  return { executable: pick('PYTHON_EXECUTABLE') || 'python' };
+  const timeoutMs = Number(pick('PYTHON_TIMEOUT_MS'));
+  return {
+    // Defaults here are intentionally the bare command names, never a
+    // machine-specific absolute path -- real paths belong in .env only
+    // (gitignored), so the same code runs unchanged on Windows and Linux.
+    executable: pick('PYTHON_EXECUTABLE') || 'python',
+    tesseractExecutable: pick('TESSERACT_EXECUTABLE') || null,
+    tessdataPrefix: pick('TESSDATA_PREFIX_DIR') || null,
+    ocrLang: pick('OCR_LANG') || 'kor+eng',
+    timeoutMs: Number.isInteger(timeoutMs) && timeoutMs > 0 ? timeoutMs : 60_000,
+  };
 }
 
 export async function loadProductNumbers(csvPath) {

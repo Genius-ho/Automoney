@@ -19,8 +19,12 @@ export function getJobPaths(jobDir, draftId) {
     detailSlicesDir: join(inputDir, 'detail-slices'),
     productJsonPath: join(inputDir, 'product.json'),
     rawJsonPath: join(inputDir, 'raw.json'),
+    detailHtmlPath: join(inputDir, 'detail.html'),
     codexAnalysisPath: join(outputDir, 'codex-analysis.json'),
+    pythonAnalysisPath: join(outputDir, 'python-analysis.json'),
+    mergedAnalysisPath: join(outputDir, 'merged-analysis.json'),
     codexLogPath: join(logsDir, 'codex.log'),
+    pythonLogPath: join(logsDir, 'python.log'),
   };
 }
 
@@ -61,6 +65,7 @@ export async function buildAnalysisInputPackage({ db, rootDir, jobDir, draftId, 
   };
   await writeFile(paths.productJsonPath, JSON.stringify(productSummary, null, 2));
   await writeFile(paths.rawJsonPath, JSON.stringify(supplierProduct.raw_json, null, 2));
+  await writeFile(paths.detailHtmlPath, draft.originalDetailHtml || '');
 
   const publicRoot = resolve(rootDir, 'public');
   const localImagePath = (storedUrl) => {
