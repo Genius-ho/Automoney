@@ -3,7 +3,7 @@ import { mkdir, readFile, rename, rm, writeFile } from 'node:fs/promises';
 import { extname, join, resolve } from 'node:path';
 import { createHash } from 'node:crypto';
 
-import { loadAiSecrets, loadCoupangConfig, loadDatabaseUrl, loadNaverConfig, loadR2Config } from './config.mjs';
+import { loadAiSecrets, loadCodexConfig, loadCoupangConfig, loadDatabaseUrl, loadJobPathsConfig, loadNaverConfig, loadPythonConfig, loadR2Config } from './config.mjs';
 import { R2Client } from './r2-client.mjs';
 import { clearProviderCredential, listProviderSettings, listTaskRouting, saveProviderSetting, saveTaskRouting, testProviderSetting } from './ai/provider-settings-store.mjs';
 import { NaverShoppingClient } from './naver-shopping-client.mjs';
@@ -13,6 +13,7 @@ import { buildImageOnlyFragments, mapLiveProductToUpdatePayload } from './coupan
 import { getApprovedManualMainImage } from './manual-ai/workflow-store.mjs';
 import { getApprovedManualDetailSet } from './manual-ai/detail-workflow-store.mjs';
 import { getCoupangRegistration, linkCoupangRegistration, listCoupangRegistrations, recordImagesSwapped, recordLiveSnapshot } from './coupang-registration-store.mjs';
+import { applyProductAnalysis, buildApplyPreview, getAppliedAnalysis, getAnalysisRun, getLatestAnalysisRun, listAnalysisRuns, runProductAnalysis } from './product-analysis-orchestrator.mjs';
 import { createPgPool, runSchema } from './postgres-store.mjs';
 import { isAllowedPublicAssetPath } from './public-assets.mjs';
 import { buildMainImagePackage } from './manual-ai/package-builder.mjs';
@@ -346,6 +347,55 @@ async function handleRequest({ request, response, db, aiSecrets, rootDir }) {
     return;
   }
 
+  const analysisRunMatch = url.pathname.match(/^\/api\/product-drafts\/(\d+)\/analysis\/run$/);
+  if (analysisRunMatch && request.method === 'POST') {
+    const draftId = Number(analysisRunMatch[1]);
+    const [codexConfig, pythonConfig, jobPathsConfig] = await Promise.all([loadCodexConfig(rootDir), loadPythonConfig(rootDir), loadJobPathsConfig(rootDir)]);
+    const run = await runProductAnalysis({ db, rootDir, draftId, codexConfig, pythonConfig, jobPathsConfig });
+    sendJson(response, 200, { run });
+    return;
+  }
+
+  const analysisRunsMatch = url.pathname.match(/^\/api\/product-drafts\/(\d+)\/analysis\/runs\/(\d+)$/);
+  if (analysisRunsMatch && request.method === 'GET') {
+    const [, draftIdRaw, runIdRaw] = analysisRunsMatch;
+    const draftId = Number(draftIdRaw);
+    const run = await getAnalysisRun(db, draftId, Number(runIdRaw));
+    if (!run) { sendJson(response, 404, { error: 'Analysis run not found', code: 'ANALYSIS_FILES_MISSING' }); return; }
+    const draft = await getProductDraft(db, draftId);
+    sendJson(response, 200, { run, applyPreview: buildApplyPreview(run, draft) });
+    return;
+  }
+
+  const analysisMatch = url.pathname.match(/^\/api\/product-drafts\/(\d+)\/analysis$/);
+  if (analysisMatch && request.method === 'GET') {
+    const draftId = Number(analysisMatch[1]);
+    const [runs, latestRun, applied, draft] = await Promise.all([
+      listAnalysisRuns(db, draftId),
+      getLatestAnalysisRun(db, draftId),
+      getAppliedAnalysis(db, draftId),
+      getProductDraft(db, draftId),
+    ]);
+    if (runs.length === 0) { sendJson(response, 200, { runs: [], latestRun: null, applyPreview: null, applied, code: 'ANALYSIS_FILES_MISSING' }); return; }
+    sendJson(response, 200, { runs, latestRun, applyPreview: buildApplyPreview(latestRun, draft), applied });
+    return;
+  }
+
+  const analysisApplyMatch = url.pathname.match(/^\/api\/product-drafts\/(\d+)\/analysis\/apply$/);
+  if (analysisApplyMatch && request.method === 'POST') {
+    const draftId = Number(analysisApplyMatch[1]);
+    try {
+      const body = await readJson(request);
+      const result = await applyProductAnalysis(db, draftId, { runId: Number(body.runId), fields: body.fields || {}, forceFields: body.forceFields || [] });
+      sendJson(response, 200, result);
+    } catch (error) {
+      if (error.code === 'RUN_NOT_FOUND' || error.code === 'DRAFT_NOT_FOUND') { sendJson(response, 404, { error: error.message, code: error.code }); return; }
+      if (error.code === 'RUN_NOT_APPLICABLE') { sendJson(response, 409, { error: error.message, code: error.code }); return; }
+      throw error;
+    }
+    return;
+  }
+
   const match = url.pathname.match(/^\/api\/product-drafts(?:\/(\d+)(?:\/(approve|block|export\/coupang|export\/naver))?)?$/);
   if (!match) {
     sendJson(response, 404, { error: 'Not found' });
@@ -392,9 +442,15 @@ async function handleRequest({ request, response, db, aiSecrets, rootDir }) {
   }
 
   if (action?.startsWith('export/') && request.method === 'GET') {
-    const exportJson = await exportProductDraft(db, Number(id), action.split('/')[1]);
-    if (!exportJson) sendJson(response, 404, { error: 'Product draft not found' });
-    else sendJson(response, 200, exportJson);
+    const channel = action.split('/')[1];
+    const exportJson = await exportProductDraft(db, Number(id), channel);
+    if (!exportJson) { sendJson(response, 404, { error: 'Product draft not found' }); return; }
+    // Applied analysis candidates (소재/치수/색상/검색어/고시정보) are surfaced
+    // here only -- never written back into the export builder's own fields --
+    // so downstream payload scripts can read them without any Coupang API
+    // call happening as a side effect of viewing this preview.
+    if (channel === 'coupang') exportJson.appliedAnalysis = await getAppliedAnalysis(db, Number(id));
+    sendJson(response, 200, exportJson);
     return;
   }
 
@@ -714,8 +770,8 @@ function adminHtml() {
     function saveColumnWidth(key,width){const saved=getColumnWidths();saved[key]=width;localStorage.setItem('automoney.admin.columnWidths',JSON.stringify(saved));}
     function bindCellSelection(){[...rows.querySelectorAll('tr')].forEach((tr,rowIndex)=>{tr.addEventListener('click',e=>{if(e.target.closest('button,a,input,select,textarea'))return;selectedRowIndex=rowIndex;selectedColIndex=e.target.closest('td')?.cellIndex??selectedColIndex;applySelection();});});}
     function applySelection(){const table=document.getElementById('draftTable');for(const cell of table.querySelectorAll('.selectedCol,.selectedCell'))cell.classList.remove('selectedCol','selectedCell');for(const row of table.querySelectorAll('tr.selectedRow'))row.classList.remove('selectedRow');if(selectedColIndex!=null){for(const row of table.rows){row.cells[selectedColIndex]?.classList.add('selectedCol');}}if(selectedRowIndex!=null){rows.rows[selectedRowIndex]?.classList.add('selectedRow');if(selectedColIndex!=null)rows.rows[selectedRowIndex]?.cells[selectedColIndex]?.classList.add('selectedCell');}}
-    async function loadDetail(id,push=true){selectedId=id;if(push)history.replaceState(null,'','/admin?draftId='+encodeURIComponent(id));const data=await api('/api/product-drafts/'+id);const d=data.draft;detail.innerHTML=detailHtml(d);enhanceDetailImageSections(d);bindTabs();document.getElementById('saveButton').addEventListener('click',()=>saveDraft(id));for(const b of detail.querySelectorAll('[data-status-action]'))b.addEventListener('click',()=>setStatus(id,b.dataset.statusAction));const forceApprove=document.getElementById('forceApproveButton');if(forceApprove)forceApprove.addEventListener('click',()=>forceApproveDraft(id));document.getElementById('exportCoupangButton').addEventListener('click',()=>loadExport(id,'coupang'));document.getElementById('exportNaverButton').addEventListener('click',()=>loadExport(id,'naver'));document.getElementById('copyJsonButton').addEventListener('click',copyExportJson);document.getElementById('refreshNaverButton').addEventListener('click',()=>refreshNaver(id));document.getElementById('runSeoAnalysisButton').addEventListener('click',()=>runSeoAnalysis(id));const regenerateTitleButton=document.getElementById('regenerateTitleButton');if(regenerateTitleButton)regenerateTitleButton.addEventListener('click',()=>regenerateOptimizedTitles(id));const saveTitlesButton=document.getElementById('saveTitlesButton');if(saveTitlesButton)saveTitlesButton.addEventListener('click',()=>saveOptimizedTitles(id));const copyCoupangTitleButton=document.getElementById('copyCoupangTitleButton');if(copyCoupangTitleButton)copyCoupangTitleButton.addEventListener('click',()=>copyTitle('optimizedCoupangTitle'));const copyNaverTitleButton=document.getElementById('copyNaverTitleButton');if(copyNaverTitleButton)copyNaverTitleButton.addEventListener('click',()=>copyTitle('optimizedNaverTitle'));const regenerateDetailButton=document.getElementById('regenerateDetailButton');if(regenerateDetailButton)regenerateDetailButton.addEventListener('click',()=>regenerateGeneratedDetail(id));const toggleOriginalButton=document.getElementById('toggleOriginalDetailButton');if(toggleOriginalButton)toggleOriginalButton.addEventListener('click',toggleOriginalDetailImages);const refreshPreviewButton=document.getElementById('refreshPreviewButton');if(refreshPreviewButton)refreshPreviewButton.addEventListener('click',refreshDetailPreview);document.getElementById('saveChecklistButton').addEventListener('click',()=>saveChecklist(id));document.getElementById('preview').srcdoc=d.generatedDetailHtml||'';const naver=await api('/api/product-drafts/'+id+'/market-research/naver');fillNaverResearch(naver.research);const opt=await api('/api/product-drafts/'+id+'/registration-optimization');renderOptimization(opt.optimization);const checklist=await api('/api/product-drafts/'+id+'/registration-checklist');fillChecklist(checklist.checklist);loadCoupangLiveSection(id,d);loadList();}
-    function detailHtml(d){const hasBlockReasons=(d.blockReasons||[]).length>0;const approvalButton=hasBlockReasons?'<button id="forceApproveButton">Force approve</button><span class="badge reasonBlock">overrideReason required</span>':'<button data-status-action="approved">Approved</button>';const warnings=(d.warnings||[]).map(x=>'<span class="badge reasonBlock">'+escapeHtml(x)+'</span>').join('');return '<div class="tabs"><button class="active" data-tab="source">원본/공급처</button><button data-tab="naver">네이버 경쟁분석</button><button data-tab="seo">SEO 키워드</button><button data-tab="title">상품명</button><button data-tab="detail">상세페이지</button><button data-tab="image">이미지 프롬프트</button><button data-tab="category">카테고리</button><button data-tab="notice">고시정보</button><button data-tab="shipping">배송정책</button><button data-tab="approval">승인조건</button><button data-tab="coupangLive">쿠팡 라이브 관리</button><button data-tab="export">Export JSON</button></div><div class="tabPanel active" data-panel="source"><div class="section"><h2>#'+d.id+' '+escapeHtml(d.supplierProductNo)+'</h2><div class="grid"><div><div class="muted">Original name</div><strong>'+escapeHtml(d.originalProductName||'')+'</strong></div><div><div class="muted">Status</div>'+escapeHtml(labelStatus(d.status))+' / '+escapeHtml(labelStatus(d.filterStatus))+' '+warnings+'</div><div>Final: <span class="badge status">'+escapeHtml(d.finalDecision||'-')+'</span></div><div>Raw price: '+escapeHtml(d.rawPriceFieldName||'-')+' = '+escapeHtml(d.rawPriceValue||'-')+'</div><div>Shipping: '+escapeHtml(d.shippingRawFieldName||'-')+' = '+escapeHtml(d.shippingRawValue||'-')+'</div><div>Coupang: '+money(d.coupangSalePrice)+' / profit '+money(d.coupangExpectedProfit)+'</div><div>Naver: '+money(d.naverSalePrice)+' / profit '+money(d.naverExpectedProfit)+'</div></div></div>'+sourceInfoHtml(d)+'<div class="section"><h2>Reasons</h2>'+reasonBadges(d.blockReasons).join('')+reasonBadges(d.reviewReasons).join('')+'</div><div class="section"><h2>Images</h2>'+imageGalleryHtml(d)+'</div><div class="section"><h2>Options</h2><table><tbody>'+d.options.map(o=>'<tr><td>'+o.index+'</td><td>'+escapeHtml(o.name||'')+'</td><td>'+escapeHtml(o.value||'')+'</td><td>'+money(o.additionalPrice)+'</td></tr>').join('')+'</tbody></table></div></div><div class="tabPanel" data-panel="naver">'+naverResearchHtml()+'</div><div class="tabPanel" data-panel="seo">'+optimizationHtml()+'</div><div class="tabPanel" data-panel="title"><div class="section"><h2>상품명</h2><div id="optimizedTitleResult" class="muted"></div></div></div><div class="tabPanel" data-panel="detail"><div class="section"><h2>수정</h2><label>sellingTitle</label><input id="sellingTitle" value="'+attr(d.sellingTitle||'')+'"><div class="grid"><div><label>coupangSalePrice</label><input id="coupangSalePrice" type="number" value="'+attr(d.coupangSalePrice??'')+'"></div><div><label>naverSalePrice</label><input id="naverSalePrice" type="number" value="'+attr(d.naverSalePrice??'')+'"></div></div><label>status</label><select id="status"><option>draft</option><option>needs_review</option><option>blocked</option><option>approved</option></select><label>상세페이지 HTML 수정</label><textarea id="generatedDetailHtml">'+escapeHtml(d.generatedDetailHtml||'')+'</textarea><label>reviewMemo</label><textarea id="reviewMemo">'+escapeHtml(d.reviewMemo||'')+'</textarea><p><button class="primary" id="saveButton">Save</button> <button data-status-action="draft">Draft</button> <button data-status-action="needs_review">Needs review</button> <button data-status-action="blocked">Blocked</button> '+approvalButton+' <button id="exportCoupangButton">쿠팡 JSON 보기</button> <button id="exportNaverButton">네이버 JSON 보기</button> <button id="copyJsonButton">JSON 복사</button></p></div><div class="section"><h2>상세페이지 미리보기</h2><iframe id="preview"></iframe></div></div><div class="tabPanel" data-panel="image"><div class="section"><h2>이미지 프롬프트</h2><pre id="imagePromptResult"></pre></div></div><div class="tabPanel" data-panel="category"><div class="section"><h2>카테고리</h2><div id="categoryResult" class="muted"></div></div></div><div class="tabPanel" data-panel="notice"><div class="section"><h2>고시정보</h2><div id="noticeResult" class="muted"></div></div></div><div class="tabPanel" data-panel="shipping"><div class="section"><h2>배송정책</h2><div id="shippingResult" class="muted"></div></div></div><div class="tabPanel" data-panel="approval">'+approvalChecklistHtml()+'</div><div class="tabPanel" data-panel="coupangLive"><div class="section"><h2>쿠팡 라이브 관리</h2><div id="coupangLiveContent" class="muted">불러오는 중...</div></div></div><div class="tabPanel" data-panel="export"><div class="section"><h2>Export JSON preview</h2><pre id="exportPreview"></pre></div></div><script>document.getElementById("status").value='+JSON.stringify(d.status)+';<\\/script>';}
+    async function loadDetail(id,push=true){selectedId=id;if(push)history.replaceState(null,'','/admin?draftId='+encodeURIComponent(id));const data=await api('/api/product-drafts/'+id);const d=data.draft;detail.innerHTML=detailHtml(d);enhanceDetailImageSections(d);bindTabs();document.getElementById('saveButton').addEventListener('click',()=>saveDraft(id));for(const b of detail.querySelectorAll('[data-status-action]'))b.addEventListener('click',()=>setStatus(id,b.dataset.statusAction));const forceApprove=document.getElementById('forceApproveButton');if(forceApprove)forceApprove.addEventListener('click',()=>forceApproveDraft(id));document.getElementById('exportCoupangButton').addEventListener('click',()=>loadExport(id,'coupang'));document.getElementById('exportNaverButton').addEventListener('click',()=>loadExport(id,'naver'));document.getElementById('copyJsonButton').addEventListener('click',copyExportJson);document.getElementById('refreshNaverButton').addEventListener('click',()=>refreshNaver(id));document.getElementById('runSeoAnalysisButton').addEventListener('click',()=>runSeoAnalysis(id));const regenerateTitleButton=document.getElementById('regenerateTitleButton');if(regenerateTitleButton)regenerateTitleButton.addEventListener('click',()=>regenerateOptimizedTitles(id));const saveTitlesButton=document.getElementById('saveTitlesButton');if(saveTitlesButton)saveTitlesButton.addEventListener('click',()=>saveOptimizedTitles(id));const copyCoupangTitleButton=document.getElementById('copyCoupangTitleButton');if(copyCoupangTitleButton)copyCoupangTitleButton.addEventListener('click',()=>copyTitle('optimizedCoupangTitle'));const copyNaverTitleButton=document.getElementById('copyNaverTitleButton');if(copyNaverTitleButton)copyNaverTitleButton.addEventListener('click',()=>copyTitle('optimizedNaverTitle'));const regenerateDetailButton=document.getElementById('regenerateDetailButton');if(regenerateDetailButton)regenerateDetailButton.addEventListener('click',()=>regenerateGeneratedDetail(id));const toggleOriginalButton=document.getElementById('toggleOriginalDetailButton');if(toggleOriginalButton)toggleOriginalButton.addEventListener('click',toggleOriginalDetailImages);const refreshPreviewButton=document.getElementById('refreshPreviewButton');if(refreshPreviewButton)refreshPreviewButton.addEventListener('click',refreshDetailPreview);document.getElementById('saveChecklistButton').addEventListener('click',()=>saveChecklist(id));document.getElementById('preview').srcdoc=d.generatedDetailHtml||'';const naver=await api('/api/product-drafts/'+id+'/market-research/naver');fillNaverResearch(naver.research);const opt=await api('/api/product-drafts/'+id+'/registration-optimization');renderOptimization(opt.optimization);const checklist=await api('/api/product-drafts/'+id+'/registration-checklist');fillChecklist(checklist.checklist);loadCoupangLiveSection(id,d);loadAnalysisSection(id,d);loadList();}
+    function detailHtml(d){const hasBlockReasons=(d.blockReasons||[]).length>0;const approvalButton=hasBlockReasons?'<button id="forceApproveButton">Force approve</button><span class="badge reasonBlock">overrideReason required</span>':'<button data-status-action="approved">Approved</button>';const warnings=(d.warnings||[]).map(x=>'<span class="badge reasonBlock">'+escapeHtml(x)+'</span>').join('');return '<div class="tabs"><button class="active" data-tab="source">원본/공급처</button><button data-tab="naver">네이버 경쟁분석</button><button data-tab="seo">SEO 키워드</button><button data-tab="title">상품명</button><button data-tab="detail">상세페이지</button><button data-tab="image">이미지 프롬프트</button><button data-tab="analysis">상품정보 분석</button><button data-tab="category">카테고리</button><button data-tab="notice">고시정보</button><button data-tab="shipping">배송정책</button><button data-tab="approval">승인조건</button><button data-tab="coupangLive">쿠팡 라이브 관리</button><button data-tab="export">Export JSON</button></div><div class="tabPanel active" data-panel="source"><div class="section"><h2>#'+d.id+' '+escapeHtml(d.supplierProductNo)+'</h2><div class="grid"><div><div class="muted">Original name</div><strong>'+escapeHtml(d.originalProductName||'')+'</strong></div><div><div class="muted">Status</div>'+escapeHtml(labelStatus(d.status))+' / '+escapeHtml(labelStatus(d.filterStatus))+' '+warnings+'</div><div>Final: <span class="badge status">'+escapeHtml(d.finalDecision||'-')+'</span></div><div>Raw price: '+escapeHtml(d.rawPriceFieldName||'-')+' = '+escapeHtml(d.rawPriceValue||'-')+'</div><div>Shipping: '+escapeHtml(d.shippingRawFieldName||'-')+' = '+escapeHtml(d.shippingRawValue||'-')+'</div><div>Coupang: '+money(d.coupangSalePrice)+' / profit '+money(d.coupangExpectedProfit)+'</div><div>Naver: '+money(d.naverSalePrice)+' / profit '+money(d.naverExpectedProfit)+'</div></div></div>'+sourceInfoHtml(d)+'<div class="section"><h2>Reasons</h2>'+reasonBadges(d.blockReasons).join('')+reasonBadges(d.reviewReasons).join('')+'</div><div class="section"><h2>Images</h2>'+imageGalleryHtml(d)+'</div><div class="section"><h2>Options</h2><table><tbody>'+d.options.map(o=>'<tr><td>'+o.index+'</td><td>'+escapeHtml(o.name||'')+'</td><td>'+escapeHtml(o.value||'')+'</td><td>'+money(o.additionalPrice)+'</td></tr>').join('')+'</tbody></table></div></div><div class="tabPanel" data-panel="naver">'+naverResearchHtml()+'</div><div class="tabPanel" data-panel="seo">'+optimizationHtml()+'</div><div class="tabPanel" data-panel="title"><div class="section"><h2>상품명</h2><div id="optimizedTitleResult" class="muted"></div></div></div><div class="tabPanel" data-panel="detail"><div class="section"><h2>수정</h2><label>sellingTitle</label><input id="sellingTitle" value="'+attr(d.sellingTitle||'')+'"><div class="grid"><div><label>coupangSalePrice</label><input id="coupangSalePrice" type="number" value="'+attr(d.coupangSalePrice??'')+'"></div><div><label>naverSalePrice</label><input id="naverSalePrice" type="number" value="'+attr(d.naverSalePrice??'')+'"></div></div><label>status</label><select id="status"><option>draft</option><option>needs_review</option><option>blocked</option><option>approved</option></select><label>상세페이지 HTML 수정</label><textarea id="generatedDetailHtml">'+escapeHtml(d.generatedDetailHtml||'')+'</textarea><label>reviewMemo</label><textarea id="reviewMemo">'+escapeHtml(d.reviewMemo||'')+'</textarea><p><button class="primary" id="saveButton">Save</button> <button data-status-action="draft">Draft</button> <button data-status-action="needs_review">Needs review</button> <button data-status-action="blocked">Blocked</button> '+approvalButton+' <button id="exportCoupangButton">쿠팡 JSON 보기</button> <button id="exportNaverButton">네이버 JSON 보기</button> <button id="copyJsonButton">JSON 복사</button></p></div><div class="section"><h2>상세페이지 미리보기</h2><iframe id="preview"></iframe></div></div><div class="tabPanel" data-panel="image"><div class="section"><h2>이미지 프롬프트</h2><pre id="imagePromptResult"></pre></div></div><div class="tabPanel" data-panel="analysis"><div class="section"><h2>상품정보 분석 (Python OCR + Codex)</h2><div id="analysisContent" class="muted">불러오는 중...</div></div></div><div class="tabPanel" data-panel="category"><div class="section"><h2>카테고리</h2><div id="categoryResult" class="muted"></div></div></div><div class="tabPanel" data-panel="notice"><div class="section"><h2>고시정보</h2><div id="noticeResult" class="muted"></div></div></div><div class="tabPanel" data-panel="shipping"><div class="section"><h2>배송정책</h2><div id="shippingResult" class="muted"></div></div></div><div class="tabPanel" data-panel="approval">'+approvalChecklistHtml()+'</div><div class="tabPanel" data-panel="coupangLive"><div class="section"><h2>쿠팡 라이브 관리</h2><div id="coupangLiveContent" class="muted">불러오는 중...</div></div></div><div class="tabPanel" data-panel="export"><div class="section"><h2>Export JSON preview</h2><pre id="exportPreview"></pre></div></div><script>document.getElementById("status").value='+JSON.stringify(d.status)+';<\\/script>';}
     function enhanceDetailImageSections(d){const panel=detail.querySelector('[data-panel="detail"]');if(!panel)return;const preview=panel.querySelector('#preview')?.closest('.section');if(preview){preview.querySelector('h2').textContent='재구성 상세페이지 미리보기';const note=document.createElement('p');note.className='muted';note.textContent='긴 원본 이미지는 참고 자료로 보관하고, 아래 HTML은 상품명/스펙/추천대상/핵심장점/배송안내 구조로 재구성한 내용입니다.';preview.insertBefore(note,preview.querySelector('iframe'));}const edit=panel.querySelector('.section');const save=document.getElementById('saveButton');if(save)save.textContent='HTML 저장';if(edit&&!document.getElementById('regenerateDetailButton')){const controls=document.createElement('p');controls.innerHTML='<button id="regenerateDetailButton" type="button">상세페이지 재생성</button> <button id="toggleOriginalDetailButton" type="button" data-include-original="true">원본 상세 이미지 포함</button> <button id="refreshPreviewButton" type="button">미리보기 새로고침</button>';edit.append(controls);}const source=document.createElement('div');source.className='section';source.innerHTML='<h2>원본 상세 이미지 보기</h2>'+imageGalleryHtml(d);panel.insertBefore(source,preview||null);const usage=document.createElement('div');usage.className='section';usage.innerHTML='<h2>원본 이미지 사용 여부</h2><div class="muted">detail_source_full은 기본적으로 원본 참고 영역에서만 사용합니다. 상세 본문 자동 삽입은 selected_for_detail 또는 regenerated_detail_asset을 우선합니다.</div>';if(preview)panel.insertBefore(usage,preview.nextSibling);const imagePanel=detail.querySelector('[data-panel="image"] h2');if(imagePanel)imagePanel.textContent='AI 이미지 생성 프롬프트';}
     function imageGalleryHtml(d){const images=d.images||[];const main=images.filter(i=>i.imageType==='main');const detailImages=images.filter(i=>i.sourceSection==='detail'&&['detail','regenerated_detail_asset'].includes(i.imageType));const sourceFull=images.filter(i=>['detail_source_full','detail_full'].includes(i.imageType));const slices=images.filter(i=>['detail_source_slice','detail_slice'].includes(i.imageType));const rejected=images.filter(i=>i.qualityStatus==='rejected'||i.rejectReason||['ad','recommendation','header','footer'].includes(i.sourceSection));const warnings=[];if(detailImages.length===0&&sourceFull.length===0&&slices.length===0)warnings.push('detail_images_missing');if(detailImages.length===0&&sourceFull.length>0)warnings.push('using_original_detail_source_only');const warn=warnings.map(x=>'<span class="badge reasonBlock">'+escapeHtml(x)+'</span>').join(' ');function meta(i){const size=(i.width||i.naturalWidth||i.renderedWidth||'-')+'x'+(i.height||i.naturalHeight||i.renderedHeight||'-');const pos=i.renderedX==null?'-':Math.round(i.renderedX)+','+Math.round(i.renderedY);const archived=String(i.storedUrl||'').startsWith('/original-images/')?'로컬 보관됨':'로컬 미보관';return '<div class="muted">'+escapeHtml(i.sourceMethod||'-')+' / '+escapeHtml(i.sourceSection||'-')+' / '+size+' / pos '+pos+' / '+archived+(i.crawlStatus?(' / '+escapeHtml(i.crawlStatus)):'')+(i.crawlError?(' / '+escapeHtml(i.crawlError)):'')+(i.sliceIndex?(' / slice '+i.sliceIndex):'')+(i.rejectReason?(' / reject '+escapeHtml(i.rejectReason)):'')+'</div><div class="muted">original: '+escapeHtml(i.originalUrl||i.url||'-')+'</div><div class="muted">stored: '+escapeHtml(i.storedUrl||'-')+'</div>';}function card(i){const url=i.storedUrl||i.url;const original=i.originalUrl||i.url;const local=i.storedUrl&&i.storedUrl!==original?'<a href="'+attr(i.storedUrl)+'" target="_blank" rel="noopener noreferrer"><button>로컬 이미지 열기</button></a>':'';return '<div style="display:inline-block;vertical-align:top;max-width:170px;margin:4px"><span class="badge">'+escapeHtml(i.imageType||'unknown')+'</span>'+meta(i)+'<a href="'+attr(url)+'" target="_blank" rel="noopener noreferrer"><img src="'+attr(url)+'" alt=""></a><br><a href="'+attr(original)+'" target="_blank" rel="noopener noreferrer"><button>원본 열기</button></a> '+local+'</div>';}function group(title,items){return '<h3>'+escapeHtml(title)+' ('+items.length+')</h3><div>'+items.map(card).join('')+'</div>';}return (warn?'<p>'+warn+'</p>':'')+group('대표 이미지',main)+group('상세페이지 이미지',detailImages)+group('원본 상세 이미지',sourceFull)+group('긴 이미지 분할 이미지',slices)+group('제외된 이미지/debug 이미지',rejected);}    function sourceInfoHtml(d){const link=d.supplierProductUrl?'<a href="'+attr(d.supplierProductUrl)+'" target="_blank" rel="noopener noreferrer"><button>공급처</button></a>':'-';return '<div class="section"><h2>공급처 정보</h2><div class="grid"><div>공급처명: '+escapeHtml(d.supplierName||'-')+'</div><div>공급마켓: '+escapeHtml(labelMarket(d.supplierMarket))+'</div><div>상품번호: '+escapeHtml(d.supplierProductNo||'-')+'</div><div>최소구매수량: '+money(d.minOrderQty)+'</div><div>주문단위: '+money(d.orderUnit)+'</div><div>판매단위: '+escapeHtml(labelSellUnit(d.sellUnitType))+'</div><div>묶음수량: '+money(d.bundleQuantity)+'</div><div>단품원가: '+money(d.unitCostPrice)+'</div><div>묶음원가: '+money(d.bundleCostPrice)+'</div><div>묶음사유: '+escapeHtml(d.bundleReason||'-')+'</div><div>공급처 원본 링크: '+link+'</div></div></div>';}
     function naverResearchHtml(){return '<div class="section"><h2>Naver shopping research</h2><label>Naver search keyword</label><input id="naverKeyword"><p><button id="refreshNaverButton">Refresh Naver research</button></p><div id="naverResearchResult" class="muted"></div><div id="naverBestItem"></div></div>';}
@@ -790,6 +846,110 @@ function adminHtml() {
       if(refreshButton)refreshButton.onclick=async()=>{
         await api('/api/product-drafts/'+id+'/coupang-registration/refresh',{method:'POST',body:'{}'});
         await loadCoupangLiveSection(id,draft);
+      };
+    }
+    const ANALYSIS_ERROR_LABELS={CODEX_NOT_AVAILABLE:'Codex 미설치',CODEX_LOGIN_REQUIRED:'Codex 로그인 필요/만료',CODEX_RATE_LIMIT:'Codex 사용량 제한',CODEX_TIMEOUT:'Codex 응답 시간 초과',CODEX_INVALID_JSON:'Codex 결과 JSON 오류',CODEX_FAILED:'Codex 분석 실패',PYTHON_NOT_AVAILABLE:'Python 미설치',PYTHON_TIMEOUT:'Python 응답 시간 초과',PYTHON_INVALID_JSON:'Python 결과 JSON 오류',PYTHON_FAILED:'Python 분석 실패',NO_DETAIL_IMAGES:'로컬 상세이미지 없음',UNEXPECTED_ERROR:'예상치 못한 오류',ANALYSIS_FILES_MISSING:'분석 결과 없음 (먼저 실행하세요)'};
+    const ANALYSIS_TIER_LABELS={auto_candidate:'자동 선택 후보 (0.90+)',needs_review:'확인 필요 (0.70~0.89)',unresolved:'미확정 (0.70 미만)'};
+    const ANALYSIS_BLOCK_LABELS={NO_EVIDENCE_LEGAL_FIELD:'근거 없음 -- 법적/제조 정보는 적용 금지',CONFLICT_NEEDS_CONFIRMATION:'Python/Codex 값 충돌 -- 강제 적용 확인 필요',UNRESOLVED_NEEDS_CONFIRMATION:'미확정 -- 강제 적용 확인 필요',NO_VALUE:'값 없음'};
+    async function loadAnalysisSection(id,draft){
+      const panel=document.querySelector('#detail [data-panel="analysis"]');
+      if(!panel)return;
+      const container=panel.querySelector('#analysisContent');
+      const data=await api('/api/product-drafts/'+id+'/analysis');
+      container.innerHTML=analysisHtml(id,draft,data,data.latestRun);
+      wireAnalysisSection(id,draft,container,data);
+    }
+    function analysisEvidenceHtml(evidence){
+      if(!evidence||!evidence.length)return '<span class="muted">근거 없음</span>';
+      return '<ul>'+evidence.map(e=>'<li>'+escapeHtml(e.engine||'')+' / '+escapeHtml(e.sourceFile||e.file||'-')+' / slice '+(e.sliceIndex??'-')+' / '+escapeHtml(e.quote||e.text||'')+'</li>').join('')+'</ul>';
+    }
+    function analysisFieldRowHtml(key,label,field,preview){
+      const p=preview?.fields?.[key];
+      const codexVal=field.codex?.value??'-';
+      const pythonVal=field.python?field.python.value??'-':'(Python 미실행)';
+      const mergedVal=field.merged?.value??'-';
+      const tier=p?p.tier:'unresolved';
+      const badge='<span class="badge status">'+escapeHtml(ANALYSIS_TIER_LABELS[tier]||tier)+'</span>'+(p?.legalField?' <span class="badge reasonReview">법적/제조정보</span>':'');
+      const checkbox=p&&!p.blockedReason?'<input type="checkbox" data-apply-field="'+key+'" '+(p.autoSelected?'checked':'')+'>':'';
+      const blocked=p?.blockedReason?'<div class="muted">'+escapeHtml(ANALYSIS_BLOCK_LABELS[p.blockedReason]||p.blockedReason)+(p.forceable?' <label><input type="checkbox" data-force-field="'+key+'"> 그래도 적용</label>':'')+'</div>':'';
+      return '<div class="section"><h3>'+checkbox+' '+escapeHtml(label)+' '+badge+'</h3>'
+        +'<table><tbody><tr><td class="muted">Python</td><td>'+escapeHtml(String(pythonVal))+'</td></tr><tr><td class="muted">Codex</td><td>'+escapeHtml(String(codexVal))+'</td></tr><tr><td class="muted">병합 최종값</td><td><strong>'+escapeHtml(String(mergedVal))+'</strong> (confidence '+(field.merged?.confidence??0)+')</td></tr></tbody></table>'
+        +blocked+'<details><summary>근거 보기</summary>'+analysisEvidenceHtml(field.merged?.evidence)+'</details></div>';
+    }
+    function analysisHtml(id,draft,data,run){
+      const runs=data.runs||[];
+      const historyHtml=runs.length?'<table><tbody>'+runs.map(r=>'<tr data-analysis-run-row="'+r.id+'"><td>#'+r.runNumber+'</td><td>'+escapeHtml(r.status)+'</td><td>python:'+escapeHtml(r.pythonStatus)+'</td><td>codex:'+escapeHtml(r.codexStatus)+'</td><td>'+escapeHtml(r.errorCode?ANALYSIS_ERROR_LABELS[r.errorCode]||r.errorCode:'-')+'</td><td>'+escapeHtml(r.startedAt||'')+'</td><td><button type="button" data-view-run="'+r.id+'">보기</button></td></tr>').join('')+'</tbody></table>':'<p class="muted">아직 실행한 분석이 없습니다.</p>';
+      const runButtons='<p><button id="analysisRunButton" type="button">상품정보 분석</button> '+(runs.length?'<button id="analysisRerunButton" type="button">분석 다시 실행</button>':'')+'</p><div id="analysisRunStatus" class="muted"></div>';
+      if(!run){
+        return runButtons+'<div class="muted">'+escapeHtml(ANALYSIS_ERROR_LABELS.ANALYSIS_FILES_MISSING)+'</div><h3>실행 이력</h3>'+historyHtml;
+      }
+      if(run.status!=='success'){
+        const codexMsg=run.codexErrorCode?'<div>Codex: '+escapeHtml(ANALYSIS_ERROR_LABELS[run.codexErrorCode]||run.codexErrorCode)+' -- '+escapeHtml(run.codexErrorMessage||''):'';
+        const pythonMsg=run.pythonErrorCode?'<div>Python: '+escapeHtml(ANALYSIS_ERROR_LABELS[run.pythonErrorCode]||run.pythonErrorCode)+' -- '+escapeHtml(run.pythonErrorMessage||''):'';
+        return runButtons+'<div class="badge reasonBlock">'+escapeHtml(ANALYSIS_ERROR_LABELS[run.errorCode]||run.errorCode||'실패')+'</div>'+codexMsg+pythonMsg+'<h3>실행 이력</h3>'+historyHtml;
+      }
+      const merged=run.mergedAnalysis;
+      const preview=data.applyPreview;
+      const fieldRows=[['material','소재'],['dimensions','치수'],['manufacturer','제조자(수입자)'],['countryOfOrigin','제조국'],['handlingPrecautions','취급시 주의사항']]
+        .map(([key,label])=>analysisFieldRowHtml(key,label,{python:run.pythonAnalysis?.[key],codex:run.codexAnalysis?.[key],merged:merged[key]},preview)).join('');
+      const colorsPreview=preview?.colors||{saleColorCandidates:[],appearanceTraits:[]};
+      const colorsCheckbox=(!colorsPreview.conflict&&(merged.colors?.confidence??0)>=0.7)?'<input type="checkbox" data-apply-field="colors" '+((merged.colors?.confidence??0)>=0.9?'checked':'')+'>':'<input type="checkbox" data-apply-field="colors" disabled> <label><input type="checkbox" data-force-field="colors"> 그래도 적용</label>';
+      const colorsHtml='<div class="section"><h3>'+colorsCheckbox+' 색상</h3>'
+        +'<div><strong>실제 판매 옵션 색상 후보</strong> (기존 옵션 값과 일치): '+(colorsPreview.saleColorCandidates.length?colorsPreview.saleColorCandidates.map(v=>'<span class="badge status">'+escapeHtml(v)+'</span>').join(' '):'<span class="muted">없음</span>')+'</div>'
+        +'<div><strong>외관/재질 특성</strong> (판매 옵션 아님, 자동 추가되지 않음): '+(colorsPreview.appearanceTraits.length?colorsPreview.appearanceTraits.map(v=>'<span class="badge reasonReview">'+escapeHtml(v)+'</span>').join(' '):'<span class="muted">없음</span>')+'</div>'
+        +'<details><summary>근거 보기</summary>'+analysisEvidenceHtml(merged.colors?.evidence)+'</details></div>';
+      const searchTagsChecked=(merged.searchTags||[]).length>0;
+      const searchTagsHtml='<div class="section"><h3><input type="checkbox" data-apply-field="searchTags" '+(searchTagsChecked?'checked':'')+' '+(searchTagsChecked?'':'disabled')+'> 검색어</h3><div>'+(merged.searchTags||[]).map(t=>'<span class="badge">'+escapeHtml(t)+'</span>').join(' ')+'</div></div>';
+      const conflictsHtml=(merged.conflicts||[]).length?'<div class="section"><h3>충돌</h3>'+merged.conflicts.map(c=>'<div>'+escapeHtml(c.field)+': '+c.candidates.map(cand=>escapeHtml(cand.source)+'="'+escapeHtml(String(cand.value))+'"').join(' vs ')+'</div>').join('')+'</div>':'';
+      const unresolvedHtml=(merged.unresolvedFields||[]).length?'<div class="section"><h3>미확정 필드</h3>'+(merged.unresolvedFields||[]).map(f=>'<span class="badge reasonReview">'+escapeHtml(f)+'</span>').join(' ')+'</div>':'';
+      const applied=data.applied;
+      const appliedHtml=applied?'<div class="section"><h3>현재 적용된 값 (run #'+applied.analysisRunId+')</h3><table><tbody>'
+        +'<tr><td class="muted">소재</td><td>'+escapeHtml(applied.material||'-')+'</td></tr>'
+        +'<tr><td class="muted">치수</td><td>'+escapeHtml(applied.dimensions||'-')+'</td></tr>'
+        +'<tr><td class="muted">제조자</td><td>'+escapeHtml(applied.manufacturer||'-')+'</td></tr>'
+        +'<tr><td class="muted">제조국</td><td>'+escapeHtml(applied.countryOfOrigin||'-')+'</td></tr>'
+        +'<tr><td class="muted">판매 옵션 색상</td><td>'+(applied.saleColors||[]).map(escapeHtml).join(', ')+'</td></tr>'
+        +'<tr><td class="muted">외관 특성</td><td>'+(applied.appearanceTraits||[]).map(escapeHtml).join(', ')+'</td></tr>'
+        +'<tr><td class="muted">검색어</td><td>'+(applied.searchTags||[]).map(escapeHtml).join(', ')+'</td></tr>'
+        +'</tbody></table><div class="muted">적용 시각: '+escapeHtml(applied.appliedAt||'')+'</div></div>':'<div class="muted">아직 적용된 값이 없습니다 (DB 불변).</div>';
+      return runButtons+'<div>run #'+run.runNumber+' / python:'+escapeHtml(run.pythonStatus)+(run.pythonErrorCode?' ('+escapeHtml(ANALYSIS_ERROR_LABELS[run.pythonErrorCode]||run.pythonErrorCode)+')':'')+' / codex:'+escapeHtml(run.codexStatus)+'</div>'
+        +fieldRows+colorsHtml+searchTagsHtml+conflictsHtml+unresolvedHtml
+        +'<p><button id="analysisApplyButton" type="button" data-run-id="'+run.id+'">분석 결과 적용</button></p><div id="analysisApplyResult" class="muted"></div>'
+        +appliedHtml+'<h3>실행 이력</h3>'+historyHtml;
+    }
+    function wireAnalysisSection(id,draft,container,data){
+      const runButton=container.querySelector('#analysisRunButton');
+      const rerunButton=container.querySelector('#analysisRerunButton');
+      const runHandler=async()=>{
+        const statusEl=container.querySelector('#analysisRunStatus');
+        statusEl.textContent='분석 실행 중... (Codex 최대 3분, 서버는 계속 응답합니다)';
+        if(runButton)runButton.disabled=true;if(rerunButton)rerunButton.disabled=true;
+        try{
+          await api('/api/product-drafts/'+id+'/analysis/run',{method:'POST',body:'{}'});
+        } finally {
+          await loadAnalysisSection(id,draft);
+        }
+      };
+      if(runButton)runButton.onclick=runHandler;
+      if(rerunButton)rerunButton.onclick=runHandler;
+      for(const row of container.querySelectorAll('[data-view-run]')){
+        row.onclick=async()=>{
+          const runId=row.dataset.viewRun;
+          const detail=await api('/api/product-drafts/'+id+'/analysis/runs/'+runId);
+          container.innerHTML=analysisHtml(id,draft,{...data,applyPreview:detail.applyPreview},detail.run);
+          wireAnalysisSection(id,draft,container,data);
+        };
+      }
+      const applyButton=container.querySelector('#analysisApplyButton');
+      if(applyButton)applyButton.onclick=async()=>{
+        const runId=Number(applyButton.dataset.runId);
+        const fields={};
+        for(const cb of container.querySelectorAll('[data-apply-field]:checked'))fields[cb.dataset.applyField]=true;
+        const forceFields=[...container.querySelectorAll('[data-force-field]:checked')].map(cb=>cb.dataset.forceField);
+        const resultEl=container.querySelector('#analysisApplyResult');
+        const result=await api('/api/product-drafts/'+id+'/analysis/apply',{method:'POST',body:JSON.stringify({runId,fields,forceFields})});
+        resultEl.innerHTML='적용됨: '+(result.appliedFields.length?result.appliedFields.join(', '):'없음')+(result.blockedFields.length?' / 차단됨: '+result.blockedFields.map(b=>b.field+'('+(ANALYSIS_BLOCK_LABELS[b.reason]||b.reason)+')').join(', '):'');
+        await loadAnalysisSection(id,draft);
       };
     }
     async function saveDraft(id){const body={sellingTitle:document.getElementById('sellingTitle').value,coupangSalePrice:document.getElementById('coupangSalePrice').value,naverSalePrice:document.getElementById('naverSalePrice').value,generatedDetailHtml:document.getElementById('generatedDetailHtml').value,reviewMemo:document.getElementById('reviewMemo').value,status:document.getElementById('status').value};await api('/api/product-drafts/'+id,{method:'PATCH',body:JSON.stringify(body)});await loadDetail(id);}
