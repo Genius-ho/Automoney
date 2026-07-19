@@ -191,6 +191,31 @@ test('normalizeProduct parses tiered price and shipping strings', () => {
   ]);
 });
 
+test('normalizeProduct prefers domeggook tiered dome price over the misleading flat supply price', () => {
+  const normalized = normalizeProduct('56', {
+    domeggook: {
+      basis: { title: '무타공 레일선반' },
+      qty: { domeMoq: '2', domeUnit: 1, inventory: '95', supplyUnit: 1 },
+      price: { dome: '2+9950|5+9500', supply: 10800, labeledPrice: { useLabeledPrice: false } },
+      thumb: { original: 'https://example.test/a.jpg' },
+    },
+  });
+
+  assert.equal(normalized.rawPriceFieldName, 'price.dome');
+  assert.equal(normalized.rawPriceValue, '2+9950|5+9500');
+  assert.equal(normalized.unitCostPrice, 9950);
+  assert.equal(normalized.priceParseStatus, 'tiered_price');
+  assert.equal(normalized.minOrderQty, 2);
+  assert.equal(normalized.sellUnitType, 'bundle');
+  assert.equal(normalized.bundleQuantity, 2);
+  assert.equal(normalized.bundleCostPrice, 19900);
+  assert.equal(normalized.cost, 19900);
+
+  const filter = filterProduct(normalized);
+  assert.equal(filter.filterStatus, 'needs_review');
+  assert.ok(filter.reviewReasons.includes('bundle_candidate'));
+});
+
 test('filterProduct returns status and reasons for pass and blocked products', () => {
   const good = {
     name: '수납함',
@@ -294,11 +319,12 @@ test('normalizeProduct and filterProduct classify supplier market and order quan
   assert.equal(domeme.sourceMarket, 'domeme');
   assert.equal(domeme.minOrderQty, 1);
   assert.equal(filterProduct(domeme).filterStatus, 'pass');
-  assert.equal(domemeMoq.sellUnitType, 'single');
-  assert.equal(domemeMoq.bundleQuantity, 1);
+  assert.equal(domemeMoq.sellUnitType, 'bundle');
+  assert.equal(domemeMoq.bundleQuantity, 2);
   assert.equal(domemeMoq.unitCostPrice, 10000);
+  assert.equal(domemeMoq.bundleCostPrice, 20000);
   assert.equal(filterProduct(domemeMoq).filterStatus, 'needs_review');
-  assert.ok(filterProduct(domemeMoq).reviewReasons.includes('needs_review_min_order_qty'));
+  assert.ok(filterProduct(domemeMoq).reviewReasons.includes('bundle_candidate'));
   assert.equal(filterProduct(domeggook).filterStatus, 'needs_review');
   assert.ok(filterProduct(domeggook).reviewReasons.includes('needs_review_source_market'));
   assert.equal(filterProduct(unknown).filterStatus, 'needs_review');

@@ -10,7 +10,7 @@ export function normalizeProduct(productNo, raw, context = {}) {
   });
   const minOrderQty = firstPositiveInteger([
     price.minOrderQty,
-    firstDeepValue([source, raw, context.candidateSource], ['minOrderQty', 'min_order_qty', 'minimumOrderQuantity', 'orderMinQty', 'order_min_qty', 'moq']),
+    firstDeepValue([source, raw, context.candidateSource], ['minOrderQty', 'min_order_qty', 'minimumOrderQuantity', 'orderMinQty', 'order_min_qty', 'moq', 'domeMoq']),
   ]) ?? 1;
   const orderUnit = firstPositiveInteger([
     firstDeepValue([source, raw, context.candidateSource], ['orderUnit', 'order_unit', 'bundleQty', 'bundle_qty', 'unitQty', 'unit_qty']),
@@ -75,12 +75,10 @@ export function filterProduct(product) {
   if (product.sourceMarket === 'domeggook') reviewReasons.push('needs_review_source_market');
   if (product.sourceMarket === 'unknown') reviewReasons.push('needs_review_source_market_unknown');
   const minOrderQty = Number(product.minOrderQty || 1);
-  if (product.sellUnitType === 'bundle') {
-    reviewReasons.push('bundle_candidate');
-  } else if (minOrderQty >= 5) {
+  if (minOrderQty >= 5) {
     blockReasons.push('blocked_large_bundle');
-  } else if (minOrderQty > 1 && unitCostPrice > 5000) {
-    reviewReasons.push('needs_review_min_order_qty');
+  } else if (product.sellUnitType === 'bundle') {
+    reviewReasons.push('bundle_candidate');
   } else if (minOrderQty > 1) {
     reviewReasons.push('needs_review_min_order_qty');
   }
@@ -466,7 +464,10 @@ function estimateMinimumProfit(product) {
 function determineSellUnit({ unitCostPrice, minOrderQty }) {
   const unitCost = Number(unitCostPrice || 0);
   const qty = Number(minOrderQty || 1);
-  if (qty >= 2 && qty <= 3 && unitCost > 0 && unitCost <= 5000) {
+  // Supplier enforces a minimum purchase quantity: a single unit is never
+  // actually purchasable on its own, so anything with qty > 1 must be sold
+  // as a bundle matching that minimum, regardless of its unit cost.
+  if (qty > 1 && unitCost > 0) {
     return {
       sellUnitType: 'bundle',
       bundleQuantity: qty,
@@ -484,6 +485,7 @@ function determineSellUnit({ unitCostPrice, minOrderQty }) {
 
 function parseProductPrice(source) {
   const candidates = [
+    ['price.dome', source.price?.dome],
     ['price.supply', source.price?.supply],
     ['supplyPrice', source.supplyPrice],
     ['cost', source.cost],
