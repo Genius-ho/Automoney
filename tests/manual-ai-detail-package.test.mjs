@@ -199,6 +199,27 @@ test('fewer than seven candidate images are all attached without padding or fail
   assert.deepEqual(rootReferenceNames, ['reference-01.png', 'reference-02.png', 'reference-03.png']);
 });
 
+test('slices cut from the same long source image are not treated as duplicates of each other', async () => {
+  // Real sliced detail images all share one parentImageId and therefore one
+  // originalUrl (the pre-slice long image), while storedUrl/url uniquely
+  // identify each individual slice. Dedup must key off storedUrl/url, not
+  // originalUrl, or every slice after the first looks like a repeat.
+  const context = detailPackageContext({ sliceCount: 0 });
+  context.sourceSlices = Array.from({ length: 10 }, (_, offset) => ({
+    url: `/generated-images/drafts/46/detail-3190-slice-${String(offset + 1).padStart(3, '0')}.jpg`,
+    storedUrl: `/generated-images/drafts/46/detail-3190-slice-${String(offset + 1).padStart(3, '0')}.jpg`,
+    originalUrl: 'https://supplier.test/long-source-image.jpg',
+  }));
+  const { readLocalAsset, fetchImpl, localReads } = trackedLoaders();
+  const result = await buildDetailPagePackage(context, { readLocalAsset, fetchImpl });
+
+  const rootReferenceNames = result.entries
+    .filter((entry) => !entry.name.startsWith('sources/') && entry.name.startsWith('reference-'))
+    .map((entry) => entry.name);
+  assert.equal(rootReferenceNames.length, 7, 'seven distinct slices should be sampled, not just the first one');
+  assert.equal(new Set(localReads).size, localReads.length, 'each slice is read once, not skipped as a duplicate');
+});
+
 test('an approved representative image is used at the root while the raw original is kept under sources/', async () => {
   const approved = { url: '/generated-ai-images/drafts/64/main/manual/r1-v2/detail-r1-v2-01-registered.jpg', storedUrl: '/generated-ai-images/drafts/64/main/manual/r1-v2/detail-r1-v2-01-registered.jpg' };
   const raw = { url: '/original-images/main.jpg', storedUrl: '/original-images/main.jpg' };

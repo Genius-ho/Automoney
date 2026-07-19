@@ -226,11 +226,17 @@ async function appendAssetGroup(entries, assets, options) {
 function describeAsset(asset) {
   if (!asset) return null;
   const value = typeof asset === 'string' ? { url: asset } : asset;
-  const aliases = uniqueStrings([value.storedUrl, value.url, value.originalUrl]);
+  // Sliced images (multiple pieces cut from one long source image) all share the
+  // same originalUrl, so it can't be used to tell them apart. Identity for dedup
+  // purposes comes from storedUrl/url; originalUrl is only an identity fallback
+  // when neither of those exist, though it still stays available as a load source.
+  const specific = uniqueStrings([value.storedUrl, value.url]);
+  const aliases = specific.length > 0 ? specific : uniqueStrings([value.originalUrl]);
   if (aliases.length === 0) return null;
+  const urls = uniqueStrings([value.storedUrl, value.url, value.originalUrl]);
   return {
     aliases,
-    urls: [...aliases.filter(isLocalUrl), ...aliases.filter((url) => !isLocalUrl(url))],
+    urls: [...urls.filter(isLocalUrl), ...urls.filter((url) => !isLocalUrl(url))],
   };
 }
 
