@@ -1,0 +1,1 @@
+import {createProvider} from './base-provider.mjs'; export default createProvider({id:'google',displayName:'Google Gemini',capabilities:['text_generation','vision_analysis','image_generation','image_edit']});

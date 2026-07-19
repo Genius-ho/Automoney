@@ -1,6 +1,6 @@
 import { existsSync } from 'node:fs';
 import { readFile } from 'node:fs/promises';
-import { join } from 'node:path';
+import { join, resolve } from 'node:path';
 
 export async function loadEnvConfig(rootDir = process.cwd()) {
   const values = await loadEnvValues(rootDir);
@@ -23,6 +23,12 @@ export async function loadDatabaseUrl(rootDir = process.cwd()) {
   return databaseUrl;
 }
 
+export async function loadAiSecrets(rootDir = process.cwd()) {
+  const values = await loadEnvValues(rootDir);
+  const names = ['OPENAI_API_KEY','GOOGLE_API_KEY','ANTHROPIC_API_KEY','AUTOMONEY_CREDENTIAL_MASTER_KEY'];
+  return Object.fromEntries(names.map(name => [name, process.env[name] || values[name] || null]));
+}
+
 export async function loadNaverConfig(rootDir = process.cwd()) {
   const values = await loadEnvValues(rootDir);
   const clientId = values.NAVER_CLIENT_ID || process.env.NAVER_CLIENT_ID;
@@ -30,6 +36,79 @@ export async function loadNaverConfig(rootDir = process.cwd()) {
   if (!clientId) throw new Error('NAVER_CLIENT_ID is missing in .env');
   if (!clientSecret) throw new Error('NAVER_CLIENT_SECRET is missing in .env');
   return { clientId, clientSecret };
+}
+
+export async function loadR2Config(rootDir = process.cwd()) {
+  const values = await loadEnvValues(rootDir);
+  const pick = (name) => values[name] || process.env[name];
+  const accountId = pick('R2_ACCOUNT_ID');
+  const accessKeyId = pick('R2_ACCESS_KEY_ID');
+  const secretAccessKey = pick('R2_SECRET_ACCESS_KEY');
+  const bucket = pick('R2_BUCKET');
+  const publicBaseUrl = pick('R2_PUBLIC_BASE_URL');
+  if (!accountId) throw new Error('R2_ACCOUNT_ID is missing in .env');
+  if (!accessKeyId) throw new Error('R2_ACCESS_KEY_ID is missing in .env');
+  if (!secretAccessKey) throw new Error('R2_SECRET_ACCESS_KEY is missing in .env');
+  if (!bucket) throw new Error('R2_BUCKET is missing in .env');
+  if (!publicBaseUrl) throw new Error('R2_PUBLIC_BASE_URL is missing in .env');
+  return { accountId, accessKeyId, secretAccessKey, bucket, publicBaseUrl };
+}
+
+export async function loadCoupangConfig(rootDir = process.cwd()) {
+  const values = await loadEnvValues(rootDir);
+  const pick = (name) => values[name] || process.env[name];
+  const accessKey = pick('COUPANG_ACCESS_KEY');
+  const secretKey = pick('COUPANG_SECRET_KEY');
+  const vendorId = pick('COUPANG_VENDOR_ID');
+  const vendorUserId = pick('COUPANG_VENDOR_USER_ID') || null;
+  if (!accessKey) throw new Error('COUPANG_ACCESS_KEY is missing in .env');
+  if (!secretKey) throw new Error('COUPANG_SECRET_KEY is missing in .env');
+  if (!vendorId) throw new Error('COUPANG_VENDOR_ID is missing in .env');
+  return { accessKey, secretKey, vendorId, vendorUserId };
+}
+
+// Codex CLI runs as a local process under the operator's own ChatGPT login --
+// no API key is read or required here. Every value has a working default so
+// this never throws; Codex being unconfigured/uninstalled/logged-out is a
+// runtime *capability* check (see codex-client.mjs), not a startup failure.
+export async function loadCodexConfig(rootDir = process.cwd()) {
+  const values = await loadEnvValues(rootDir).catch(() => ({}));
+  const pick = (name) => values[name] || process.env[name];
+  const sandbox = pick('CODEX_SANDBOX') || 'read-only';
+  const concurrency = Number(pick('AI_JOB_CONCURRENCY'));
+  return {
+    executable: pick('CODEX_EXECUTABLE') || 'codex',
+    sandbox,
+    concurrency: Number.isInteger(concurrency) && concurrency > 0 ? concurrency : 1,
+    timeoutMs: Number(pick('CODEX_TIMEOUT_MS')) || 180_000,
+  };
+}
+
+// Data/job directories are resolved relative to rootDir with path.join/
+// path.resolve only -- no "\\" or "/" literals -- so the same config works
+// unchanged on Windows now and Linux later.
+export async function loadJobPathsConfig(rootDir = process.cwd()) {
+  const values = await loadEnvValues(rootDir).catch(() => ({}));
+  const pick = (name) => values[name] || process.env[name];
+  const dataDir = resolve(rootDir, pick('AUTOMONEY_DATA_DIR') || join('data'));
+  const jobDir = resolve(rootDir, pick('AUTOMONEY_JOB_DIR') || join('data', 'jobs'));
+  return { dataDir, jobDir };
+}
+
+export async function loadPythonConfig(rootDir = process.cwd()) {
+  const values = await loadEnvValues(rootDir).catch(() => ({}));
+  const pick = (name) => values[name] || process.env[name];
+  const timeoutMs = Number(pick('PYTHON_TIMEOUT_MS'));
+  return {
+    // Defaults here are intentionally the bare command names, never a
+    // machine-specific absolute path -- real paths belong in .env only
+    // (gitignored), so the same code runs unchanged on Windows and Linux.
+    executable: pick('PYTHON_EXECUTABLE') || 'python',
+    tesseractExecutable: pick('TESSERACT_EXECUTABLE') || null,
+    tessdataPrefix: pick('TESSDATA_PREFIX_DIR') || null,
+    ocrLang: pick('OCR_LANG') || 'kor+eng',
+    timeoutMs: Number.isInteger(timeoutMs) && timeoutMs > 0 ? timeoutMs : 60_000,
+  };
 }
 
 export async function loadProductNumbers(csvPath) {
