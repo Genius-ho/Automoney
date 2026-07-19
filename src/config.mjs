@@ -1,6 +1,6 @@
 import { existsSync } from 'node:fs';
 import { readFile } from 'node:fs/promises';
-import { join } from 'node:path';
+import { join, resolve } from 'node:path';
 
 export async function loadEnvConfig(rootDir = process.cwd()) {
   const values = await loadEnvValues(rootDir);
@@ -65,6 +65,40 @@ export async function loadCoupangConfig(rootDir = process.cwd()) {
   if (!secretKey) throw new Error('COUPANG_SECRET_KEY is missing in .env');
   if (!vendorId) throw new Error('COUPANG_VENDOR_ID is missing in .env');
   return { accessKey, secretKey, vendorId, vendorUserId };
+}
+
+// Codex CLI runs as a local process under the operator's own ChatGPT login --
+// no API key is read or required here. Every value has a working default so
+// this never throws; Codex being unconfigured/uninstalled/logged-out is a
+// runtime *capability* check (see codex-client.mjs), not a startup failure.
+export async function loadCodexConfig(rootDir = process.cwd()) {
+  const values = await loadEnvValues(rootDir).catch(() => ({}));
+  const pick = (name) => values[name] || process.env[name];
+  const sandbox = pick('CODEX_SANDBOX') || 'read-only';
+  const concurrency = Number(pick('AI_JOB_CONCURRENCY'));
+  return {
+    executable: pick('CODEX_EXECUTABLE') || 'codex',
+    sandbox,
+    concurrency: Number.isInteger(concurrency) && concurrency > 0 ? concurrency : 1,
+    timeoutMs: Number(pick('CODEX_TIMEOUT_MS')) || 180_000,
+  };
+}
+
+// Data/job directories are resolved relative to rootDir with path.join/
+// path.resolve only -- no "\\" or "/" literals -- so the same config works
+// unchanged on Windows now and Linux later.
+export async function loadJobPathsConfig(rootDir = process.cwd()) {
+  const values = await loadEnvValues(rootDir).catch(() => ({}));
+  const pick = (name) => values[name] || process.env[name];
+  const dataDir = resolve(rootDir, pick('AUTOMONEY_DATA_DIR') || join('data'));
+  const jobDir = resolve(rootDir, pick('AUTOMONEY_JOB_DIR') || join('data', 'jobs'));
+  return { dataDir, jobDir };
+}
+
+export async function loadPythonConfig(rootDir = process.cwd()) {
+  const values = await loadEnvValues(rootDir).catch(() => ({}));
+  const pick = (name) => values[name] || process.env[name];
+  return { executable: pick('PYTHON_EXECUTABLE') || 'python' };
 }
 
 export async function loadProductNumbers(csvPath) {
