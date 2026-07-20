@@ -5,6 +5,7 @@ import {
   getCoupangRegistration,
   linkCoupangRegistration,
   listCoupangRegistrations,
+  recordApprovalRequested,
   recordImagesSwapped,
   recordLiveSnapshot,
 } from '../src/coupang-registration-store.mjs';
@@ -32,11 +33,14 @@ test('listCoupangRegistrations maps rows to camelCase', async () => {
           seller_product_name: '무타공 레일선반',
           linked_via: 'speedgo_lookup',
           status: 'linked',
+          requested: false,
           images_swapped_at: null,
           last_synced_at: null,
           live_status_name: null,
           live_total_stock_quantity: null,
           live_sale_price: null,
+          approval_requested_at: null,
+          approval_response_message: null,
         }],
       };
     },
@@ -50,11 +54,14 @@ test('listCoupangRegistrations maps rows to camelCase', async () => {
     sellerProductName: '무타공 레일선반',
     linkedVia: 'speedgo_lookup',
     status: 'linked',
+    requested: false,
     imagesSwappedAt: null,
     lastSyncedAt: null,
     liveStatusName: null,
     liveTotalStockQuantity: null,
     liveSalePrice: null,
+    approvalRequestedAt: null,
+    approvalResponseMessage: null,
   });
 });
 
@@ -101,4 +108,21 @@ test('recordLiveSnapshot writes denormalized stock/price/status fields', async (
   const result = await recordLiveSnapshot(db, 46, { statusName: '승인완료', totalStockQuantity: 10, salePrice: 33570, itemSnapshotJson: [{ a: 1 }] });
   assert.equal(result.liveStatusName, '승인완료');
   assert.equal(result.liveTotalStockQuantity, 10);
+});
+
+test('recordApprovalRequested sets status=approval_requested, requested=true, and stamps approval_requested_at', async () => {
+  const db = {
+    async query(sql, params) {
+      assert.match(sql, /status = 'approval_requested'/);
+      assert.match(sql, /requested = true/);
+      assert.match(sql, /approval_requested_at = now\(\)/);
+      assert.deepEqual(params, [27, '{"code":"SUCCESS"}', '승인요청중']);
+      return { rows: [{ product_draft_id: 27, status: 'approval_requested', requested: true, live_status_name: '승인요청중', approval_response_message: '{"code":"SUCCESS"}' }] };
+    },
+  };
+  const result = await recordApprovalRequested(db, 27, { statusName: '승인요청중', responseMessage: '{"code":"SUCCESS"}' });
+  assert.equal(result.status, 'approval_requested');
+  assert.equal(result.requested, true);
+  assert.equal(result.liveStatusName, '승인요청중');
+  assert.equal(result.approvalResponseMessage, '{"code":"SUCCESS"}');
 });

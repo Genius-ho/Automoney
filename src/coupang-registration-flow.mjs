@@ -8,7 +8,7 @@ import { exportProductDraft } from './admin-store.mjs';
 import { getAppliedAnalysis } from './product-analysis-orchestrator.mjs';
 import { getApprovedManualMainImage } from './manual-ai/workflow-store.mjs';
 import { getApprovedManualDetailSet } from './manual-ai/detail-workflow-store.mjs';
-import { getCoupangRegistration, recordDirectRegistration } from './coupang-registration-store.mjs';
+import { getCoupangRegistration, recordApprovalRequested, recordDirectRegistration } from './coupang-registration-store.mjs';
 import { getSellerShippingSettings } from './coupang-seller-settings-store.mjs';
 
 // draft 64 / sellerProductId 16301574570 is the one already-live, already
@@ -411,4 +411,58 @@ export async function createDirectRegistration(db, rootDir, draftId, {
   }
 
   return { dryRun: false, sellerProductId, registration, payload: preview.payload };
+}
+
+// Sale-approval request (WING's requestApproval, PUT .../approvals). This is
+// the one API call every other function in this module was deliberately
+// built to never make on its own -- everything else here stops at
+// requested=false. It exists only for a human who has independently
+// reviewed the live listing in WING to explicitly trigger, here, once.
+// Guarded so it can only ever fire once per draft: refuses the protected
+// draft (this module's standing guard), refuses without a linked
+// sellerProductId, re-queries the LIVE status right before calling (never
+// trusts the locally cached status -- Coupang's real state is the only
+// source of truth for whether it's still safe to request), and refuses
+// outright unless that live status is genuinely "임시저장" (never yet
+// requested) -- if Coupang already shows anything else (승인요청중, 승인완료,
+// 승인반려, ...), or this app's own record already shows requested=true,
+// this returns the current state without ever touching the approval
+// endpoint.
+export async function requestCoupangSaleApproval(db, draftId, {
+  clientImpl,
+  coupangConfig,
+  getCoupangRegistrationImpl = getCoupangRegistration,
+  recordApprovalRequestedImpl = recordApprovalRequested,
+} = {}) {
+  if (draftId === PROTECTED_DRAFT_ID) throw Object.assign(new Error('draft 64는 보호 대상입니다'), { code: 'DRAFT_PROTECTED' });
+
+  const registration = await getCoupangRegistrationImpl(db, draftId);
+  if (!registration?.sellerProductId) {
+    throw Object.assign(new Error('이 draft는 아직 쿠팡 sellerProductId와 연결되어 있지 않습니다'), { code: 'NOT_LINKED' });
+  }
+  if (registration.requested || registration.status === 'approval_requested') {
+    throw Object.assign(new Error(`이미 판매 승인을 요청한 draft입니다 (status=${registration.status})`), { code: 'ALREADY_REQUESTED', existing: registration });
+  }
+
+  const client = clientImpl || new CoupangClient(coupangConfig);
+  const live = await client.getProduct(registration.sellerProductId);
+  const liveStatusName = live?.data?.statusName ?? null;
+  if (liveStatusName !== '임시저장') {
+    throw Object.assign(new Error(`현재 쿠팡 상태(${liveStatusName ?? '알 수 없음'})가 임시저장이 아니어서 승인 요청을 보내지 않았습니다`), { code: 'NOT_TEMPORARY_SAVED', liveStatusName, existing: registration });
+  }
+
+  const result = await client.requestApproval(registration.sellerProductId);
+
+  const after = await client.getProduct(registration.sellerProductId);
+  const updated = await recordApprovalRequestedImpl(db, draftId, {
+    statusName: after?.data?.statusName ?? null,
+    responseMessage: JSON.stringify(result),
+  });
+
+  return {
+    registration: updated,
+    requestApprovalResult: result,
+    liveStatusNameBefore: liveStatusName,
+    liveStatusNameAfter: after?.data?.statusName ?? null,
+  };
 }

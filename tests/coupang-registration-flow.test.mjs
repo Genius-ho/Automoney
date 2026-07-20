@@ -6,6 +6,7 @@ import {
   SELLER_FIXED_CONFIG,
   buildRegistrationPreview,
   createDirectRegistration,
+  requestCoupangSaleApproval,
   selectRegistrationTarget,
   validateSellerShippingSettings,
 } from '../src/coupang-registration-flow.mjs';
@@ -62,13 +63,15 @@ function fakeCategoryAdapter({ prediction = { displayCategoryCode: 71691, catego
   };
 }
 
-function fakeCoupangClient({ createProductResult = { code: 'SUCCESS', data: '99999999999' }, outbound = [{ shippingPlaceName: '행당 출고지', outboundShippingPlaceCode: 111, placeAddresses: [{ companyContactNumber: '010-0000-0000' }] }], returnCenters = [{ shippingPlaceName: '행당 반품지', returnCenterCode: '222', placeAddresses: [{}] }] } = {}) {
-  const calls = { createProduct: 0, requestApproval: 0 };
+function fakeCoupangClient({ createProductResult = { code: 'SUCCESS', data: '99999999999' }, outbound = [{ shippingPlaceName: '행당 출고지', outboundShippingPlaceCode: 111, placeAddresses: [{ companyContactNumber: '010-0000-0000' }] }], returnCenters = [{ shippingPlaceName: '행당 반품지', returnCenterCode: '222', placeAddresses: [{}] }], getProductResults = [], requestApprovalResult = { code: 'SUCCESS', data: null } } = {}) {
+  const calls = { createProduct: 0, requestApproval: 0, getProduct: 0 };
   return {
     calls,
     async listOutboundShippingPlaces() { return { data: outbound }; },
     async listReturnShippingCenters() { return { data: returnCenters }; },
     async createProduct(payload) { calls.createProduct += 1; this.lastPayload = payload; return createProductResult; },
+    async getProduct() { const result = getProductResults[Math.min(calls.getProduct, getProductResults.length - 1)]; calls.getProduct += 1; return result; },
+    async requestApproval(sellerProductId) { calls.requestApproval += 1; this.lastApprovalSellerProductId = sellerProductId; return requestApprovalResult; },
   };
 }
 
@@ -358,7 +361,7 @@ test('createDirectRegistration with confirm=true calls createProduct exactly onc
     recordDirectRegistrationImpl: async (_db, draftId, args) => { recorded = { draftId, ...args }; return { productDraftId: draftId, sellerProductId: args.sellerProductId, status: 'created' }; },
   });
   assert.equal(client.calls.createProduct, 1);
-  assert.equal('requestApproval' in client, false);
+  assert.equal(client.calls.requestApproval, 0);
   assert.equal(result.dryRun, false);
   assert.equal(result.sellerProductId, '16301999999');
   assert.equal(recorded.sellerProductId, '16301999999');
@@ -379,4 +382,76 @@ test('createDirectRegistration surfaces RECORD_CONFLICT_AFTER_CREATE loudly inst
     }),
     (error) => error.code === 'RECORD_CONFLICT_AFTER_CREATE' && error.sellerProductId === '16302000000',
   );
+});
+
+test('requestCoupangSaleApproval refuses draft 64 without calling the Coupang client at all', async () => {
+  const client = fakeCoupangClient();
+  await assert.rejects(
+    () => requestCoupangSaleApproval({}, PROTECTED_DRAFT_ID, { clientImpl: client, getCoupangRegistrationImpl: async () => { throw new Error('should not be called'); } }),
+    (error) => error.code === 'DRAFT_PROTECTED',
+  );
+  assert.equal(client.calls.getProduct, 0);
+  assert.equal(client.calls.requestApproval, 0);
+});
+
+test('requestCoupangSaleApproval refuses a draft with no linked sellerProductId', async () => {
+  const client = fakeCoupangClient();
+  await assert.rejects(
+    () => requestCoupangSaleApproval({}, 27, { clientImpl: client, getCoupangRegistrationImpl: async () => null }),
+    (error) => error.code === 'NOT_LINKED',
+  );
+  assert.equal(client.calls.getProduct, 0);
+  assert.equal(client.calls.requestApproval, 0);
+});
+
+test('requestCoupangSaleApproval refuses without calling the API when this app already recorded requested=true', async () => {
+  const client = fakeCoupangClient();
+  await assert.rejects(
+    () => requestCoupangSaleApproval({}, 27, {
+      clientImpl: client,
+      getCoupangRegistrationImpl: async () => ({ sellerProductId: '16311872388', status: 'approval_requested', requested: true }),
+    }),
+    (error) => error.code === 'ALREADY_REQUESTED',
+  );
+  assert.equal(client.calls.getProduct, 0);
+  assert.equal(client.calls.requestApproval, 0);
+});
+
+test('requestCoupangSaleApproval re-queries the live status and refuses to call requestApproval when it is not 임시저장', async () => {
+  const client = fakeCoupangClient({ getProductResults: [{ data: { statusName: '승인완료' } }] });
+  let recorded = false;
+  await assert.rejects(
+    () => requestCoupangSaleApproval({}, 27, {
+      clientImpl: client,
+      getCoupangRegistrationImpl: async () => ({ sellerProductId: '16311872388', status: 'created', requested: false }),
+      recordApprovalRequestedImpl: async () => { recorded = true; },
+    }),
+    (error) => error.code === 'NOT_TEMPORARY_SAVED' && error.liveStatusName === '승인완료',
+  );
+  assert.equal(client.calls.getProduct, 1);
+  assert.equal(client.calls.requestApproval, 0);
+  assert.equal(recorded, false);
+});
+
+test('requestCoupangSaleApproval calls requestApproval exactly once when live status is 임시저장, then records the result', async () => {
+  const client = fakeCoupangClient({
+    getProductResults: [{ data: { statusName: '임시저장' } }, { data: { statusName: '승인요청중' } }],
+    requestApprovalResult: { code: 'SUCCESS', data: null },
+  });
+  let recordedArgs = null;
+  const result = await requestCoupangSaleApproval({}, 27, {
+    clientImpl: client,
+    getCoupangRegistrationImpl: async () => ({ sellerProductId: '16311872388', status: 'created', requested: false }),
+    recordApprovalRequestedImpl: async (_db, draftId, args) => { recordedArgs = { draftId, ...args }; return { productDraftId: draftId, status: 'approval_requested', requested: true, liveStatusName: args.statusName }; },
+  });
+
+  assert.equal(client.calls.getProduct, 2);
+  assert.equal(client.calls.requestApproval, 1);
+  assert.equal(client.lastApprovalSellerProductId, '16311872388');
+  assert.equal(recordedArgs.draftId, 27);
+  assert.equal(recordedArgs.statusName, '승인요청중');
+  assert.match(recordedArgs.responseMessage, /SUCCESS/);
+  assert.equal(result.registration.status, 'approval_requested');
+  assert.equal(result.liveStatusNameBefore, '임시저장');
+  assert.equal(result.liveStatusNameAfter, '승인요청중');
 });

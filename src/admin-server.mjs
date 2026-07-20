@@ -14,7 +14,7 @@ import { getApprovedManualMainImage } from './manual-ai/workflow-store.mjs';
 import { getApprovedManualDetailSet } from './manual-ai/detail-workflow-store.mjs';
 import { getCoupangRegistration, linkCoupangRegistration, listCoupangRegistrations, recordImagesSwapped, recordLiveSnapshot } from './coupang-registration-store.mjs';
 import { applyProductAnalysis, buildApplyPreview, getAppliedAnalysis, getAnalysisRun, getLatestAnalysisRun, listAnalysisRuns, runProductAnalysis } from './product-analysis-orchestrator.mjs';
-import { buildRegistrationPreview, createDirectRegistration, extractList, previewCategoryAndShipping, selectRegistrationTarget, validateSellerShippingSettings } from './coupang-registration-flow.mjs';
+import { buildRegistrationPreview, createDirectRegistration, extractList, previewCategoryAndShipping, requestCoupangSaleApproval, selectRegistrationTarget, validateSellerShippingSettings } from './coupang-registration-flow.mjs';
 import { getSellerShippingSettings, saveSellerShippingSettings } from './coupang-seller-settings-store.mjs';
 import { createPgPool, runSchema } from './postgres-store.mjs';
 import { isAllowedPublicAssetPath } from './public-assets.mjs';
@@ -460,6 +460,22 @@ async function handleRequest({ request, response, db, aiSecrets, rootDir }) {
       if (['DRAFT_PROTECTED', 'ALREADY_REGISTERED'].includes(error.code)) { sendJson(response, 409, { error: error.message, code: error.code, existing: error.existing }); return; }
       if (error.code === 'REGISTRATION_NOT_READY') { sendJson(response, 409, { error: error.message, code: error.code, readiness: error.readiness }); return; }
       if (error.code === 'RECORD_CONFLICT_AFTER_CREATE' || error.code === 'CREATE_PRODUCT_NO_ID') { sendJson(response, 502, { error: error.message, code: error.code, sellerProductId: error.sellerProductId }); return; }
+      throw error;
+    }
+    return;
+  }
+
+  const requestApprovalMatch = url.pathname.match(/^\/api\/product-drafts\/(\d+)\/coupang-registration\/request-approval$/);
+  if (requestApprovalMatch && request.method === 'POST') {
+    const draftId = Number(requestApprovalMatch[1]);
+    try {
+      const coupangConfig = await loadCoupangConfig(rootDir);
+      const client = new CoupangClient(coupangConfig);
+      const result = await requestCoupangSaleApproval(db, draftId, { coupangConfig, clientImpl: client });
+      sendJson(response, 200, result);
+    } catch (error) {
+      if (error instanceof CoupangApiError) { sendJson(response, 502, { error: error.message, code: 'COUPANG_API_ERROR', bodyPreview: error.bodyPreview }); return; }
+      if (['DRAFT_PROTECTED', 'NOT_LINKED', 'ALREADY_REQUESTED', 'NOT_TEMPORARY_SAVED'].includes(error.code)) { sendJson(response, 409, { error: error.message, code: error.code, existing: error.existing, liveStatusName: error.liveStatusName }); return; }
       throw error;
     }
     return;

@@ -7,11 +7,14 @@ function toRegistrationListItem(row) {
     sellerProductName: row.seller_product_name,
     linkedVia: row.linked_via,
     status: row.status,
+    requested: row.requested,
     imagesSwappedAt: row.images_swapped_at,
     lastSyncedAt: row.last_synced_at,
     liveStatusName: row.live_status_name,
     liveTotalStockQuantity: row.live_total_stock_quantity,
     liveSalePrice: row.live_sale_price,
+    approvalRequestedAt: row.approval_requested_at,
+    approvalResponseMessage: row.approval_response_message,
   };
 }
 
@@ -108,6 +111,26 @@ export async function recordImagesSwapped(db, productDraftId) {
     `update coupang_product_registrations set status = 'images_swapped', images_swapped_at = now(), updated_at = now()
      where product_draft_id = $1 returning *`,
     [productDraftId],
+  );
+  return result.rows[0] ? toRegistrationListItem({ ...result.rows[0], product_draft_id: productDraftId }) : null;
+}
+
+// Marks a draft's registration as sale-approval-requested (WING's
+// requestApproval endpoint was called exactly once for it) and stores
+// Coupang's own response message for the audit trail. Never flips `requested`
+// back to false -- this is a one-way transition mirroring the real,
+// irreversible WING action.
+export async function recordApprovalRequested(db, productDraftId, { statusName = null, responseMessage = null } = {}) {
+  const result = await db.query(
+    `update coupang_product_registrations set
+       status = 'approval_requested',
+       requested = true,
+       approval_requested_at = now(),
+       approval_response_message = $2,
+       live_status_name = coalesce($3, live_status_name),
+       updated_at = now()
+     where product_draft_id = $1 returning *`,
+    [productDraftId, responseMessage, statusName],
   );
   return result.rows[0] ? toRegistrationListItem({ ...result.rows[0], product_draft_id: productDraftId }) : null;
 }
