@@ -34,7 +34,7 @@
         <p class="order-help">계획 주문과 토스의 최근 OPEN/CLOSED 주문을 대조합니다. 상태가 ‘계획’이면 아직 토스 접수가 확인되지 않은 주문입니다.</p>
         <p id="orderSyncMessage" class="sync-message">계좌·주문 상태 새로고침을 눌러 실제 접수 상태를 확인하세요.</p>
         <ul id="planWarnings" class="plan-warnings"></ul>
-        <div class="table-wrap"><table class="order-plan-table"><thead><tr><th>매수/매도</th><th>수량</th><th>지정가</th><th>주문 방식</th><th>사유</th><th>상태</th></tr></thead><tbody id="orderPlanBody"></tbody></table></div>
+        <div class="table-wrap"><table class="order-plan-table"><thead><tr><th>매수/매도</th><th>수량</th><th>지정가</th><th>주문 방식</th><th>사유</th><th>상태</th><th>수정/재등록</th></tr></thead><tbody id="orderPlanBody"></tbody></table></div>
         <p id="emptyOrderPlan" class="empty">새로고침을 누르면 오늘 주문계획을 계산합니다.</p>
       </article>
 
@@ -48,5 +48,7 @@
     </section>
   </main>
   <dialog id="loginDialog"><form id="loginForm"><p class="eyebrow">ADMIN LOGIN</p><h2>웹 로그인</h2><p>비상 수정 기능을 사용하려면 로그인하세요.</p><label>비밀번호<span class="password-field"><input id="password" type="password" required autofocus autocomplete="off" autocapitalize="none" spellcheck="false"><button id="togglePassword" type="button" aria-pressed="false">표시</button></span></label><p id="loginError" class="error" role="alert"></p><button type="submit" class="primary">로그인</button></form></dialog>
+  <dialog id="reregisterDialog"><form id="reregisterForm"><p class="eyebrow">CUSTOM ORDER</p><h2>수정 후 재등록</h2><dl class="reregister-summary"><div><dt>종목</dt><dd id="reregisterSymbol">-</dd></div><div><dt>매수/매도</dt><dd id="reregisterSide">-</dd></div><div><dt>원래 수량 · 체결 · 잔여</dt><dd id="reregisterFillInfo">-</dd></div></dl><label>주문 수량<input id="reregisterQuantity" type="number" min="1" step="1" required></label><label>지정가격 ($)<input id="reregisterPrice" type="number" min="0.01" step="0.01" required></label><label>메모<input id="reregisterMemo" type="text" maxlength="200"></label><p id="reregisterError" class="error" role="alert"></p><div class="dialog-actions"><button type="button" id="reregisterCancel">취소</button><button type="submit" class="primary">확인 후 접수</button></div></form></dialog>
+  <dialog id="editPriceDialog"><form id="editPriceForm"><p class="eyebrow">CUSTOM ORDER</p><h2>가격 수정</h2><p class="order-help">취소·거절된 자동전략 주문의 지정가를 수정합니다. 저장하면 '계획' 상태로 바뀌며, 자동매매가 실행 중이면 다음 주기에 새 가격으로 다시 접수됩니다.</p><dl class="reregister-summary"><div><dt>종목</dt><dd id="editPriceSymbol">-</dd></div><div><dt>매수/매도</dt><dd id="editPriceSide">-</dd></div><div><dt>수량 · 기존 지정가</dt><dd id="editPriceInfo">-</dd></div></dl><label>새 지정가격 ($)<input id="editPriceValue" type="number" min="0.01" step="0.01" required></label><p id="editPriceError" class="error" role="alert"></p><div class="dialog-actions"><button type="button" id="editPriceCancel">취소</button><button type="submit" class="primary">저장</button></div></form></dialog>
   <script src="/app.js" defer></script>
 </body></html>

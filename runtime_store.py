@@ -52,6 +52,17 @@ class RuntimeStatus:
     broker_order_ids: dict[str, str] = field(default_factory=dict)
     order_price_overrides: dict[str, str] = field(default_factory=dict)
     auto_attempt_keys: dict[str, str] = field(default_factory=dict)
+    # Persisted, restart-surviving record of every order a human has hand-
+    # edited (via edit_failed_price or reregister_order): the fixed facts
+    # (symbol/side/quantity/price/reason) needed to identify it as a "custom
+    # order" and to know its baseline values, independent of plan_cache
+    # (which is in-memory and only covers the current day's strategy plan).
+    # Keyed by client_order_id.
+    custom_order_ledger: dict[str, dict] = field(default_factory=dict)
+    # Cancel/reject -> reregister linkage. Keyed by the *original* order's
+    # client_order_id. Presence of "replacement_order_id" is the idempotency
+    # lock: a given original order may only ever be reregistered once.
+    custom_order_history: dict[str, dict] = field(default_factory=dict)
     updated_at: str = ""
 
 

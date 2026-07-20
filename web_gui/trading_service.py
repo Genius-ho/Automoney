@@ -2,16 +2,17 @@
 from __future__ import annotations
 
 import sys
+import threading
 import time
 import uuid
 from dataclasses import asdict, replace
 from datetime import date, datetime, timedelta, timezone
-from decimal import Decimal, ROUND_DOWN, ROUND_UP
+from decimal import Decimal, ROUND_DOWN, ROUND_UP, InvalidOperation
 from typing import Any
 
 from etf_linkage import analyze_etf_pairs
 from etf_long_term import analyze_individual_etfs
-from mumae_core import OrderIntent, apply_fill
+from mumae_core import CENT, OrderIntent, OrderKind, apply_fill, money
 from toss_api import TossApiError
 from trade_history import aggregate_daily_trades, summarize_realized_pnl
 from volatility import ETF_UNIVERSE
@@ -21,6 +22,11 @@ OPEN_STATUSES = {"PENDING", "PARTIAL_FILLED", "PENDING_CANCEL", "PENDING_REPLACE
 FAILED_STATUSES = {"REJECTED", "CANCELED", "REPLACE_REJECTED", "CANCEL_REJECTED"}
 CONFIRMED_STATUSES = OPEN_STATUSES | {"FILLED"}
 AUTO_REPRICE_SYMBOLS = {"KORU", "SOXL"}
+# Statuses a custom order must be in before "reregister" is offered. Narrower
+# than FAILED_STATUSES: REPLACE_REJECTED/CANCEL_REJECTED mean the *original*
+# order may still be open at the broker, so reregistering it would risk a
+# duplicate live order.
+REREGISTERABLE_STATUSES = {"CANCELED", "REJECTED"}
 
 
 class TradingWebService(WebService):
@@ -31,6 +37,11 @@ class TradingWebService(WebService):
         self.order_records: dict[str, dict[str, dict[str, Any]]] = {}
         self.unmatched_orders: dict[str, dict[str, dict[str, Any]]] = {}
         self.orders_synced: set[str] = set()
+        # Per-original-order-id locks so two near-simultaneous "reregister"
+        # requests for the same cancelled order can never both create a new
+        # live order (see reregister_order).
+        self._reregister_locks: dict[str, threading.Lock] = {}
+        self._reregister_locks_guard = threading.Lock()
 
     @staticmethod
     def _match_key(side: str, quantity: Any, price: Any) -> tuple[str, int, Decimal]:
@@ -87,7 +98,24 @@ class TradingWebService(WebService):
         self.order_rows[symbol] = rows
         self.orders_synced.add(symbol)
 
-        planned = self.plan_cache.get(symbol, [])
+        # plan_cache only ever holds *today's* strategy plan and is rebuilt
+        # (and lost) on every process restart. custom_order_ledger is the
+        # persisted, restart-surviving record of every order a human has
+        # hand-edited, so a cancelled custom order from an earlier day/process
+        # can still be found and matched against fresh broker rows here.
+        planned = list(self.plan_cache.get(symbol, []))
+        planned_ids = {order.client_order_id for order in planned}
+        for client_order_id, info in self.runtime.custom_order_ledger.items():
+            if info.get("symbol") != symbol or client_order_id in planned_ids:
+                continue
+            planned.append(OrderIntent(
+                client_order_id,
+                info["side"],
+                int(info["quantity"]),
+                Decimal(str(info["price"])),
+                OrderKind.LIMIT,
+                str(info.get("reason", "")),
+            ))
         unused = set(range(len(rows)))
         statuses: dict[str, str] = {}
         records: dict[str, dict[str, Any]] = {}
@@ -112,7 +140,7 @@ class TradingWebService(WebService):
                 status = "SKIPPED"
             elif order.client_order_id in self.runtime.active_order_ids:
                 status = "UNCONFIRMED"
-            result.append(self._order_payload(order, status))
+            result.append(self._order_payload(symbol, order, status))
         for item_id, row in unmatched.items():
             result.append({
                 "id": item_id,
@@ -129,8 +157,19 @@ class TradingWebService(WebService):
         self.unmatched_orders[symbol] = unmatched
         return {"symbol": symbol, "orders": result, "synced": True, "unmatched_count": len(unmatched)}
 
-    @staticmethod
-    def _order_payload(order: OrderIntent, status: str) -> dict[str, Any]:
+    def _fill_progress(self, symbol: str, client_order_id: str, original_quantity: int) -> tuple[int, int]:
+        """(filled_quantity, remaining_quantity) from the last sync_orders() broker
+        record for this order. Used both for display and for reregister_order's
+        default/validated quantity, so both stay consistent with each other."""
+        record = self.order_records.get(symbol, {}).get(client_order_id) or {}
+        execution = record.get("execution") or {}
+        filled = int(Decimal(str(execution.get("filledQuantity") or "0")))
+        return filled, max(original_quantity - filled, 0)
+
+    def _order_payload(self, symbol: str, order: OrderIntent, status: str) -> dict[str, Any]:
+        ledger_entry = self.runtime.custom_order_ledger.get(order.client_order_id)
+        history_entry = self.runtime.custom_order_history.get(order.client_order_id)
+        filled, remaining = self._fill_progress(symbol, order.client_order_id, order.quantity)
         return {
             "id": order.client_order_id,
             "side": order.side,
@@ -140,6 +179,14 @@ class TradingWebService(WebService):
             "reason": order.reason,
             "status": status,
             "broker_only": False,
+            # "사용자 지정 주문" = has been hand-edited at least once (via
+            # edit_failed_price or reregister_order); auto strategy orders
+            # never appear in custom_order_ledger.
+            "is_custom": ledger_entry is not None,
+            "original_order_id": (ledger_entry or {}).get("original_order_id"),
+            "replaced_by": (history_entry or {}).get("replacement_order_id"),
+            "filled_quantity": filled,
+            "remaining_quantity": remaining,
         }
 
     def trade_history(self, symbol: str, start_date: str) -> dict[str, Any]:
@@ -215,6 +262,18 @@ class TradingWebService(WebService):
         if price <= 0:
             raise ValueError("지정가는 0보다 커야 합니다.")
         self.runtime.order_price_overrides[client_order_id] = str(price)
+        # Marks this order as "사용자 지정 주문" (custom order) for the
+        # "수정 후 재등록" feature: a persisted, restart-surviving fact
+        # independent of plan_cache. See sync_orders()/reregister_order().
+        self.runtime.custom_order_ledger[client_order_id] = {
+            "symbol": symbol,
+            "side": order.side,
+            "quantity": order.quantity,
+            "price": str(price),
+            "reason": order.reason,
+            "source": "price_override",
+            "updated_at": datetime.now(timezone.utc).isoformat(),
+        }
         self.runtime.active_order_ids = [item for item in self.runtime.active_order_ids if item != client_order_id]
         self.runtime.skipped_order_ids = [item for item in self.runtime.skipped_order_ids if item != client_order_id]
         self.runtime.broker_client_order_ids.pop(client_order_id, None)
@@ -290,6 +349,186 @@ class TradingWebService(WebService):
             self.runtime.order_price_overrides[order.client_order_id] = str(retried.limit_price)
             self.runtime_store.save(self.runtime)
             return retried, self.broker().submit_order(retried, retry_id)
+
+    def reregister_order(
+        self,
+        symbol: str,
+        original_id: str,
+        quantity: Any,
+        price: Any,
+        memo: str,
+        confirmation: str,
+        *,
+        confirm_over_remaining: bool = False,
+    ) -> dict[str, Any]:
+        """'수정 후 재등록': submit a brand-new order derived from a cancelled/
+        rejected custom order, with a possibly-edited quantity/price/memo.
+        The original order is never modified or deleted; the new order gets
+        its own client_order_id, linked back via custom_order_history.
+
+        Guarded by a per-original-id lock so two near-simultaneous calls for
+        the same original_id can never both create a live order."""
+        symbol = symbol.upper()
+        if symbol not in ETF_UNIVERSE:
+            raise ValueError("지원하지 않는 ETF입니다.")
+        if not original_id:
+            raise ValueError("존재하지 않는 주문입니다.")
+
+        with self._reregister_locks_guard:
+            lock = self._reregister_locks.setdefault(original_id, threading.Lock())
+        if not lock.acquire(blocking=False):
+            raise PermissionError("이미 재등록 처리 중인 주문입니다. 잠시 후 다시 시도하세요.")
+        try:
+            return self._reregister_order_locked(
+                symbol, original_id, quantity, price, memo, confirmation,
+                confirm_over_remaining=confirm_over_remaining,
+            )
+        finally:
+            lock.release()
+
+    def _reregister_order_locked(
+        self,
+        symbol: str,
+        original_id: str,
+        quantity: Any,
+        price: Any,
+        memo: str,
+        confirmation: str,
+        *,
+        confirm_over_remaining: bool,
+    ) -> dict[str, Any]:
+        ledger_entry = self.runtime.custom_order_ledger.get(original_id)
+        if ledger_entry is None or ledger_entry.get("symbol") != symbol:
+            raise ValueError("사용자 지정 주문만 재등록할 수 있습니다. (자동 전략 주문이거나 존재하지 않는 주문)")
+
+        def _already_replaced() -> str | None:
+            history = self.runtime.custom_order_history.get(original_id)
+            return (history or {}).get("replacement_order_id")
+
+        existing = _already_replaced()
+        if existing:
+            raise ValueError(f"이미 재등록된 주문입니다. (신규 주문 ID: {existing})")
+
+        # --- input validation (cheap, before any broker round-trip) ---
+        if isinstance(quantity, bool):
+            raise ValueError("수량은 1 이상의 정수여야 합니다.")
+        try:
+            qty = int(quantity)
+        except (TypeError, ValueError):
+            raise ValueError("수량은 1 이상의 정수여야 합니다.")
+        if qty < 1:
+            raise ValueError("수량은 1 이상의 정수여야 합니다.")
+        try:
+            requested_price = Decimal(str(price))
+        except InvalidOperation:
+            raise ValueError("지정가는 0보다 큰 유효한 소수여야 합니다.")
+        if requested_price <= 0:
+            raise ValueError("지정가는 0보다 커야 합니다.")
+        # Reuse the same Toss order-price normalization used for every
+        # strategy-computed order (mumae_core.money(), cent rounding) instead
+        # of a bespoke quantize() so tick-size handling stays in one place.
+        normalized_price = money(requested_price)
+        if normalized_price != requested_price:
+            raise ValueError(f"지정가는 {CENT} 단위(호가 단위)여야 합니다.")
+
+        expected_confirmation = f"REREGISTER {symbol} {original_id}"
+        if confirmation != expected_confirmation:
+            raise PermissionError("재등록 확인 문구가 일치하지 않습니다: " + expected_confirmation)
+
+        # --- re-sync immediately before final validation/submission: the
+        # original order's status, fill quantity, ETF pause state, and cash/
+        # position may all have changed since the "수정 후 재등록" dialog
+        # was opened. ---
+        self.sync_orders(symbol)
+
+        existing = _already_replaced()
+        if existing:
+            raise ValueError(f"이미 재등록된 주문입니다. (신규 주문 ID: {existing})")
+
+        status = self.order_statuses.get(symbol, {}).get(original_id)
+        if status not in REREGISTERABLE_STATUSES:
+            raise ValueError(f"취소 또는 거부된 주문만 재등록할 수 있습니다. (현재 상태: {status or '알 수 없음'})")
+
+        original_quantity = int(ledger_entry["quantity"])
+        filled_quantity, remaining_quantity = self._fill_progress(symbol, original_id, original_quantity)
+        if qty > remaining_quantity and not confirm_over_remaining:
+            raise ValueError(
+                f"요청 수량({qty}주)이 미체결 잔여 수량({remaining_quantity}주)을 초과합니다. "
+                f"(원래 수량 {original_quantity}주 · 체결 수량 {filled_quantity}주) "
+                "잔여 수량을 초과해 접수하려면 다시 한번 확인해주세요."
+            )
+
+        if symbol not in self.runtime.active_symbols:
+            raise PermissionError(f"{symbol}: 신규 주문이 중지된 ETF입니다. 먼저 '시작'을 눌러 재개하세요.")
+
+        side = ledger_entry["side"]
+        state = self.store.load(symbol)
+        if side == "buy":
+            notional = normalized_price * qty
+            if notional > state.cash_usd:
+                raise ValueError(
+                    f"주문 가능 금액을 초과했습니다. (필요 금액: {notional}, 주문 가능 금액: {state.cash_usd})"
+                )
+        elif side == "sell":
+            if qty > state.position_qty:
+                raise ValueError(f"매도 가능 수량({state.position_qty}주)을 초과했습니다. (요청 수량: {qty}주)")
+
+        new_id = f"{original_id}-reg-{uuid.uuid4().hex[:8]}"
+        memo_text = memo.strip() if memo and memo.strip() else str(ledger_entry.get("reason", ""))
+        reason = f"{memo_text} · 수정 후 재등록"
+        replacement = OrderIntent(new_id, side, qty, normalized_price, OrderKind.LIMIT, reason)
+
+        try:
+            actual, response = self._submit_one(symbol, replacement)
+        except (TossApiError, PermissionError, ValueError) as error:
+            # Submission failed: the original order stays untouched and
+            # un-replaced, so the caller can fix the input and try again.
+            raise ValueError(f"재등록 주문 접수에 실패했습니다: {error}") from error
+
+        result = response.get("result") if isinstance(response, dict) else {}
+        broker_order_id = str((result or {}).get("orderId") or "")
+
+        # Only now (broker confirmed it accepted the new order) do we record
+        # the replacement -- this is the idempotency lock for future calls.
+        self.runtime.broker_order_ids[new_id] = broker_order_id
+        if new_id not in self.runtime.active_order_ids:
+            self.runtime.active_order_ids.append(new_id)
+        self.runtime.custom_order_ledger[new_id] = {
+            "symbol": symbol,
+            "side": side,
+            "quantity": qty,
+            "price": str(normalized_price),
+            "reason": reason,
+            "source": "reregister",
+            "original_order_id": original_id,
+            "created_at": datetime.now(timezone.utc).isoformat(),
+        }
+        self.runtime.custom_order_history[original_id] = {
+            "replacement_order_id": new_id,
+            "price_before": str(ledger_entry["price"]),
+            "price_after": str(normalized_price),
+            "quantity_before": original_quantity,
+            "quantity_after": qty,
+            "filled_before": filled_quantity,
+            "remaining_before": remaining_quantity,
+            "reregistered_at": datetime.now(timezone.utc).isoformat(),
+            "is_custom_order": True,
+        }
+        self.runtime_store.save(self.runtime)
+
+        synced = self.sync_orders(symbol)
+        return {
+            "original_order_id": original_id,
+            "replacement_order_id": new_id,
+            "broker_order_id": broker_order_id,
+            "quantity_before": original_quantity,
+            "quantity_after": qty,
+            "price_before": str(ledger_entry["price"]),
+            "price_after": str(normalized_price),
+            "filled_before": filled_quantity,
+            "remaining_before": remaining_quantity,
+            **synced,
+        }
 
     def pending_order_count(self, symbol: str) -> int:
         """Open (unfilled) broker orders for symbol, from the last sync_orders() snapshot."""

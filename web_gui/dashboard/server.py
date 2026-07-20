@@ -192,7 +192,7 @@ class Handler(BaseHTTPRequestHandler):
                 payload = body.get("payload")
                 if not isinstance(payload, dict):
                     raise ValueError("엔진 명령 payload는 객체여야 합니다.")
-                if command in {"order.submit", "order.cancel", "auto.start", "auto.stop", "api.update"} and os.getenv(
+                if command in {"order.submit", "order.cancel", "order.reregister", "auto.start", "auto.stop", "api.update"} and os.getenv(
                     "MUMAE_WEB_LIVE_ACTIONS", ""
                 ) != "I_UNDERSTAND_WEB_LIVE_TRADING":
                     raise PermissionError("MUMAE_WEB_LIVE_ACTIONS 실주문 허용값이 필요합니다.")

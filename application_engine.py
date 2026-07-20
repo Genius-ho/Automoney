@@ -269,6 +269,16 @@ class ApplicationEngine(TradingWebService):
                 list(payload.get("ids") or []),
                 str(payload.get("confirmation") or ""),
             )
+        if command == "order.reregister":
+            return self.reregister_order(
+                symbol,
+                str(payload.get("original_id") or ""),
+                payload.get("quantity"),
+                payload.get("price"),
+                str(payload.get("memo") or ""),
+                str(payload.get("confirmation") or ""),
+                confirm_over_remaining=bool(payload.get("confirm_over_remaining")),
+            )
         if command == "auto.start":
             return self.start_auto(symbol, str(payload.get("confirmation") or ""))
         if command == "auto.stop":
