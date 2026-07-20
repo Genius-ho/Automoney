@@ -81,6 +81,28 @@ export async function linkCoupangRegistration(db, productDraftId, { sellerProduc
   return toRegistrationListItem({ ...result.rows[0], product_draft_id: productDraftId });
 }
 
+// Persists the sellerProductId returned by this app's OWN createProduct()
+// call (the new direct-registration flow), as opposed to linkCoupangRegistration
+// (a listing found after being registered externally via 스피드고전송기).
+// Deliberately `on conflict ... do nothing`, not `do update` -- a row already
+// existing for this draft means it was already registered by *some* path
+// (this flow, a prior direct-API run, or a speedgo link), and silently
+// overwriting it would erase the dedup guard this table exists to provide.
+// Returns null (not the existing row) when nothing was inserted, so the
+// caller can tell "already registered" apart from "just registered".
+export async function recordDirectRegistration(db, productDraftId, { sellerProductId, sellerProductName = null, requestHash }) {
+  if (!sellerProductId) throw new Error('sellerProductId is required');
+  if (!requestHash) throw new Error('requestHash is required');
+  const result = await db.query(
+    `insert into coupang_product_registrations (product_draft_id, seller_product_id, seller_product_name, request_hash, status, linked_via, requested)
+     values ($1, $2, $3, $4, 'created', 'direct_api', false)
+     on conflict (product_draft_id) do nothing
+     returning *`,
+    [productDraftId, String(sellerProductId), sellerProductName, requestHash],
+  );
+  return result.rows[0] ? toRegistrationListItem({ ...result.rows[0], product_draft_id: productDraftId }) : null;
+}
+
 export async function recordImagesSwapped(db, productDraftId) {
   const result = await db.query(
     `update coupang_product_registrations set status = 'images_swapped', images_swapped_at = now(), updated_at = now()

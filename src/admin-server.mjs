@@ -3,8 +3,8 @@ import { mkdir, readFile, rename, rm, writeFile } from 'node:fs/promises';
 import { extname, join, resolve } from 'node:path';
 import { createHash } from 'node:crypto';
 
-import { loadAiSecrets, loadCodexConfig, loadCoupangConfig, loadDatabaseUrl, loadJobPathsConfig, loadNaverConfig, loadPythonConfig, loadR2Config } from './config.mjs';
-import { R2Client } from './r2-client.mjs';
+import { loadAiSecrets, loadCodexConfig, loadCoupangConfig, loadDatabaseUrl, loadJobPathsConfig, loadNaverConfig, loadPythonConfig } from './config.mjs';
+import { uploadApprovedImagesToR2 } from './r2-publisher.mjs';
 import { clearProviderCredential, listProviderSettings, listTaskRouting, saveProviderSetting, saveTaskRouting, testProviderSetting } from './ai/provider-settings-store.mjs';
 import { NaverShoppingClient } from './naver-shopping-client.mjs';
 import { researchNaverDraft } from './naver-research.mjs';
@@ -14,6 +14,7 @@ import { getApprovedManualMainImage } from './manual-ai/workflow-store.mjs';
 import { getApprovedManualDetailSet } from './manual-ai/detail-workflow-store.mjs';
 import { getCoupangRegistration, linkCoupangRegistration, listCoupangRegistrations, recordImagesSwapped, recordLiveSnapshot } from './coupang-registration-store.mjs';
 import { applyProductAnalysis, buildApplyPreview, getAppliedAnalysis, getAnalysisRun, getLatestAnalysisRun, listAnalysisRuns, runProductAnalysis } from './product-analysis-orchestrator.mjs';
+import { buildRegistrationPreview, createDirectRegistration, previewCategoryAndShipping, selectRegistrationTarget } from './coupang-registration-flow.mjs';
 import { createPgPool, runSchema } from './postgres-store.mjs';
 import { isAllowedPublicAssetPath } from './public-assets.mjs';
 import { buildMainImagePackage } from './manual-ai/package-builder.mjs';
@@ -259,6 +260,14 @@ async function handleRequest({ request, response, db, aiSecrets, rootDir }) {
     return;
   }
 
+  const registrationTargetMatch = url.pathname === '/api/coupang-registration-flow/target';
+  if (registrationTargetMatch && request.method === 'GET') {
+    const preferredDraftId = Number(url.searchParams.get('preferredDraftId') || 46);
+    const target = await selectRegistrationTarget(db, { preferredDraftId });
+    sendJson(response, 200, { target });
+    return;
+  }
+
   const registrationSingleMatch = url.pathname.match(/^\/api\/product-drafts\/(\d+)\/coupang-registration$/);
   if (registrationSingleMatch && request.method === 'GET') {
     const registration = await getCoupangRegistration(db, Number(registrationSingleMatch[1]));
@@ -344,6 +353,59 @@ async function handleRequest({ request, response, db, aiSecrets, rootDir }) {
     const salePrice = items[0]?.salePrice ?? null;
     const updated = await recordLiveSnapshot(db, draftId, { statusName: live.data.statusName, totalStockQuantity, salePrice, itemSnapshotJson: items });
     sendJson(response, 200, { registration: updated });
+    return;
+  }
+
+  const categoryPreviewMatch = url.pathname.match(/^\/api\/product-drafts\/(\d+)\/coupang-registration\/category-preview$/);
+  if (categoryPreviewMatch && request.method === 'GET') {
+    const draftId = Number(categoryPreviewMatch[1]);
+    try {
+      const coupangConfig = await loadCoupangConfig(rootDir);
+      const client = new CoupangClient(coupangConfig);
+      const { prediction, categoryMeta, outboundShippingPlace, returnShippingCenter, outboundCandidates, returnCandidates } =
+        await previewCategoryAndShipping(db, draftId, { coupangConfig, clientImpl: client });
+      sendJson(response, 200, { prediction, categoryMeta, outboundShippingPlace, returnShippingCenter, outboundCandidates, returnCandidates });
+    } catch (error) {
+      if (error instanceof CoupangApiError) { sendJson(response, 502, { error: error.message, code: 'COUPANG_API_ERROR', bodyPreview: error.bodyPreview }); return; }
+      if (error.code === 'DRAFT_NOT_FOUND') { sendJson(response, 404, { error: error.message, code: error.code }); return; }
+      throw error;
+    }
+    return;
+  }
+
+  const registrationPreviewMatch = url.pathname.match(/^\/api\/product-drafts\/(\d+)\/coupang-registration\/preview$/);
+  if (registrationPreviewMatch && request.method === 'POST') {
+    const draftId = Number(registrationPreviewMatch[1]);
+    try {
+      const body = await readJson(request);
+      const coupangConfig = await loadCoupangConfig(rootDir);
+      const client = new CoupangClient(coupangConfig);
+      const preview = await buildRegistrationPreview(db, rootDir, draftId, { overrides: body.overrides || {}, coupangConfig, clientImpl: client });
+      sendJson(response, 200, preview);
+    } catch (error) {
+      if (error instanceof CoupangApiError) { sendJson(response, 502, { error: error.message, code: 'COUPANG_API_ERROR', bodyPreview: error.bodyPreview }); return; }
+      if (['DRAFT_PROTECTED', 'IMAGES_NOT_APPROVED', 'DRAFT_NOT_FOUND'].includes(error.code)) { sendJson(response, 409, { error: error.message, code: error.code }); return; }
+      throw error;
+    }
+    return;
+  }
+
+  const registrationCreateMatch = url.pathname.match(/^\/api\/product-drafts\/(\d+)\/coupang-registration\/register$/);
+  if (registrationCreateMatch && request.method === 'POST') {
+    const draftId = Number(registrationCreateMatch[1]);
+    try {
+      const body = await readJson(request);
+      const coupangConfig = await loadCoupangConfig(rootDir);
+      const client = new CoupangClient(coupangConfig);
+      const result = await createDirectRegistration(db, rootDir, draftId, { overrides: body.overrides || {}, confirm: body.confirm === true, coupangConfig, clientImpl: client });
+      sendJson(response, 200, result);
+    } catch (error) {
+      if (error instanceof CoupangApiError) { sendJson(response, 502, { error: error.message, code: 'COUPANG_API_ERROR', bodyPreview: error.bodyPreview }); return; }
+      if (['DRAFT_PROTECTED', 'ALREADY_REGISTERED'].includes(error.code)) { sendJson(response, 409, { error: error.message, code: error.code, existing: error.existing }); return; }
+      if (error.code === 'REGISTRATION_NOT_READY') { sendJson(response, 409, { error: error.message, code: error.code, readiness: error.readiness }); return; }
+      if (error.code === 'RECORD_CONFLICT_AFTER_CREATE' || error.code === 'CREATE_PRODUCT_NO_ID') { sendJson(response, 502, { error: error.message, code: error.code, sellerProductId: error.sellerProductId }); return; }
+      throw error;
+    }
     return;
   }
 
@@ -511,30 +573,6 @@ async function readWorkflowAsset(value,rootDir){const publicRoot=resolve(rootDir
 async function removeWorkflowFiles(rootDir,stored){for(const value of [stored.originalStoredUrl,stored.coupangStoredUrl]){const target=resolve(join(rootDir,'public',String(value).replace(/^\/+/,'')));await rm(target,{force:true}).catch(()=>{});}}
 
 // Approved main/detail images are served locally by this admin server
-// (relative /generated-ai-images/... paths), which Coupang's servers can't
-// reach. Coupang's payload needs real public HTTPS URLs, so each image gets
-// mirrored to R2 first -- same hash-keyed, dedup-on-reupload approach as
-// scripts/coupang-upload-images.mjs, just driven from the DB-approved rows
-// instead of a draft export.
-async function uploadApprovedImagesToR2({ rootDir, draftId, mainImageLocalUrl, detailImageLocalUrls }) {
-  const r2Config = await loadR2Config(rootDir);
-  const client = new R2Client(r2Config);
-  const upload = async (localUrl) => {
-    const buffer = await readWorkflowAsset(localUrl, rootDir);
-    const hash = createHash('sha256').update(buffer).digest('hex').slice(0, 16);
-    const extension = localUrl.split('.').pop();
-    const key = `drafts/${draftId}/coupang/${hash}.${extension}`;
-    const existing = await client.headObject(key);
-    if (existing) return existing.publicUrl;
-    const { publicUrl } = await client.putObject(key, buffer, 'image/jpeg');
-    return publicUrl;
-  };
-  const mainImageUrl = await upload(mainImageLocalUrl);
-  const detailImageUrls = [];
-  for (const localUrl of detailImageLocalUrls) detailImageUrls.push(await upload(localUrl));
-  return { mainImageUrl, detailImageUrls };
-}
-
 async function uploadManualDetailSet({db,request,rootDir,draftId}) {
   const context=await getManualDetailWorkflowContext(db,draftId);
   const received=await receiveDetailMultipart(request,{rootDir,draftId});
@@ -674,10 +712,21 @@ function adminHtml() {
         +'<p><a class="productLink" href="/admin?draftId='+d.id+'">상세보기 →</a></p></div>';
     }
     async function loadRegistrationsView(){
-      const data=await api('/api/coupang-registrations');
+      const [data,targetData]=await Promise.all([api('/api/coupang-registrations'),api('/api/coupang-registration-flow/target')]);
       const el=document.getElementById('specialView');
-      if(!data.registrations.length){el.innerHTML='<p class="muted" style="padding:12px">표시할 항목이 없습니다.</p>';return;}
-      el.innerHTML='<div style="padding:12px">'+data.registrations.map(registrationRowHtml).join('')+'</div>';
+      const banner=targetBannerHtml(targetData.target);
+      const rows=data.registrations.length?data.registrations.map(registrationRowHtml).join(''):'<p class="muted">표시할 항목이 없습니다.</p>';
+      el.innerHTML='<div style="padding:12px">'+banner+rows+'</div>';
+    }
+    function targetBannerHtml(t){
+      if(!t)return'';
+      const preferred=t.preferredDisqualifiedReason
+        ?'<div>추천 대상 #'+t.preferredDraftId+': <span class="badge reasonBlock">제외됨</span> '+escapeHtml(t.preferredDisqualifiedReason)+'</div>'
+        :'<div>추천 대상 #'+t.preferredDraftId+': <span class="badge status">적합</span></div>';
+      const selected=t.noEligibleCandidate
+        ?'<div class="badge reasonBlock">현재 등록 가능한 조건(승인 이미지 보유 + 등록 이력 없음 + draft 64 제외)을 만족하는 상품이 없습니다.</div>'
+        :'<div>선택된 등록 대상: <a class="productLink" href="/admin?draftId='+t.selectedDraftId+'">#'+t.selectedDraftId+' →</a></div>';
+      return '<div class="section"><h3>신규 등록 대상 추천</h3>'+preferred+selected+'</div>';
     }
     function registrationRowHtml(r){
       const linked=r.sellerProductId;
@@ -808,7 +857,20 @@ function adminHtml() {
           ?'<div>상태: '+escapeHtml(reg.liveStatusName||'-')+' / 재고: '+money(reg.liveTotalStockQuantity)+' / 가격: '+money(reg.liveSalePrice)+'</div><div class="muted">마지막 확인: '+escapeHtml(reg.lastSyncedAt)+'</div>'
           :'<div class="muted">아직 조회한 적 없습니다.</div>')
         +'<p><button id="coupangRefreshButton" type="button" '+(linked?'':'disabled')+'>새로고침</button></p></div>';
-      return '<div class="section">'+linkSection+'</div>'+swapSection+snapshotSection;
+      const directRegisterSection=linked?'':directRegisterHtml(imagesReady);
+      return '<div class="section">'+linkSection+'</div>'+directRegisterSection+swapSection+snapshotSection;
+    }
+    function directRegisterHtml(imagesReady){
+      if(!imagesReady)return '<div class="section"><h3>신규 등록 (관리자 화면에서 직접 등록)</h3><div class="muted">승인된 대표이미지/상세이미지 세트가 있어야 진행할 수 있습니다.</div></div>';
+      return '<div class="section" data-direct-register><h3>신규 등록 (관리자 화면에서 직접 등록, requested=false)</h3>'
+        +'<p class="muted">1) 상품정보 분석 탭에서 분석·적용을 먼저 완료하세요. 2) 아래에서 카테고리를 조회하고 3) 미확정 항목을 입력한 뒤 4) 미리보기를 만들고 5) 최종 확인 후 임시등록합니다. 승인 요청은 하지 않습니다.</p>'
+        +'<p><button id="categoryPreviewButton" type="button">1. 쿠팡 카테고리 예측 조회</button></p>'
+        +'<div id="categoryPreviewResult"></div>'
+        +'<div id="registrationOverridesForm"></div>'
+        +'<p><button id="registrationPreviewButton" type="button">2. 등록 미리보기 생성 (R2 업로드 + payload 조립)</button></p>'
+        +'<div id="registrationPreviewResult"></div>'
+        +'<div id="registrationResult" class="muted"></div>'
+        +'</div>';
     }
     function wireCoupangLiveSection(id,draft,container){
       const lookupButton=container.querySelector('#coupangLookupButton');
@@ -846,6 +908,85 @@ function adminHtml() {
       if(refreshButton)refreshButton.onclick=async()=>{
         await api('/api/product-drafts/'+id+'/coupang-registration/refresh',{method:'POST',body:'{}'});
         await loadCoupangLiveSection(id,draft);
+      };
+      wireDirectRegisterSection(id,draft,container);
+    }
+    function collectRegistrationOverrides(section){
+      const val=(fieldId)=>{const el=section.querySelector('#'+fieldId);return el&&el.value.trim()?el.value.trim():null;};
+      const overrides={};
+      if(val('ovMaterial'))overrides.material=val('ovMaterial');
+      if(val('ovDimensions'))overrides.dimensions=val('ovDimensions');
+      if(val('ovSizeAttribute'))overrides.sizeAttributeValue=val('ovSizeAttribute');
+      if(val('ovManufacturer'))overrides.manufacturer=val('ovManufacturer');
+      if(val('ovCountryOfOrigin'))overrides.countryOfOrigin=val('ovCountryOfOrigin');
+      if(val('ovNoticeTemplate'))overrides.noticeCategoryTemplateName=val('ovNoticeTemplate');
+      if(val('ovDisplayCategoryCode'))overrides.displayCategoryCode=Number(val('ovDisplayCategoryCode'));
+      if(val('ovHandlingCaution'))overrides.handlingCaution=val('ovHandlingCaution');
+      return overrides;
+    }
+    function wireDirectRegisterSection(id,draft,container){
+      const section=container.querySelector('[data-direct-register]');
+      if(!section)return;
+      const categoryButton=section.querySelector('#categoryPreviewButton');
+      if(categoryButton)categoryButton.onclick=async()=>{
+        const resultEl=section.querySelector('#categoryPreviewResult');
+        resultEl.innerHTML='<p class="muted">조회 중...</p>';
+        try{
+          const data=await api('/api/product-drafts/'+id+'/coupang-registration/category-preview');
+          resultEl.innerHTML='<div>예측 카테고리: '+escapeHtml(data.prediction.displayCategoryCode||'-')+' / '+escapeHtml(data.prediction.categoryName||'-')+' (resultType='+escapeHtml(data.prediction.predictionResultType||'-')+')</div>'
+            +'<div>출고지("행당"): '+(data.outboundShippingPlace?escapeHtml(data.outboundShippingPlace.shippingPlaceName):'<span class="badge reasonBlock">찾지 못함 -- 수동 확인 필요</span>')+'</div>'
+            +'<div>반품지("행당"): '+(data.returnShippingCenter?escapeHtml(data.returnShippingCenter.shippingPlaceName):'<span class="badge reasonBlock">찾지 못함 -- 수동 확인 필요</span>')+'</div>'
+            +(data.categoryMeta
+              ?('<div>필수 구매옵션: '+escapeHtml(JSON.stringify(data.categoryMeta.mandatoryOptionNames))+'</div><div>고시정보 템플릿 후보: '+data.categoryMeta.noticeCategoryTemplates.map(t=>escapeHtml(t.noticeCategoryName)).join(', ')+'</div>')
+              :'<div class="muted">카테고리 메타 없음</div>');
+          const templates=data.categoryMeta?.noticeCategoryTemplates||[];
+          const templateOptions=templates.map(t=>'<option value="'+attr(t.noticeCategoryName)+'">'+escapeHtml(t.noticeCategoryName)+'</option>').join('');
+          section.querySelector('#registrationOverridesForm').innerHTML='<div class="section"><h4>미확정값 입력 (비워두면 상품정보 분석 적용값/공급처 데이터를 자동 사용)</h4>'
+            +'<label>소재</label><input id="ovMaterial">'
+            +'<label>치수(고시정보 문구)</label><input id="ovDimensions">'
+            +'<label>필수 옵션 사이즈 속성값(짧은 값)</label><input id="ovSizeAttribute">'
+            +'<label>제조자(수입자)</label><input id="ovManufacturer">'
+            +'<label>제조국</label><input id="ovCountryOfOrigin">'
+            +'<label>고시정보 템플릿</label><select id="ovNoticeTemplate"><option value="">(자동 선택: 첫 번째 후보)</option>'+templateOptions+'</select>'
+            +'<label>displayCategoryCode 재지정(선택)</label><input id="ovDisplayCategoryCode" value="'+attr(data.prediction.displayCategoryCode||'')+'">'
+            +'<label>취급시 주의사항</label><input id="ovHandlingCaution">'
+            +'</div>';
+        }catch(error){
+          resultEl.innerHTML='<p class="muted">'+escapeHtml(error.message)+'</p>';
+        }
+      };
+      const previewButton=section.querySelector('#registrationPreviewButton');
+      if(previewButton)previewButton.onclick=async()=>{
+        const resultEl=section.querySelector('#registrationPreviewResult');
+        resultEl.innerHTML='<p class="muted">미리보기 생성 중 (R2 업로드 포함, 시간이 걸릴 수 있습니다)...</p>';
+        try{
+          const overrides=collectRegistrationOverrides(section);
+          const data=await api('/api/product-drafts/'+id+'/coupang-registration/preview',{method:'POST',body:JSON.stringify({overrides})});
+          const readyHtml=data.readiness.ready.map(x=>'<div>✔ '+escapeHtml(x)+'</div>').join('');
+          const missingHtml=data.readiness.missing.map(x=>'<div class="badge reasonReview">'+escapeHtml(x)+'</div>').join('');
+          resultEl.innerHTML='<h4>WING 검수 항목</h4><div><strong>준비됨</strong></div>'+(readyHtml||'<div class="muted">없음</div>')+'<div><strong>미확정</strong></div>'+(missingHtml||'<div class="muted">없음</div>')
+            +'<h4>R2 공개 이미지 URL</h4><div>대표: <a href="'+attr(data.mainImageUrl)+'" target="_blank" rel="noopener noreferrer">'+escapeHtml(data.mainImageUrl)+'</a></div><div>상세: '+data.detailImageUrls.length+'장</div>'
+            +'<h4>payload 미리보기 (requested=false)</h4><pre>'+escapeHtml(JSON.stringify(data.payload,null,2))+'</pre>'
+            +'<p><button id="registerConfirmButton" type="button" '+(data.readiness.blocked?'disabled':'')+'>3. 최종 확인 후 임시등록 (requested=false, 승인요청 아님)</button></p>'
+            +(data.readiness.blocked?'<div class="muted">미확정 항목이 남아있어 등록 버튼이 비활성화되어 있습니다. 위 입력값을 채운 뒤 다시 미리보기를 생성하세요.</div>':'');
+          const registerButton=section.querySelector('#registerConfirmButton');
+          if(registerButton)registerButton.onclick=async()=>{
+            if(!confirm('실제 쿠팡에 상품을 생성합니다 (requested=false, 승인요청 아님). sellerProductId가 새로 발급되며 되돌릴 수 없습니다. 계속할까요?'))return;
+            const overridesNow=collectRegistrationOverrides(section);
+            const registerResultEl=section.querySelector('#registrationResult');
+            registerResultEl.textContent='등록 중...';
+            try{
+              const registered=await api('/api/product-drafts/'+id+'/coupang-registration/register',{method:'POST',body:JSON.stringify({overrides:overridesNow,confirm:true})});
+              registerResultEl.innerHTML='<div>등록 완료: sellerProductId='+escapeHtml(registered.sellerProductId)+' / requested=false</div>';
+              await api('/api/product-drafts/'+id+'/coupang-registration/refresh',{method:'POST',body:'{}'});
+              await loadCoupangLiveSection(id,draft);
+            }catch(error){
+              registerResultEl.innerHTML='<p class="muted">'+escapeHtml(error.message)+'</p>';
+            }
+          };
+        }catch(error){
+          resultEl.innerHTML='<p class="muted">'+escapeHtml(error.message)+'</p>';
+        }
       };
     }
     const ANALYSIS_ERROR_LABELS={CODEX_NOT_AVAILABLE:'Codex 미설치',CODEX_LOGIN_REQUIRED:'Codex 로그인 필요/만료',CODEX_RATE_LIMIT:'Codex 사용량 제한',CODEX_TIMEOUT:'Codex 응답 시간 초과',CODEX_INVALID_JSON:'Codex 결과 JSON 오류',CODEX_FAILED:'Codex 분석 실패',PYTHON_NOT_AVAILABLE:'Python 미설치',PYTHON_TIMEOUT:'Python 응답 시간 초과',PYTHON_INVALID_JSON:'Python 결과 JSON 오류',PYTHON_FAILED:'Python 분석 실패',NO_DETAIL_IMAGES:'로컬 상세이미지 없음',UNEXPECTED_ERROR:'예상치 못한 오류',ANALYSIS_FILES_MISSING:'분석 결과 없음 (먼저 실행하세요)'};

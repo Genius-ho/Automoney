@@ -1,0 +1,286 @@
+import assert from 'node:assert/strict';
+import test from 'node:test';
+
+import {
+  PROTECTED_DRAFT_ID,
+  SELLER_FIXED_CONFIG,
+  buildRegistrationPreview,
+  createDirectRegistration,
+  selectRegistrationTarget,
+} from '../src/coupang-registration-flow.mjs';
+
+function makeDraftsDb(ids) {
+  return {
+    async query(sql, params = []) {
+      if (sql.includes('from product_drafts where id <> $1 order by id')) {
+        return { rows: ids.filter((id) => id !== params[0]).map((id) => ({ id })) };
+      }
+      if (sql.includes('select supplier_product_id from product_drafts')) return { rows: [{ supplier_product_id: 900 }] };
+      if (sql.includes('select raw_json from supplier_products')) {
+        return { rows: [{ raw_json: { domeggook: { detail: { manufacturer: '공급처제조사', country: '수입산_아시아_중국', model: null, size: null, weight: null } } } }] };
+      }
+      throw new Error(`unhandled query: ${sql}`);
+    },
+  };
+}
+
+function fakeDraft(overrides = {}) {
+  return {
+    id: 46,
+    optimizedTitle: '무타공 수납 정리함 슬라이드 레일선반',
+    sellerProductName: '무타공 수납 정리함 슬라이드 레일선반',
+    displayProductName: '무타공 수납 정리함 슬라이드 레일선반',
+    mainImages: ['/generated-ai-images/drafts/46/main.jpg'],
+    salePrice: 33570,
+    shippingFee: 0,
+    registrationOptimization: { shippingPolicies: [{ returnShippingFee: 5000 }] },
+    options: [
+      { optionName: '색상', optionValue: '아이보리', additionalPrice: 0, stockQuantity: 10 },
+    ],
+    ...overrides,
+  };
+}
+
+const CATEGORY_META = {
+  displayCategoryCode: 71691,
+  attributes: [{ attributeTypeName: '색상', required: 'MANDATORY' }],
+  mandatoryOptionNames: ['색상'],
+  noticeCategoryTemplates: [{ noticeCategoryName: '기타 재화', noticeCategoryDetailNames: [{ noticeCategoryDetailName: '종류' }] }],
+  requiredDocumentNames: [],
+  certifications: [],
+  mandatoryCertificationNames: [],
+  allowedOfferConditions: [],
+};
+
+function fakeCategoryAdapter({ prediction = { displayCategoryCode: 71691, categoryName: '기타 재화', predictionResultType: 'AUTO' }, categoryMeta = CATEGORY_META } = {}) {
+  return {
+    async predictCategory() { return prediction; },
+    async getCategoryMeta() { return categoryMeta; },
+  };
+}
+
+function fakeCoupangClient({ createProductResult = { code: 'SUCCESS', data: '99999999999' }, outbound = [{ shippingPlaceName: '행당 출고지', outboundShippingPlaceCode: 111, placeAddresses: [{ companyContactNumber: '010-0000-0000' }] }], returnCenters = [{ shippingPlaceName: '행당 반품지', returnCenterCode: '222', placeAddresses: [{}] }] } = {}) {
+  const calls = { createProduct: 0, requestApproval: 0 };
+  return {
+    calls,
+    async listOutboundShippingPlaces() { return { data: outbound }; },
+    async listReturnShippingCenters() { return { data: returnCenters }; },
+    async createProduct(payload) { calls.createProduct += 1; this.lastPayload = payload; return createProductResult; },
+  };
+}
+
+function commonPreviewDeps(overridesToDeps = {}) {
+  return {
+    coupangConfig: { vendorId: 'A00000000', vendorUserId: 'seller1' },
+    clientImpl: fakeCoupangClient(),
+    categoryAdapterImpl: fakeCategoryAdapter(),
+    exportProductDraftImpl: async () => fakeDraft(),
+    getAppliedAnalysisImpl: async () => ({
+      material: '아크릴, 벨벳', dimensions: '23.5cm x 13.5cm x 10.5cm',
+      manufacturer: '분석확정제조사', countryOfOrigin: '수입산_아시아_중국',
+      handlingPrecautions: null, searchTags: ['태그1', '태그2'],
+    }),
+    getApprovedManualMainImageImpl: async () => ({ coupangStoredUrl: '/generated-ai-images/drafts/46/main/manual/main.jpg' }),
+    getApprovedManualDetailSetImpl: async () => ({
+      images: Array.from({ length: 10 }, (_, i) => ({ normalizedStoredUrl: `/generated-ai-images/drafts/46/detail/manual/r1-v1/detail-${i + 1}.jpg` })),
+    }),
+    uploadImpl: async ({ detailImageLocalUrls }) => ({
+      mainImageUrl: 'https://pub.example/drafts/46/coupang/main.jpg',
+      detailImageUrls: detailImageLocalUrls.map((_, i) => `https://pub.example/drafts/46/coupang/detail-${i + 1}.jpg`),
+    }),
+    ...overridesToDeps,
+  };
+}
+
+test('selectRegistrationTarget falls through to the next eligible draft when the preferred one already has a registration', async () => {
+  const db = makeDraftsDb([46, 47, 50]);
+  const registrations = { 46: { status: 'approval_requested', sellerProductId: '16301910938' } };
+  const target = await selectRegistrationTarget(db, {
+    preferredDraftId: 46,
+    getCoupangRegistrationImpl: async (_db, id) => registrations[id] || null,
+    getApprovedManualMainImageImpl: async () => ({ ok: true }),
+    getApprovedManualDetailSetImpl: async () => ({ ok: true }),
+  });
+  assert.equal(target.preferredDraftId, 46);
+  assert.match(target.preferredDisqualifiedReason, /이미 쿠팡 등록 이력이 있습니다/);
+  assert.equal(target.selectedDraftId, 47);
+  assert.equal(target.noEligibleCandidate, false);
+});
+
+test('selectRegistrationTarget reports no eligible candidate when nothing has approved images', async () => {
+  const db = makeDraftsDb([46, 47]);
+  const target = await selectRegistrationTarget(db, {
+    preferredDraftId: 46,
+    getCoupangRegistrationImpl: async () => null,
+    getApprovedManualMainImageImpl: async () => null,
+    getApprovedManualDetailSetImpl: async () => null,
+  });
+  assert.equal(target.selectedDraftId, null);
+  assert.equal(target.noEligibleCandidate, true);
+  assert.match(target.preferredDisqualifiedReason, /승인된 대표이미지/);
+});
+
+test('selectRegistrationTarget never selects the protected draft 64, even if explicitly requested as preferred', async () => {
+  const db = makeDraftsDb([]);
+  const target = await selectRegistrationTarget(db, {
+    preferredDraftId: PROTECTED_DRAFT_ID,
+    getCoupangRegistrationImpl: async () => null,
+    getApprovedManualMainImageImpl: async () => null,
+    getApprovedManualDetailSetImpl: async () => null,
+  });
+  assert.notEqual(target.selectedDraftId, PROTECTED_DRAFT_ID);
+  assert.equal(target.selectedDraftId, null);
+  assert.match(target.preferredDisqualifiedReason, /보호 대상/);
+});
+
+test('buildRegistrationPreview refuses draft 64 immediately, without touching any dependency', async () => {
+  const db = makeDraftsDb([]);
+  await assert.rejects(
+    () => buildRegistrationPreview(db, '/repo', PROTECTED_DRAFT_ID, commonPreviewDeps()),
+    (error) => error.code === 'DRAFT_PROTECTED',
+  );
+});
+
+test('buildRegistrationPreview refuses a draft with no approved images', async () => {
+  const db = makeDraftsDb([]);
+  await assert.rejects(
+    () => buildRegistrationPreview(db, '/repo', 46, commonPreviewDeps({ getApprovedManualMainImageImpl: async () => null })),
+    (error) => error.code === 'IMAGES_NOT_APPROVED',
+  );
+});
+
+test('buildRegistrationPreview assembles a requested=false payload using applied-analysis values and seller-fixed config, with a clean (non-blocked) readiness report', async () => {
+  const db = makeDraftsDb([]);
+  const preview = await buildRegistrationPreview(db, '/repo', 46, commonPreviewDeps());
+
+  assert.equal(preview.payload.requested, false);
+  assert.equal(preview.payload.brand, SELLER_FIXED_CONFIG.brand);
+  assert.equal(preview.payload.manufacture, SELLER_FIXED_CONFIG.manufacture);
+  assert.equal(preview.payload.deliveryCompanyCode, SELLER_FIXED_CONFIG.deliveryCompanyCode);
+  assert.equal(preview.payload.remoteAreaDeliverable, 'N');
+  assert.equal(preview.payload.outboundShippingPlaceCode, 111);
+  assert.equal(preview.payload.returnCenterCode, '222');
+  assert.equal(preview.payload.items.length, 1);
+  assert.equal(preview.payload.items[0].itemName, '아이보리');
+  assert.equal(preview.payload.items[0].stockQuantity, 10);
+  assert.equal(preview.mainImageUrl, 'https://pub.example/drafts/46/coupang/main.jpg');
+  assert.equal(preview.detailImageUrls.length, 10);
+  assert.deepEqual(preview.readiness.missing, []);
+  assert.equal(preview.readiness.blocked, false);
+
+  const noticeMaterial = preview.payload.items[0].notices.find((n) => n.noticeCategoryDetailName === '종류');
+  assert.ok(noticeMaterial);
+});
+
+test('buildRegistrationPreview overrides win over applied-analysis autofill', async () => {
+  const db = makeDraftsDb([]);
+  const preview = await buildRegistrationPreview(db, '/repo', 46, {
+    ...commonPreviewDeps(),
+    overrides: { material: '사용자 지정 소재' },
+  });
+  // material only feeds the 소재 notice field when the category's chosen
+  // template actually includes it; assert indirectly via readiness instead,
+  // which always reports the resolved value regardless of template shape.
+  assert.ok(preview.readiness.ready.some((line) => line.includes('사용자 지정 소재')));
+});
+
+test('buildRegistrationPreview reports readiness.blocked when the category has no mapped attributes/manufacturer', async () => {
+  const db = makeDraftsDb([]);
+  const preview = await buildRegistrationPreview(db, '/repo', 46, commonPreviewDeps({
+    categoryAdapterImpl: fakeCategoryAdapter({ prediction: { displayCategoryCode: null, categoryName: null, predictionResultType: 'NONE' } }),
+    getAppliedAnalysisImpl: async () => null,
+  }));
+  assert.equal(preview.readiness.blocked, true);
+  assert.ok(preview.readiness.missing.length > 0);
+});
+
+test('createDirectRegistration refuses draft 64 without calling the Coupang client at all', async () => {
+  const db = makeDraftsDb([]);
+  const client = fakeCoupangClient();
+  await assert.rejects(
+    () => createDirectRegistration(db, '/repo', PROTECTED_DRAFT_ID, { confirm: true, clientImpl: client, buildRegistrationPreviewImpl: async () => { throw new Error('should not be called'); } }),
+    (error) => error.code === 'DRAFT_PROTECTED',
+  );
+  assert.equal(client.calls.createProduct, 0);
+});
+
+test('createDirectRegistration blocks on an existing registration (dedup) and never builds a payload or calls the API', async () => {
+  const db = makeDraftsDb([]);
+  const client = fakeCoupangClient();
+  let previewCalled = false;
+  await assert.rejects(
+    () => createDirectRegistration(db, '/repo', 46, {
+      confirm: true,
+      clientImpl: client,
+      getCoupangRegistrationImpl: async () => ({ status: 'created', sellerProductId: '123' }),
+      buildRegistrationPreviewImpl: async () => { previewCalled = true; },
+    }),
+    (error) => error.code === 'ALREADY_REGISTERED',
+  );
+  assert.equal(previewCalled, false);
+  assert.equal(client.calls.createProduct, 0);
+});
+
+test('createDirectRegistration with confirm=false (default) returns a dry-run payload and never calls createProduct', async () => {
+  const db = makeDraftsDb([]);
+  const client = fakeCoupangClient();
+  const result = await createDirectRegistration(db, '/repo', 46, {
+    confirm: false,
+    coupangConfig: { vendorId: 'A00000000' },
+    clientImpl: client,
+    getCoupangRegistrationImpl: async () => null,
+    buildRegistrationPreviewImpl: async () => ({ payload: { requested: false }, readiness: { blocked: false, ready: [], missing: [] }, requestHash: 'abc' }),
+  });
+  assert.equal(result.dryRun, true);
+  assert.equal(client.calls.createProduct, 0);
+});
+
+test('createDirectRegistration refuses to call createProduct while readiness is blocked, even with confirm=true', async () => {
+  const db = makeDraftsDb([]);
+  const client = fakeCoupangClient();
+  await assert.rejects(
+    () => createDirectRegistration(db, '/repo', 46, {
+      confirm: true,
+      clientImpl: client,
+      getCoupangRegistrationImpl: async () => null,
+      buildRegistrationPreviewImpl: async () => ({ payload: { requested: false }, readiness: { blocked: true, ready: [], missing: ['제조자 미확정'] }, requestHash: 'abc' }),
+    }),
+    (error) => error.code === 'REGISTRATION_NOT_READY',
+  );
+  assert.equal(client.calls.createProduct, 0);
+});
+
+test('createDirectRegistration with confirm=true calls createProduct exactly once, records sellerProductId, requested=false, and never calls requestApproval', async () => {
+  const db = makeDraftsDb([]);
+  const client = fakeCoupangClient({ createProductResult: { code: 'SUCCESS', data: '16301999999' } });
+  let recorded = null;
+  const result = await createDirectRegistration(db, '/repo', 46, {
+    confirm: true,
+    clientImpl: client,
+    getCoupangRegistrationImpl: async () => null,
+    buildRegistrationPreviewImpl: async () => ({ payload: { requested: false, sellerProductName: 'test product' }, readiness: { blocked: false, ready: [], missing: [] }, requestHash: 'hash123' }),
+    recordDirectRegistrationImpl: async (_db, draftId, args) => { recorded = { draftId, ...args }; return { productDraftId: draftId, sellerProductId: args.sellerProductId, status: 'created' }; },
+  });
+  assert.equal(client.calls.createProduct, 1);
+  assert.equal('requestApproval' in client, false);
+  assert.equal(result.dryRun, false);
+  assert.equal(result.sellerProductId, '16301999999');
+  assert.equal(recorded.sellerProductId, '16301999999');
+  assert.equal(recorded.requestHash, 'hash123');
+  assert.equal(result.payload.requested, false);
+});
+
+test('createDirectRegistration surfaces RECORD_CONFLICT_AFTER_CREATE loudly instead of silently losing a just-created live listing', async () => {
+  const db = makeDraftsDb([]);
+  const client = fakeCoupangClient({ createProductResult: { code: 'SUCCESS', data: '16302000000' } });
+  await assert.rejects(
+    () => createDirectRegistration(db, '/repo', 46, {
+      confirm: true,
+      clientImpl: client,
+      getCoupangRegistrationImpl: async () => null,
+      buildRegistrationPreviewImpl: async () => ({ payload: { requested: false }, readiness: { blocked: false, ready: [], missing: [] }, requestHash: 'hash' }),
+      recordDirectRegistrationImpl: async () => null,
+    }),
+    (error) => error.code === 'RECORD_CONFLICT_AFTER_CREATE' && error.sellerProductId === '16302000000',
+  );
+});
