@@ -9,6 +9,7 @@ import { getAppliedAnalysis } from './product-analysis-orchestrator.mjs';
 import { getApprovedManualMainImage } from './manual-ai/workflow-store.mjs';
 import { getApprovedManualDetailSet } from './manual-ai/detail-workflow-store.mjs';
 import { getCoupangRegistration, recordDirectRegistration } from './coupang-registration-store.mjs';
+import { getSellerShippingSettings } from './coupang-seller-settings-store.mjs';
 
 // draft 64 / sellerProductId 16301574570 is the one already-live, already
 // human-verified listing this whole feature branch must never touch --
@@ -25,14 +26,13 @@ export const SELLER_FIXED_CONFIG = {
   brand: '와우픽',
   manufacture: '와우픽',
   manufacturerFallback: '와우픽',
-  shippingPlaceName: '행당',
   deliveryCompanyCode: 'CJGLS',
   remoteAreaDeliverable: false,
   warrantyStandard: '관련 법 및 소비자분쟁해결기준에 따름',
   saleEndedAt: '2099-12-31T23:59:59',
 };
 
-function extractList(raw) {
+export function extractList(raw) {
   const payload = raw?.data ?? raw;
   if (Array.isArray(payload)) return payload;
   if (Array.isArray(payload?.content)) return payload.content;
@@ -40,8 +40,50 @@ function extractList(raw) {
   return [];
 }
 
-function findShippingPlaceByName(list, name) {
-  return list.find((place) => String(place?.shippingPlaceName || '').includes(name)) || null;
+// Outbound/return shipping places are never matched by display name --
+// Coupang's own naming is ambiguous under this vendor account (two outbound
+// places are both literally named "행당" at different addresses, and the
+// return center that is actually the 행당 location is named "반품지1").
+// The admin confirms the exact code once (coupang_seller_settings), and
+// every registration after that just re-validates the stored code is still
+// present and usable in a fresh live call -- never re-derives it from a name.
+export async function validateSellerShippingSettings(db, { clientImpl, coupangConfig, getSellerShippingSettingsImpl = getSellerShippingSettings } = {}) {
+  const settings = await getSellerShippingSettingsImpl(db);
+  if (!settings.outboundShippingPlaceCode || !settings.returnCenterCode) {
+    return {
+      configured: false, blocked: true,
+      reasons: ['공통 설정에서 출고지/반품지를 먼저 확인하고 저장하세요 (표시 이름이 아니라 코드로 저장됩니다).'],
+      outboundShippingPlace: null, returnShippingCenter: null, settings,
+    };
+  }
+
+  const client = clientImpl || new CoupangClient(coupangConfig);
+  const [outboundRaw, returnRaw] = await Promise.all([
+    client.listOutboundShippingPlaces(),
+    client.listReturnShippingCenters(),
+  ]);
+  const outboundCandidates = extractList(outboundRaw);
+  const returnCandidates = extractList(returnRaw);
+
+  const outboundShippingPlace = outboundCandidates.find((place) => String(place?.outboundShippingPlaceCode) === settings.outboundShippingPlaceCode) || null;
+  const returnShippingCenter = returnCandidates.find((center) => String(center?.returnCenterCode) === settings.returnCenterCode) || null;
+
+  const reasons = [];
+  if (!outboundShippingPlace) reasons.push(`설정된 출고지 코드(${settings.outboundShippingPlaceCode})가 더 이상 API 목록에 없습니다 -- 공통 설정을 다시 확인하세요.`);
+  else if (outboundShippingPlace.usable === false) reasons.push(`설정된 출고지 코드(${settings.outboundShippingPlaceCode})가 현재 usable=false 상태입니다.`);
+  if (!returnShippingCenter) reasons.push(`설정된 반품지 코드(${settings.returnCenterCode})가 더 이상 API 목록에 없습니다 -- 공통 설정을 다시 확인하세요.`);
+  else if (returnShippingCenter.usable === false) reasons.push(`설정된 반품지 코드(${settings.returnCenterCode})가 현재 usable=false 상태입니다.`);
+
+  return {
+    configured: true,
+    blocked: reasons.length > 0,
+    reasons,
+    outboundShippingPlace,
+    returnShippingCenter,
+    settings,
+    outboundCandidates,
+    returnCandidates,
+  };
 }
 
 // Checks whether one draft is eligible to enter this flow: not the protected
@@ -118,7 +160,7 @@ export async function selectRegistrationTarget(db, {
 // Step 3: live Coupang category prediction + metadata + shipping-place
 // lookup for one draft. Read-only against Coupang (same calls
 // scripts/coupang-preflight.mjs already makes), nothing persisted.
-export async function previewCategoryAndShipping(db, draftId, { coupangConfig, clientImpl, categoryAdapterImpl, exportProductDraftImpl = exportProductDraft } = {}) {
+export async function previewCategoryAndShipping(db, draftId, { coupangConfig, clientImpl, categoryAdapterImpl, exportProductDraftImpl = exportProductDraft, getSellerShippingSettingsImpl = getSellerShippingSettings } = {}) {
   const draft = await exportProductDraftImpl(db, draftId, 'coupang');
   if (!draft) throw Object.assign(new Error('Product draft not found'), { code: 'DRAFT_NOT_FOUND' });
 
@@ -129,28 +171,22 @@ export async function previewCategoryAndShipping(db, draftId, { coupangConfig, c
   const prediction = await categoryAdapter.predictCategory(productName);
   const categoryMeta = prediction.displayCategoryCode ? await categoryAdapter.getCategoryMeta(prediction.displayCategoryCode) : null;
 
-  const [outboundRaw, returnRaw] = await Promise.all([
-    client.listOutboundShippingPlaces(),
-    client.listReturnShippingCenters(),
-  ]);
-  const outboundCandidates = extractList(outboundRaw);
-  const returnCandidates = extractList(returnRaw);
+  const shipping = await validateSellerShippingSettings(db, { clientImpl: client, getSellerShippingSettingsImpl });
 
   return {
     draft,
     prediction,
     categoryMeta,
-    outboundShippingPlace: findShippingPlaceByName(outboundCandidates, SELLER_FIXED_CONFIG.shippingPlaceName),
-    returnShippingCenter: findShippingPlaceByName(returnCandidates, SELLER_FIXED_CONFIG.shippingPlaceName),
-    outboundCandidates,
-    returnCandidates,
+    outboundShippingPlace: shipping.outboundShippingPlace,
+    returnShippingCenter: shipping.returnShippingCenter,
+    shippingSettings: shipping,
   };
 }
 
 // WING-검수 style ready/missing report, adapted from the read-only
 // scripts/coupang-preflight.mjs logic so both surfaces agree on what
 // "ready to register" means.
-function buildReadinessReport({ draft, prediction, categoryMeta, optionMapping, outboundShippingPlace, returnShippingCenter, material, verifiedSize, manufacturer, countryOfOrigin, mainImageUrl, detailImageUrls, noticeCategoryTemplateName }) {
+function buildReadinessReport({ draft, prediction, categoryMeta, optionMapping, outboundShippingPlace, returnShippingCenter, shippingSettings, material, verifiedSize, manufacturer, countryOfOrigin, mainImageUrl, detailImageUrls, noticeCategoryTemplateName }) {
   const ready = [];
   const missing = [];
 
@@ -181,10 +217,9 @@ function buildReadinessReport({ draft, prediction, categoryMeta, optionMapping, 
   if (manufacturer) ready.push(`제조자: ${manufacturer}`); else missing.push('제조자 (고시정보 필수)');
   if (countryOfOrigin) ready.push(`제조국: ${countryOfOrigin}`); else missing.push('제조국 (고시정보 필수)');
 
-  if (outboundShippingPlace) ready.push(`출고지: ${outboundShippingPlace.shippingPlaceName}`);
-  else missing.push(`출고지 "${SELLER_FIXED_CONFIG.shippingPlaceName}" 후보를 찾지 못함 -- 수동 선택 필요`);
-  if (returnShippingCenter) ready.push(`반품지: ${returnShippingCenter.shippingPlaceName}`);
-  else missing.push(`반품지 "${SELLER_FIXED_CONFIG.shippingPlaceName}" 후보를 찾지 못함 -- 수동 선택 필요`);
+  if (outboundShippingPlace) ready.push(`출고지: ${outboundShippingPlace.shippingPlaceName} (code=${outboundShippingPlace.outboundShippingPlaceCode})`);
+  if (returnShippingCenter) ready.push(`반품지: ${returnShippingCenter.shippingPlaceName} (code=${returnShippingCenter.returnCenterCode})`);
+  for (const reason of shippingSettings?.reasons || []) missing.push(reason);
 
   return { ready, missing, blocked: missing.length > 0 };
 }
@@ -206,11 +241,12 @@ export async function buildRegistrationPreview(db, rootDir, draftId, {
   getAppliedAnalysisImpl = getAppliedAnalysis,
   getApprovedManualMainImageImpl = getApprovedManualMainImage,
   getApprovedManualDetailSetImpl = getApprovedManualDetailSet,
+  getSellerShippingSettingsImpl = getSellerShippingSettings,
 } = {}) {
   if (draftId === PROTECTED_DRAFT_ID) throw Object.assign(new Error('draft 64는 보호 대상입니다'), { code: 'DRAFT_PROTECTED' });
 
-  const { draft, prediction, categoryMeta, outboundShippingPlace, returnShippingCenter } =
-    await previewCategoryAndShipping(db, draftId, { coupangConfig, clientImpl, categoryAdapterImpl, exportProductDraftImpl });
+  const { draft, prediction, categoryMeta, outboundShippingPlace, returnShippingCenter, shippingSettings } =
+    await previewCategoryAndShipping(db, draftId, { coupangConfig, clientImpl, categoryAdapterImpl, exportProductDraftImpl, getSellerShippingSettingsImpl });
 
   const appliedAnalysis = await getAppliedAnalysisImpl(db, draftId);
   const mainImage = await getApprovedManualMainImageImpl(db, draftId);
@@ -293,7 +329,7 @@ export async function buildRegistrationPreview(db, rootDir, draftId, {
   });
 
   const readiness = buildReadinessReport({
-    draft, prediction, categoryMeta, optionMapping, outboundShippingPlace, returnShippingCenter,
+    draft, prediction, categoryMeta, optionMapping, outboundShippingPlace, returnShippingCenter, shippingSettings,
     material, verifiedSize, manufacturer, countryOfOrigin, mainImageUrl, detailImageUrls, noticeCategoryTemplateName,
   });
 

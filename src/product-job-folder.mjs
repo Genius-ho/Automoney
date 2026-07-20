@@ -28,6 +28,26 @@ export function getJobPaths(jobDir, draftId) {
   };
 }
 
+// Codex image generation gets its own subtree under the same per-draft job
+// root as the analysis pipeline (draft별 작업 폴더 재사용), rather than a
+// separate top-level folder, so nothing else needs to change to keep every
+// Codex artifact for one draft under one place -- but its own input/log/
+// output filenames never collide with the analysis pipeline's, since they
+// live one level deeper under `images/`.
+export function getImageGenerationJobPaths(jobDir, draftId) {
+  const root = join(getJobPaths(jobDir, draftId).root, 'images');
+  const inputDir = join(root, 'input');
+  return {
+    root,
+    inputDir,
+    generatedMainDir: join(root, 'generated-main'),
+    generatedDetailDir: join(root, 'generated-detail'),
+    logsDir: join(root, 'logs'),
+    mainCodexLogPath: join(root, 'logs', 'codex-main-image.log'),
+    detailCodexLogPath: join(root, 'logs', 'codex-detail-images.log'),
+  };
+}
+
 // Each draft gets its own isolated folder tree; nothing here ever touches
 // another draft's files (spec section 3: "다른 상품 파일 접근 금지").
 export async function createProductJobFolder({ jobDir, draftId }) {

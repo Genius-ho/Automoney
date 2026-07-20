@@ -7,7 +7,10 @@ import {
   buildRegistrationPreview,
   createDirectRegistration,
   selectRegistrationTarget,
+  validateSellerShippingSettings,
 } from '../src/coupang-registration-flow.mjs';
+
+const CONFIGURED_SHIPPING_SETTINGS = { outboundShippingPlaceCode: '111', outboundShippingPlaceName: '행당 출고지', returnCenterCode: '222', returnCenterName: '반품지1' };
 
 function makeDraftsDb(ids) {
   return {
@@ -75,6 +78,7 @@ function commonPreviewDeps(overridesToDeps = {}) {
     clientImpl: fakeCoupangClient(),
     categoryAdapterImpl: fakeCategoryAdapter(),
     exportProductDraftImpl: async () => fakeDraft(),
+    getSellerShippingSettingsImpl: async () => CONFIGURED_SHIPPING_SETTINGS,
     getAppliedAnalysisImpl: async () => ({
       material: '아크릴, 벨벳', dimensions: '23.5cm x 13.5cm x 10.5cm',
       manufacturer: '분석확정제조사', countryOfOrigin: '수입산_아시아_중국',
@@ -91,6 +95,57 @@ function commonPreviewDeps(overridesToDeps = {}) {
     ...overridesToDeps,
   };
 }
+
+test('validateSellerShippingSettings blocks when no code has ever been confirmed and saved', async () => {
+  const result = await validateSellerShippingSettings({}, {
+    clientImpl: fakeCoupangClient(),
+    getSellerShippingSettingsImpl: async () => ({ outboundShippingPlaceCode: null, returnCenterCode: null }),
+  });
+  assert.equal(result.configured, false);
+  assert.equal(result.blocked, true);
+  assert.match(result.reasons[0], /먼저 확인하고 저장/);
+});
+
+test('validateSellerShippingSettings matches the stored code exactly, never by display name', async () => {
+  const client = fakeCoupangClient({
+    outbound: [
+      { shippingPlaceName: '행당', outboundShippingPlaceCode: 25045458, usable: true, placeAddresses: [{ returnAddress: '서울특별시 성동구 행당로 79' }] },
+      { shippingPlaceName: '행당', outboundShippingPlaceCode: 24466172, usable: true, placeAddresses: [{ returnAddress: '서울특별시 성동구 행당동 347' }] },
+    ],
+    returnCenters: [
+      { shippingPlaceName: '-', returnCenterCode: '1002571652', usable: true, placeAddresses: [{}] },
+      { shippingPlaceName: '반품지1 ', returnCenterCode: '1002401151', usable: true, placeAddresses: [{ returnAddress: '서울특별시 성동구 행당로 79' }] },
+    ],
+  });
+  const result = await validateSellerShippingSettings({}, {
+    clientImpl: client,
+    getSellerShippingSettingsImpl: async () => ({ outboundShippingPlaceCode: '24466172', returnCenterCode: '1002401151' }),
+  });
+  assert.equal(result.blocked, false);
+  assert.equal(result.outboundShippingPlace.outboundShippingPlaceCode, 24466172);
+  assert.equal(result.returnShippingCenter.returnCenterCode, '1002401151');
+});
+
+test('validateSellerShippingSettings blocks when the saved code has disappeared from the live list', async () => {
+  const result = await validateSellerShippingSettings({}, {
+    clientImpl: fakeCoupangClient({ outbound: [], returnCenters: [{ returnCenterCode: '222', usable: true, placeAddresses: [{}] }] }),
+    getSellerShippingSettingsImpl: async () => CONFIGURED_SHIPPING_SETTINGS,
+  });
+  assert.equal(result.blocked, true);
+  assert.match(result.reasons.join(' '), /더 이상 API 목록에 없습니다/);
+});
+
+test('validateSellerShippingSettings blocks when the saved code is present but usable=false', async () => {
+  const result = await validateSellerShippingSettings({}, {
+    clientImpl: fakeCoupangClient({
+      outbound: [{ outboundShippingPlaceCode: 111, usable: false, placeAddresses: [{}] }],
+      returnCenters: [{ returnCenterCode: '222', usable: true, placeAddresses: [{}] }],
+    }),
+    getSellerShippingSettingsImpl: async () => CONFIGURED_SHIPPING_SETTINGS,
+  });
+  assert.equal(result.blocked, true);
+  assert.match(result.reasons.join(' '), /usable=false/);
+});
 
 test('selectRegistrationTarget falls through to the next eligible draft when the preferred one already has a registration', async () => {
   const db = makeDraftsDb([46, 47, 50]);

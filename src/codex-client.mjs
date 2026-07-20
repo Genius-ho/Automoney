@@ -146,3 +146,75 @@ export async function runCodexAnalysis({ config, cwd, images = [], schemaPath, o
     releaseSlot();
   }
 }
+
+// Runs one non-interactive Codex turn that is expected to call Codex's own
+// built-in image-generation tool and save file(s) somewhere under `cwd`,
+// rather than return structured JSON -- so unlike runCodexAnalysis there is
+// no --output-schema/-o here. The prompt itself must tell Codex exactly
+// where to save each image (relative to `cwd`); the caller is responsible
+// for scanning the expected output directory afterward and deciding whether
+// enough files actually landed. Shares the same acquireSlot/releaseSlot
+// concurrency gate as runCodexAnalysis, so an image-generation run and a
+// text-analysis run for two different drafts never execute concurrently.
+export async function runCodexImagePrompt({ config, cwd, images = [], prompt, timeoutMs, spawnImpl }) {
+  const executable = config?.executable || 'codex';
+  const sandbox = config?.sandbox || 'workspace-write';
+  const effectiveTimeoutMs = timeoutMs || config?.imageTimeoutMs || 600_000;
+  const limit = config?.concurrency || 1;
+
+  await acquireSlot(limit);
+  try {
+    const args = ['exec', '--skip-git-repo-check', '-s', sandbox, '-C', cwd];
+    for (const imagePath of images) args.push('-i', imagePath);
+    args.push('-');
+
+    const result = await new Promise((resolvePromise) => {
+      let child;
+      try {
+        child = spawnCodex(executable, args, { cwd, spawnImpl });
+      } catch (error) {
+        resolvePromise({ ok: false, code: null, log: error.message || String(error), timedOut: false });
+        return;
+      }
+      let log = '';
+      let settled = false;
+      const finish = (value) => {
+        if (settled) return;
+        settled = true;
+        clearTimeout(timer);
+        resolvePromise(value);
+      };
+      const timer = setTimeout(() => {
+        child.kill();
+        finish({ ok: false, code: null, log, timedOut: true });
+      }, effectiveTimeoutMs);
+      child.on('error', (error) => finish({ ok: false, code: null, log: (log += `\n${error.message}`), timedOut: false }));
+      child.stdout?.on('data', (chunk) => { log += chunk; });
+      child.stderr?.on('data', (chunk) => { log += chunk; });
+      child.on('close', (code) => finish({ ok: code === 0, code, log, timedOut: false }));
+      child.stdin?.write(prompt);
+      child.stdin?.end();
+    });
+
+    return { success: result.ok, log: result.log, timedOut: result.timedOut, exitCode: result.code };
+  } finally {
+    releaseSlot();
+  }
+}
+
+// Answers "can this Codex CLI actually call its own image-generation tool
+// right now" without guessing -- reads the real `codex features list`
+// output for this installation/login rather than assuming stable==available
+// for every account. Never throws; an unreadable/unexpected output is
+// reported as unavailable with the raw text attached, not silently ignored.
+export async function checkCodexImageGenerationAvailable({ config, spawnImpl } = {}) {
+  const executable = config?.executable || 'codex';
+  const result = await runCommand(executable, ['features', 'list'], { spawnImpl, timeoutMs: 15_000 });
+  if (!result.ok) {
+    return { available: false, message: result.output.trim() || 'codex features list failed' };
+  }
+  const line = result.output.split('\n').find((entry) => entry.trim().startsWith('image_generation'));
+  if (!line) return { available: false, message: 'image_generation feature not listed by this Codex CLI' };
+  const available = /\btrue\b/.test(line);
+  return { available, message: line.trim() };
+}

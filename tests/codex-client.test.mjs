@@ -5,7 +5,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import test from 'node:test';
 
-import { checkCodexAvailability, runCodexAnalysis } from '../src/codex-client.mjs';
+import { checkCodexAvailability, checkCodexImageGenerationAvailable, runCodexAnalysis, runCodexImagePrompt } from '../src/codex-client.mjs';
 
 // A minimal fake child_process.ChildProcess -- enough surface for
 // codex-client.mjs to drive (stdout/stderr 'data', 'error', 'close', a
@@ -173,4 +173,108 @@ test('runCodexAnalysis respects concurrency=1: a second call does not start unti
   } finally {
     await rm(dir, { recursive: true, force: true });
   }
+});
+
+test('checkCodexImageGenerationAvailable reports true only when the real "image_generation" feature line says true', async () => {
+  const spawnImpl = () => {
+    const child = fakeChild();
+    queueMicrotask(() => {
+      child.stdout.emit('data', 'apps                                  stable             true\nimage_generation                     stable             true\nmemories                             experimental       false\n');
+      child.emit('close', 0);
+    });
+    return child;
+  };
+  const result = await checkCodexImageGenerationAvailable({ config: { executable: 'codex' }, spawnImpl });
+  assert.equal(result.available, true);
+  assert.match(result.message, /image_generation/);
+});
+
+test('checkCodexImageGenerationAvailable reports false when the feature line says false, without guessing', async () => {
+  const spawnImpl = () => {
+    const child = fakeChild();
+    queueMicrotask(() => {
+      child.stdout.emit('data', 'image_generation                     stable             false\n');
+      child.emit('close', 0);
+    });
+    return child;
+  };
+  const result = await checkCodexImageGenerationAvailable({ config: { executable: 'codex' }, spawnImpl });
+  assert.equal(result.available, false);
+});
+
+test('checkCodexImageGenerationAvailable reports false when the feature is not listed at all by this CLI version', async () => {
+  const spawnImpl = () => {
+    const child = fakeChild();
+    queueMicrotask(() => { child.stdout.emit('data', 'apps stable true\n'); child.emit('close', 0); });
+    return child;
+  };
+  const result = await checkCodexImageGenerationAvailable({ config: { executable: 'codex' }, spawnImpl });
+  assert.equal(result.available, false);
+  assert.match(result.message, /not listed/);
+});
+
+test('checkCodexImageGenerationAvailable reports false without throwing when `codex features list` itself fails', async () => {
+  const spawnImpl = () => { throw Object.assign(new Error('spawn codex ENOENT'), { code: 'ENOENT' }); };
+  const result = await checkCodexImageGenerationAvailable({ config: { executable: 'codex' }, spawnImpl });
+  assert.equal(result.available, false);
+});
+
+test('runCodexImagePrompt attaches every image via -i and writes the prompt to stdin (never as an argv item)', async () => {
+  let receivedArgs = null;
+  let receivedStdin = '';
+  const spawnImpl = (executable, args) => {
+    receivedArgs = args;
+    const child = fakeChild();
+    child.stdin.write = (text) => { receivedStdin += text; };
+    queueMicrotask(() => child.emit('close', 0));
+    return child;
+  };
+  const result = await runCodexImagePrompt({
+    config: { executable: 'codex', concurrency: 1 },
+    cwd: tmpdir(),
+    images: ['/tmp/a.jpg', '/tmp/b.jpg'],
+    prompt: 'generate a product photo; do not leak this text into argv',
+    timeoutMs: 5000,
+    spawnImpl,
+  });
+  assert.equal(result.success, true);
+  assert.equal(receivedStdin, 'generate a product photo; do not leak this text into argv');
+  assert.deepEqual(receivedArgs.filter((a, i) => receivedArgs[i - 1] === '-i'), ['/tmp/a.jpg', '/tmp/b.jpg']);
+  assert.ok(!receivedArgs.includes('--output-schema'), 'image generation has no structured-output schema, unlike runCodexAnalysis');
+});
+
+test('runCodexImagePrompt reports timedOut without hanging when the process never exits', async () => {
+  const spawnImpl = () => {
+    const child = fakeChild();
+    child.kill = () => {}; // simulate a process that ignores kill, same as runCodexAnalysis's own timeout test intent
+    return child;
+  };
+  const result = await runCodexImagePrompt({
+    config: { executable: 'codex', concurrency: 1 },
+    cwd: tmpdir(),
+    images: [],
+    prompt: 'test',
+    timeoutMs: 20,
+    spawnImpl,
+  });
+  assert.equal(result.success, false);
+  assert.equal(result.timedOut, true);
+});
+
+test('runCodexImagePrompt surfaces a non-zero exit as success:false with the captured log', async () => {
+  const spawnImpl = () => {
+    const child = fakeChild();
+    queueMicrotask(() => { child.stderr.emit('data', 'image generation tool unavailable'); child.emit('close', 1); });
+    return child;
+  };
+  const result = await runCodexImagePrompt({
+    config: { executable: 'codex', concurrency: 1 },
+    cwd: tmpdir(),
+    images: [],
+    prompt: 'test',
+    timeoutMs: 5000,
+    spawnImpl,
+  });
+  assert.equal(result.success, false);
+  assert.match(result.log, /image generation tool unavailable/);
 });
