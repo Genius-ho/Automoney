@@ -1,0 +1,155 @@
+<!doctype html>
+<html lang="ko">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width,initial-scale=1">
+  <title>무한매수 V4.0 | 토스증권</title>
+  <link rel="stylesheet" href="/styles.css">
+</head>
+<body>
+  <header class="app-header">
+    <div class="brand">무한매수 V4.0</div>
+    <div class="subbrand">토스증권 API | USD</div>
+    <button class="tool-btn" id="apiSettings">API 설정</button>
+    <button class="tool-btn" id="algorithmGuide">무한매수 원리</button>
+    <div class="account-alias"><span>계좌</span><input id="accountAlias" value="계좌 별명 입력"></div>
+    <div class="header-right">
+      <span id="autoStatus">자동 매수: STOPPED</span>
+      <button class="tool-btn danger" id="stopAuto">자동 중지</button>
+      <button class="tool-btn" id="toggleHoldings">보유종목 숨기기</button>
+    </div>
+  </header>
+
+  <nav class="ticker-bar">
+    <div id="tickerButtons" class="ticker-buttons"></div>
+    <button class="start-auto" id="startAuto">3. 선택 ETF 주문 전송·자동매수 시작</button>
+    <div id="volatilityLine" class="volatility">6개월 변동성: 갱신 필요</div>
+  </nav>
+
+  <main class="content-grid">
+    <section class="main-book">
+      <nav class="tabs" id="mainTabs">
+        <button class="active" data-tab="overview">전략 현황</button>
+        <button data-tab="orders">오늘 주문계획</button>
+        <button data-tab="history">거래 내역·손익</button>
+        <button data-tab="info">ETF 안내</button>
+        <button data-tab="linkage">ETF 연동률</button>
+      </nav>
+
+      <div class="tab-page active" id="tab-overview">
+        <div class="metric-grid account-metrics">
+          <article><span>추정 총자산 $</span><strong id="totalAsset">-</strong></article>
+          <article><span>USD 매수 가능금액 $</span><strong id="cashSummary">-</strong></article>
+          <article><span>보유 평가금액 $</span><strong id="positionValue">-</strong></article>
+          <article><span>평가 손익 $</span><strong id="totalPnl">-</strong></article>
+        </div>
+        <p id="quoteLine" class="quote-summary">계좌·시세 새로고침을 누르면 실시간 정보를 가져옵니다.</p>
+
+        <div class="guide-title">
+          <h2 id="guideTitle">TQQQ 무한매수법 가이드</h2>
+          <button id="refreshAccount">1. 계좌·시세 새로고침</button>
+        </div>
+
+        <div class="metric-grid guide-metrics">
+          <article><span>현재가 $</span><div><input id="currentPrice" type="number" min="0" step=".01" placeholder="-"><a id="yahooChart" target="_blank">Yahoo 차트</a></div></article>
+          <article><span>T</span><strong id="tMetric">0</strong></article>
+          <article><span>STAR %</span><strong id="starPct">-</strong></article>
+          <article><span>STAR 가격 $</span><strong id="starPrice">-</strong></article>
+        </div>
+
+        <article class="card current-state"><span>CURRENT STATE</span><strong id="strategyPhase">시세 조회 필요</strong></article>
+        <div class="guide-grid">
+          <article class="card"><span class="blue">매수 가이드</span><div id="buyGuide">주문계획 갱신 필요</div></article>
+          <article class="card"><span class="red">매도 가이드</span><div id="sellGuide">주문계획 갱신 필요</div></article>
+        </div>
+        <article class="card progress-card">
+          <div><strong>진행 상황</strong><strong id="progress">0.0%</strong></div>
+          <progress id="progressBar" max="100" value="0"></progress>
+          <div><span>시드 <b id="totalSeed">$0.00</b></span><span>사용한 시드 <b id="invested">$0.00</b></span></div>
+        </article>
+
+        <div class="controls-card">
+          <label>1회 기본 매수수량 (짝수)<input id="baseBuyQty" type="number" min="2" step="2" value="2"></label>
+          <label class="check"><input id="bigEnabled" type="checkbox"> 특수 LOC 수동 적용</label>
+          <label>특수 기준 %<input id="bigPct" type="number" value="15" step="1"></label>
+          <button id="calculatePlan">2. 주문계획 갱신</button>
+        </div>
+        <p id="locSummary" class="loc-summary">현재 전략 공식으로 주문계획을 계산합니다.</p>
+
+        <details class="state-editor">
+          <summary>웹 수동 상태 입력</summary>
+          <div>
+            <label>전일 종가 $<input id="previousClose" type="number" min="0" step=".01"></label>
+            <label>현금 $<input id="cashUsd" type="number" min="0" step=".01"></label>
+            <label>보유 수량<input id="positionQty" type="number" min="0" step="1"></label>
+            <label>평균단가 $<input id="avgCost" type="number" min="0" step=".01"></label>
+            <label>T<input id="tValue" type="number" min="0" max="40" step=".5"></label>
+            <label>모드<select id="mode"><option value="GENERAL">일반</option><option value="REVERSE_FIRST_DAY">리버스 첫날</option><option value="REVERSE">리버스</option></select></label>
+          </div>
+        </details>
+      </div>
+
+      <div class="tab-page" id="tab-orders">
+        <div class="action-row">
+          <button id="submitOrders">선택한 주문 전송</button><button id="cancelOrders">선택 주문 취소</button>
+          <button id="editPrice">실패 주문 지정가 수정</button><button id="orderRefresh" class="push-right">주문 상태 새로고침</button>
+        </div>
+        <div id="warnings" class="warnings" hidden></div>
+        <div class="table-wrap"><table><thead><tr><th>구분</th><th>수량</th><th>지정가 $</th><th>주문 방식</th><th>주문 사유</th><th>자동주문 예정 (한국시간)</th><th>전송 상태</th></tr></thead><tbody id="ordersBody"></tbody></table></div>
+      </div>
+
+      <div class="tab-page" id="tab-history">
+        <div class="action-row"><label>무한매수 집계 시작일 <input type="date" id="historyStart"></label><button id="pnlRefresh">선택 ETF 손익 합계 갱신</button><button id="historyRefresh" class="push-right">선택 ETF 거래 내역 새로고침</button></div>
+        <h3 id="realizedTitle">TQQQ 누적 실현손익</h3>
+        <div class="table-wrap short"><table><thead><tr><th>ETF</th><th>집계 시작일</th><th>누적 실현손익 $</th><th>계산 상태</th></tr></thead><tbody id="realizedBody"></tbody></table></div>
+        <h3>선택 ETF 일별 거래 내역</h3>
+        <div class="table-wrap"><table><thead><tr><th>시각</th><th>종목</th><th>구분</th><th>수량</th><th>체결가 $</th><th>수수료 $</th><th>실현손익 $</th><th>상태</th></tr></thead><tbody id="historyBody"></tbody></table></div>
+      </div>
+
+      <div class="tab-page" id="tab-info">
+        <article class="card etf-card"><h2 id="etfName">TQQQ</h2><strong id="etfType"></strong><p id="etfDescription"></p></article>
+        <h3>대표 구성 종목</h3>
+        <div class="table-wrap"><table><thead><tr><th>티커</th><th>종목명</th></tr></thead><tbody id="etfHoldingsBody"></tbody></table></div>
+      </div>
+
+      <div class="tab-page" id="tab-linkage">
+        <nav class="subtabs" id="linkageTabs"><button class="active" data-subtab="long">개별 ETF 장기성과</button><button data-subtab="pair">ETF 조합 기회·위험</button></nav>
+        <div class="subtab-page active" id="subtab-long"><div class="analysis-head"><h3>1천만원 기준 장기 균형 성과</h3><button id="longTermAnalyze">2021년~현재 분석</button></div><p>2021년 첫 거래일에 1천만원을 투자해 계속 보유한 기준입니다.</p><div class="table-wrap"><table><thead><tr><th>순위</th><th>ETF</th><th>시작일</th><th>종료일</th><th>최종자산 ₩</th><th>총수익률 %</th><th>연복리 %</th><th>MDD %</th><th>균형점수</th><th>판정</th></tr></thead><tbody id="longTermBody"></tbody></table></div></div>
+        <div class="subtab-page" id="subtab-pair"><div class="analysis-head"><h3>3개월 ETF 조합 기회·위험</h3><button id="pairAnalyze">최근 3개월 분석</button></div><p>최근 63거래일을 기준으로 서로 다르게 움직이는 기회와 50:50 조합 위험을 계산합니다.</p><div class="table-wrap"><table><thead><tr><th>순위</th><th>ETF 조합</th><th>상관 %</th><th>수익률차 변동성 %</th><th>조합변동성 %</th><th>기회/위험</th><th>점수</th><th>판정</th></tr></thead><tbody id="pairBody"></tbody></table></div></div>
+      </div>
+    </section>
+
+    <aside class="holdings-panel" id="holdingsPanel">
+      <h3>전체 계좌 보유종목</h3>
+      <div class="table-wrap"><table><thead><tr><th>종목</th><th>수량</th><th>현재가 $</th><th>총액 $</th><th>T</th><th>손익 $</th><th>수익률 %</th></tr></thead><tbody id="holdingsBody"></tbody></table></div>
+      <div id="emptyHoldings" class="empty">계좌 새로고침 후 표시됩니다.</div>
+    </aside>
+  </main>
+
+  <dialog id="loginDialog" class="api-dialog">
+    <form id="loginForm">
+      <h2>웹 관리 로그인</h2>
+      <label>비밀번호<input id="webPassword" type="password" required autocomplete="current-password"></label>
+      <p>계좌 조회와 관리 기능을 사용하려면 웹 비밀번호를 입력하세요.</p>
+      <p id="loginError" class="dialog-error" role="alert"></p>
+      <div class="dialog-actions"><button type="submit">로그인</button></div>
+    </form>
+  </dialog>
+
+  <dialog id='apiDialog' class='api-dialog'>
+    <form id='apiForm'>
+      <h2>토스 API 설정</h2>
+      <label>Client ID<input id='apiClientId' required autocomplete='off'></label>
+      <label>Secret Key<input id='apiClientSecret' type='password' autocomplete='new-password' placeholder='Secret Key 입력'></label>
+      <label>계좌 순번<input id='apiAccountSeq' required autocomplete='off'></label>
+      <label class='api-live-check'><input id='apiLiveTrading' type='checkbox'> 실제 주문 모드로 저장</label>
+      <p id='apiSecretHelp'>저장 전에 계좌 조회로 API 정보를 검증합니다. Secret Key는 화면에 다시 표시하지 않습니다.</p>
+      <div class='dialog-actions'><button type='button' id='apiCancel'>취소</button><button type='submit'>저장 및 연결</button></div>
+    </form>
+  </dialog>
+
+  <footer><b id="brokerMode">DRY_RUN</b><button id="reconnect">인증 갱신</button><button id="webLogin">웹 로그인</button><span id="apiHealth">API 인증 상태 확인 필요</span><span id="statusText">준비</span><button>업데이트 적용</button><b>WEB.0.2</b></footer>
+  <div id="toast" class="toast"></div>
+  <script src="/app.js" defer></script>
+</body>
+</html>

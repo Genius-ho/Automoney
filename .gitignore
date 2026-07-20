@@ -1,0 +1,27 @@
+# Secrets / credentials
+.env
+*.env
+deploy/*.env
+secure_credentials.dat
+data/toss.env
+
+# Runtime data (account state, order/runtime status, audit trail)
+data/
+state.json
+runtime.json
+audit.jsonl
+
+# Logs and local databases
+*.log
+*.db
+*.sqlite
+*.sqlite3
+
+# Python
+__pycache__/
+**/__pycache__/
+*.pyc
+.venv/
+
+# Local tool settings
+.claude/settings.local.json

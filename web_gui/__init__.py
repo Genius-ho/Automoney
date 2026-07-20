@@ -1,0 +1,1 @@
+"""Mumae browser GUI package."""
