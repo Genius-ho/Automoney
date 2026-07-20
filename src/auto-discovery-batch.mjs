@@ -3,6 +3,7 @@ import { computeCompetitivenessScore as computeCompetitivenessScoreReal } from '
 import { getRecentlySelectedCategoryIds, listActiveCategoryPolicies, recordCategorySelections as recordCategorySelectionsReal } from './category-policy-store.mjs';
 import { releaseBatchLock as releaseBatchLockReal, tryAcquireBatchLock as tryAcquireBatchLockReal } from './batch-schedule-store.mjs';
 import { createBatchRun as createBatchRunReal, finishBatchRun as finishBatchRunReal, recordBatchCandidates as recordBatchCandidatesReal } from './batch-run-store.mjs';
+import { processWinnerCandidate as processWinnerCandidateReal } from './batch-winner-processor.mjs';
 
 const CANDIDATES_STORED_PER_CATEGORY = 5;
 
@@ -78,19 +79,37 @@ export async function collectAndScoreCandidatesForCategory(policy, {
       score: entry.score,
       scoreBreakdown: entry.breakdown,
       isWinner: winner != null && index === 0,
-      rawCandidateJson: { productNo: entry.candidate.productNo, normalized: entry.candidate.normalized },
+      // Full candidate (raw/normalized/filter/prices), not just a display
+      // summary -- Stage 2's processWinnerCandidate feeds this straight into
+      // saveEvaluatedCandidate to create the draft, so it must be everything
+      // that function needs, exactly as evaluateCandidates() produced it.
+      rawCandidateJson: {
+        productNo: entry.candidate.productNo,
+        raw: entry.candidate.raw,
+        normalized: entry.candidate.normalized,
+        filter: entry.candidate.filter,
+        prices: entry.candidate.prices,
+      },
     })),
     winner: winner ? { supplierProductNo: winner.candidate.productNo, name: winner.candidate.normalized?.name || null, score: winner.score } : null,
   };
 }
 
-// Top-level orchestrator. Never creates product_drafts, never calls any
-// image-generation, Coupang, or Naver API -- Stage 1 only selects
-// categories, collects/scores candidates, and records a read-only preview.
+// Top-level orchestrator. Stage 1 selects categories and scores candidates;
+// Stage 2 then carries each category's winner (if any) through draft
+// creation, analysis, and image generation -- sequentially, one winner at a
+// time (never in parallel), all inside the same lock so Codex/Python usage
+// stays serialized for the whole run. Never calls any Coupang/Naver API and
+// never auto-approves an image -- that stays Stage 3/4 and a human,
+// respectively.
 export async function runAutoDiscoveryBatch(db, {
   rootDir,
+  jobDir,
   domemeClientImpl,
   pricingRules,
+  codexConfig,
+  pythonConfig,
+  jobPathsConfig = {},
   categoryCount = 3,
   excludeRecentDays = 30,
   targetCandidateCount = 30,
@@ -104,6 +123,7 @@ export async function runAutoDiscoveryBatch(db, {
   recordCategorySelectionsImpl = recordCategorySelectionsReal,
   selectRandomCategoriesImpl = selectRandomCategories,
   collectAndScoreCandidatesForCategoryImpl = collectAndScoreCandidatesForCategory,
+  processWinnerCandidateImpl = processWinnerCandidateReal,
 } = {}) {
   const lock = await tryAcquireBatchLockImpl(db);
   if (!lock) {
@@ -117,6 +137,7 @@ export async function runAutoDiscoveryBatch(db, {
     await recordCategorySelectionsImpl(db, run.id, categories.map((category) => category.id));
 
     const results = [];
+    const winnerRows = [];
     for (const policy of categories) {
       const result = await collectAndScoreCandidatesForCategoryImpl(policy, {
         domemeClientImpl,
@@ -127,12 +148,32 @@ export async function runAutoDiscoveryBatch(db, {
         pageSize,
         scoreContext,
       });
-      await recordBatchCandidatesImpl(db, run.id, result.top.map((candidate) => ({ ...candidate, categoryPolicyId: policy.id })));
+      const recorded = await recordBatchCandidatesImpl(db, run.id, result.top.map((candidate) => ({ ...candidate, categoryPolicyId: policy.id })));
       results.push(result);
+      const winnerRow = recorded.find((row) => row.isWinner);
+      if (winnerRow) winnerRows.push(winnerRow);
     }
 
-    const finished = await finishBatchRunImpl(db, run.id, { status: 'completed', stageReached: 'scored_preview_only' });
-    return { run: finished, categories: results };
+    // Section 3 ("각 상품 순차 처리"): one winner at a time, never Promise.all.
+    // A quota/rate-limit hit stops processing the *remaining* winners for
+    // this run (they stay processingStatus='selected', pickupable later)
+    // instead of throwing -- an expected, anticipated condition per spec,
+    // not a run failure.
+    const processed = [];
+    let quotaStopped = false;
+    for (const winnerRow of winnerRows) {
+      if (quotaStopped) break;
+      const outcome = await processWinnerCandidateImpl(db, winnerRow, {
+        rootDir, jobDir: jobDir || jobPathsConfig.jobDir, codexConfig, pythonConfig, jobPathsConfig, batchRunId: run.id,
+      });
+      processed.push({ candidateId: winnerRow.id, ...outcome });
+      if (outcome.quotaLimited) quotaStopped = true;
+    }
+
+    const stageReached = winnerRows.length === 0 ? 'scored_preview_only'
+      : quotaStopped ? 'stage2_partial_quota_limited' : 'stage2_completed';
+    const finished = await finishBatchRunImpl(db, run.id, { status: 'completed', stageReached });
+    return { run: finished, categories: results, processed };
   } catch (error) {
     if (run) {
       await finishBatchRunImpl(db, run.id, { status: 'failed', errorCode: error.code || 'BATCH_FAILED', errorMessage: error.message });

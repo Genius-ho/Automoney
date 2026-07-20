@@ -70,17 +70,21 @@ function escapeHtmlForSection(value) { return String(value).replaceAll('&', '&am
 
 const AUTO_BATCH_TICK_INTERVAL_MS = 5 * 60 * 1000;
 
-// Loaded once at startup, not per-tick -- Domeme credentials and pricing
-// rules don't change during the process lifetime. Missing/invalid config
-// here disables the auto-discovery scheduler tick (logged, not fatal) rather
-// than crashing the whole admin server, since nothing else in admin-server.mjs
-// has ever required Domeme/pricing-rules.json access before this feature.
+// Loaded once at startup, not per-tick -- Domeme credentials, pricing rules,
+// and Codex/Python/job-path config don't change during the process
+// lifetime. Missing/invalid config here disables the auto-discovery
+// scheduler tick (logged, not fatal) rather than crashing the whole admin
+// server, since nothing else in admin-server.mjs required Domeme/
+// pricing-rules.json access before this feature.
 async function loadAutoBatchDeps(rootDir) {
   try {
     const envConfig = await loadEnvConfig(rootDir);
     const pricingRules = await loadPricingRules(join(rootDir, 'pricing-rules.json'));
     const domemeClientImpl = new DomemeClient({ apiKey: envConfig.domemeApiKey, endpoint: envConfig.domemeEndpoint });
-    return { domemeClientImpl, pricingRules };
+    const [codexConfig, pythonConfig, jobPathsConfig] = await Promise.all([
+      loadCodexConfig(rootDir), loadPythonConfig(rootDir), loadJobPathsConfig(rootDir),
+    ]);
+    return { domemeClientImpl, pricingRules, codexConfig, pythonConfig, jobPathsConfig };
   } catch (error) {
     console.error(`autoBatch.configUnavailable=${error.message}`);
     return null;
@@ -894,6 +898,7 @@ function adminHtml() {
         +escapeHtml(r.status)+' / '+escapeHtml(r.stageReached||'-')+' / '+escapeHtml(r.startedAt||'-')
         +(r.errorMessage?' / <span class="badge reasonBlock">'+escapeHtml(r.errorMessage)+'</span>':'')+'</div>').join('');
     }
+    const AUTO_BATCH_STATUS_LABELS={selected:'선정됨',draft_created:'draft 생성됨',analysis_running:'분석 중',analysis_completed:'분석 완료',image_generation_running:'이미지 생성 중',awaiting_image_approval:'이미지 승인 대기',failed:'실패'};
     async function loadAutoBatchRunDetail(runId){
       const el=document.getElementById('autoBatchRunDetail');
       el.innerHTML='<p class="muted">불러오는 중...</p>';
@@ -901,16 +906,36 @@ function adminHtml() {
       const run=data.run;
       const byCategory={};
       for(const c of run.candidates||[]){(byCategory[c.categoryPolicyId]=byCategory[c.categoryPolicyId]||{categoryName:c.categoryName,segmentName:c.segmentName,items:[]}).items.push(c);}
-      const categoriesHtml=Object.values(byCategory).map(group=>{
+      const groups=await Promise.all(Object.values(byCategory).map(async(group)=>{
         const winner=group.items.find(i=>i.isWinner);
+        let stage2Html='';
+        if(winner&&winner.processingStatus){
+          let thumbHtml='';
+          if(winner.draftId){
+            try{
+              const mainImages=await api('/api/product-drafts/'+winner.draftId+'/ai-workflows/main-image/results');
+              const latest=(mainImages.results||[])[0];
+              if(latest)thumbHtml='<img src="'+attr(latest.coupangStoredUrl)+'" alt="대표이미지"> <span class="badge">'+escapeHtml(latest.status)+'</span>';
+            }catch(e){}
+          }
+          stage2Html='<div class="section" style="background:#f8fafc"><h5>배치 처리 상태: '+escapeHtml(AUTO_BATCH_STATUS_LABELS[winner.processingStatus]||winner.processingStatus)+'</h5>'
+            +(winner.draftId?'<p><a href="/admin?draftId='+winner.draftId+'">draft #'+winner.draftId+' 이동 →</a> (이미지 프롬프트 탭에서 승인)</p>':'')
+            +thumbHtml
+            +'<div>Python 실행: '+(winner.pythonRan==null?'-':winner.pythonRan?'성공':'실패/미실행')+' / Codex 실행: '+(winner.codexRan==null?'-':winner.codexRan?'성공':'실패')+'</div>'
+            +'<div>미확정 필드 수: '+(winner.unresolvedFieldsCount??'-')+'</div>'
+            +'<div>대표이미지 생성: '+(winner.mainImageGenerated==null?'-':winner.mainImageGenerated?'완료':'미완료')+' / 상세이미지 생성: '+(winner.detailImagesGeneratedCount??0)+'/10</div>'
+            +(winner.processingStatus==='awaiting_image_approval'?'<div class="badge">승인 대기 중 -- 실제 등록/승인 없음</div>':'')
+            +(winner.failureStage?'<div class="badge reasonBlock">실패 단계: '+escapeHtml(winner.failureStage)+' -- '+escapeHtml(winner.failureMessage||'')+'</div>':'')
+            +'</div>';
+        }
         return '<div class="section"><h4>'+escapeHtml(group.segmentName)+' / '+escapeHtml(group.categoryName)+'</h4>'
           +(winner
-            ?'<div><strong>선정: '+escapeHtml(winner.name||winner.supplierProductNo)+'</strong> (점수 '+winner.score+')</div><ul>'+Object.entries(winner.scoreBreakdown||{}).map(([k,v])=>'<li>'+escapeHtml(k)+': '+v.points+'/'+v.max+' -- '+escapeHtml(v.reason)+'</li>').join('')+'</ul>'
+            ?'<div><strong>선정: '+escapeHtml(winner.name||winner.supplierProductNo)+'</strong> (점수 '+winner.score+')</div><ul>'+Object.entries(winner.scoreBreakdown||{}).map(([k,v])=>'<li>'+escapeHtml(k)+': '+v.points+'/'+v.max+' -- '+escapeHtml(v.reason)+'</li>').join('')+'</ul>'+stage2Html
             :'<div class="muted">기준 미달로 선정된 상품 없음</div>')
           +'<div class="muted">평가 후보 상위 '+group.items.length+'개 중 표시</div>'
           +'</div>';
-      }).join('');
-      el.innerHTML='<h3>실행 #'+run.id+' 상세</h3><div>상태: '+escapeHtml(run.status)+' / stage='+escapeHtml(run.stageReached||'-')+'</div>'+categoriesHtml;
+      }));
+      el.innerHTML='<h3>실행 #'+run.id+' 상세</h3><div>상태: '+escapeHtml(run.status)+' / stage='+escapeHtml(run.stageReached||'-')+'</div>'+groups.join('');
     }
     async function loadRecommendView(){
       const data=await api('/api/product-drafts?finalDecision='+encodeURIComponent('등록후보')+'&limit=4');

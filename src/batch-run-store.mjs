@@ -23,6 +23,16 @@ function toBatchRunCandidate(row) {
     isWinner: row.is_winner,
     rawCandidateJson: row.raw_candidate_json,
     createdAt: row.created_at,
+    processingStatus: row.processing_status ?? null,
+    draftId: row.draft_id == null ? null : Number(row.draft_id),
+    failureStage: row.failure_stage ?? null,
+    failureMessage: row.failure_message ?? null,
+    lastProcessedAt: row.last_processed_at ?? null,
+    pythonRan: row.python_ran ?? null,
+    codexRan: row.codex_ran ?? null,
+    mainImageGenerated: row.main_image_generated ?? null,
+    detailImagesGeneratedCount: row.detail_images_generated_count ?? null,
+    unresolvedFieldsCount: row.unresolved_fields_count ?? null,
   };
 }
 
@@ -66,6 +76,64 @@ export async function recordBatchCandidates(db, runId, candidates) {
     recorded.push(toBatchRunCandidate(result.rows[0]));
   }
   return recorded;
+}
+
+// Stage 2 pipeline progress for the one candidate per category that was
+// selected as winner and is being carried through draft creation ->
+// analysis -> image generation. Only fields explicitly passed are
+// overwritten (coalesce); last_processed_at always advances.
+export async function updateBatchCandidateStatus(db, candidateId, {
+  processingStatus, draftId, failureStage, failureMessage,
+  pythonRan, codexRan, mainImageGenerated, detailImagesGeneratedCount, unresolvedFieldsCount,
+} = {}) {
+  const result = await db.query(
+    `update batch_run_candidates set
+       processing_status = coalesce($2, processing_status),
+       draft_id = coalesce($3, draft_id),
+       failure_stage = coalesce($4, failure_stage),
+       failure_message = coalesce($5, failure_message),
+       python_ran = coalesce($6, python_ran),
+       codex_ran = coalesce($7, codex_ran),
+       main_image_generated = coalesce($8, main_image_generated),
+       detail_images_generated_count = coalesce($9, detail_images_generated_count),
+       unresolved_fields_count = coalesce($10, unresolved_fields_count),
+       last_processed_at = now()
+     where id = $1
+     returning *`,
+    [
+      candidateId,
+      processingStatus ?? null,
+      draftId ?? null,
+      failureStage ?? null,
+      failureMessage ?? null,
+      pythonRan ?? null,
+      codexRan ?? null,
+      mainImageGenerated ?? null,
+      detailImagesGeneratedCount ?? null,
+      unresolvedFieldsCount ?? null,
+    ],
+  );
+  return result.rows[0] ? toBatchRunCandidate(result.rows[0]) : null;
+}
+
+// Stamps the newly-created draft with where it came from -- the only place
+// batch_run_id/batch_candidate_id are ever written, so every other draft
+// (manual imports, draft 27/46/64) keeps these null.
+export async function linkDraftToBatch(db, draftId, { batchRunId, batchCandidateId }) {
+  await db.query(
+    'update product_drafts set batch_run_id = $2, batch_candidate_id = $3 where id = $1',
+    [draftId, batchRunId, batchCandidateId],
+  );
+}
+
+// The dedup check Stage 2 must run before ever creating a draft --
+// "이미 동일 source_product_id 또는 동일 supplier product가 기존 draft ...에서
+// 처리 중이면 중복 생성 금지". product_drafts.supplier_product_no is already
+// unique, so any existing row (created manually or by a prior batch run) is
+// authoritative regardless of how it got there.
+export async function findDraftBySupplierProductNo(db, supplierProductNo) {
+  const result = await db.query('select id from product_drafts where supplier_product_no = $1', [String(supplierProductNo)]);
+  return result.rows[0] ? Number(result.rows[0].id) : null;
 }
 
 export async function getLatestBatchRun(db) {

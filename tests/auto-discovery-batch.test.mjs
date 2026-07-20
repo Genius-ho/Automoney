@@ -80,17 +80,22 @@ test('collectAndScoreCandidatesForCategory reports no winner when the top score 
 });
 
 function runAutoDiscoveryBatchDeps(overrides = {}) {
-  const calls = { finishBatchRun: [], recordBatchCandidates: [], releaseBatchLock: [] };
+  const calls = { finishBatchRun: [], recordBatchCandidates: [], releaseBatchLock: [], processWinnerCandidate: [] };
+  let nextCandidateId = 1;
   return {
     calls,
     tryAcquireBatchLockImpl: async () => ({ minPassingScore: 60, intervalDays: 3 }),
     releaseBatchLockImpl: async (_db, args) => { calls.releaseBatchLock.push(args); },
     createBatchRunImpl: async () => ({ id: 1 }),
     finishBatchRunImpl: async (_db, runId, args) => { calls.finishBatchRun.push({ runId, ...args }); return { id: runId, ...args }; },
-    recordBatchCandidatesImpl: async (_db, runId, candidates) => { calls.recordBatchCandidates.push({ runId, candidates }); },
+    recordBatchCandidatesImpl: async (_db, runId, candidates) => {
+      calls.recordBatchCandidates.push({ runId, candidates });
+      return candidates.map((c) => ({ ...c, id: nextCandidateId++ }));
+    },
     recordCategorySelectionsImpl: async () => {},
     selectRandomCategoriesImpl: async () => [policy(1), policy(2), policy(3)],
     collectAndScoreCandidatesForCategoryImpl: async (p) => ({ policy: p, candidatesEvaluated: 5, top: [{ supplierProductNo: '1', name: 'A', score: 80, scoreBreakdown: {}, isWinner: true }], winner: { supplierProductNo: '1', name: 'A', score: 80 } }),
+    processWinnerCandidateImpl: async (_db, candidateRow) => { calls.processWinnerCandidate.push(candidateRow); return { outcome: 'success', draftId: 900 + candidateRow.id }; },
     ...overrides,
   };
 }
@@ -106,16 +111,42 @@ test('runAutoDiscoveryBatch does nothing (skipped) when the lock is already held
   assert.equal(createCalled, false);
 });
 
-test('runAutoDiscoveryBatch happy path: creates a run, records category selections, scores each category, finishes completed, releases the lock', async () => {
+test('runAutoDiscoveryBatch happy path: creates a run, records category selections, scores each category, processes each winner sequentially, finishes completed, releases the lock', async () => {
   const deps = runAutoDiscoveryBatchDeps();
   const result = await runAutoDiscoveryBatch({}, deps);
 
   assert.equal(result.run.status, 'completed');
-  assert.equal(result.run.stageReached, 'scored_preview_only');
+  assert.equal(result.run.stageReached, 'stage2_completed');
   assert.equal(result.categories.length, 3);
   assert.equal(deps.calls.recordBatchCandidates.length, 3);
+  assert.equal(deps.calls.processWinnerCandidate.length, 3); // one winner per category, processed one at a time
+  assert.equal(result.processed.length, 3);
+  assert.ok(result.processed.every((p) => p.outcome === 'success'));
   assert.equal(deps.calls.releaseBatchLock.length, 1);
   assert.ok(deps.calls.releaseBatchLock[0].nextRunAt);
+});
+
+test('runAutoDiscoveryBatch reports scored_preview_only (no Stage 2 work) when no category clears minPassingScore', async () => {
+  const deps = runAutoDiscoveryBatchDeps({
+    collectAndScoreCandidatesForCategoryImpl: async (p) => ({ policy: p, candidatesEvaluated: 5, top: [], winner: null }),
+  });
+  const result = await runAutoDiscoveryBatch({}, deps);
+  assert.equal(result.run.stageReached, 'scored_preview_only');
+  assert.equal(deps.calls.processWinnerCandidate.length, 0);
+});
+
+test('runAutoDiscoveryBatch stops processing remaining winners (without throwing) once a quota-limit outcome is reported', async () => {
+  const processedIds = [];
+  const deps = runAutoDiscoveryBatchDeps({
+    processWinnerCandidateImpl: async (_db, candidateRow) => {
+      processedIds.push(candidateRow.id);
+      if (candidateRow.id === 1) return { outcome: 'failed', stage: 'analysis', quotaLimited: true };
+      return { outcome: 'success' };
+    },
+  });
+  const result = await runAutoDiscoveryBatch({}, deps);
+  assert.equal(result.run.stageReached, 'stage2_partial_quota_limited');
+  assert.deepEqual(processedIds, [1]); // stopped after the first quota-limited winner, never reached ids 2/3
 });
 
 test('runAutoDiscoveryBatch marks the run failed and still releases the lock when a category step throws', async () => {
@@ -127,4 +158,5 @@ test('runAutoDiscoveryBatch marks the run failed and still releases the lock whe
   assert.equal(deps.calls.finishBatchRun[0].status, 'failed');
   assert.equal(deps.calls.finishBatchRun[0].errorCode, 'DOMEME_UNAVAILABLE');
   assert.equal(deps.calls.releaseBatchLock.length, 1);
+  assert.equal(deps.calls.processWinnerCandidate.length, 0);
 });

@@ -11,6 +11,7 @@ import {
   evaluateCandidates,
   isImportableCandidate,
   parseCandidateCsv,
+  saveEvaluatedCandidate,
   scoreCandidate,
 } from '../src/candidate-collector.mjs';
 
@@ -119,4 +120,29 @@ test('parseCandidateCsv recognizes a product_no header and dedups values', () =>
 test('parseCandidateCsv treats headerless CSV as data (first column)', () => {
   const rows = parseCandidateCsv('333\n444\n');
   assert.deepEqual(rows, ['333', '444']);
+});
+
+test('saveEvaluatedCandidate returns the created draftId/supplierProductId, not just a save flag -- Stage 2 batch processing needs these to link the new draft to its analysis/image pipeline', async () => {
+  const client = {
+    async query(sql) {
+      if (sql.startsWith('select id from supplier_products')) return { rows: [] };
+      if (sql.includes('insert into supplier_products')) return { rows: [{ id: 11 }] };
+      if (sql.includes('insert into product_drafts')) return { rows: [{ id: 22 }] };
+      return { rows: [] };
+    },
+  };
+  const pool = { async connect() { return { ...client, release() {} }; } };
+
+  const candidate = {
+    productNo: '99999',
+    raw: { item: { title: 'x' } },
+    normalized: { name: '테스트', cost: 10000, shippingFee: 3000, priceParseStatus: 'ok', shippingParseStatus: 'ok', priceTiers: [], shippingTiers: [], sourceMarket: 'domeme', minOrderQty: 1, orderUnit: 1, sellUnitType: 'single', bundleQuantity: 1, unitCostPrice: 10000, bundleCostPrice: 10000, options: [], images: ['https://example.test/a.jpg'], imageEntries: [{ url: 'https://example.test/a.jpg', imageType: 'main' }], detailHtml: '<p>x</p>' },
+    filter: { filterStatus: 'pass', blockReasons: [], reviewReasons: [] },
+    prices: {},
+  };
+
+  const saved = await saveEvaluatedCandidate(pool, candidate, { importBatchId: 'auto-batch-1', collectedAt: new Date().toISOString() });
+  assert.equal(saved.saved, true);
+  assert.equal(saved.draftId, 22);
+  assert.equal(saved.supplierProductId, 11);
 });

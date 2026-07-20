@@ -3,11 +3,14 @@ import test from 'node:test';
 
 import {
   createBatchRun,
+  findDraftBySupplierProductNo,
   finishBatchRun,
   getBatchRunDetail,
   getLatestBatchRun,
+  linkDraftToBatch,
   listBatchRuns,
   recordBatchCandidates,
+  updateBatchCandidateStatus,
 } from '../src/batch-run-store.mjs';
 
 function fakeRunRow(overrides = {}) {
@@ -98,4 +101,34 @@ test('getBatchRunDetail returns null for an unknown run, else the run plus its c
   assert.equal(detail.candidates.length, 1);
   assert.equal(detail.candidates[0].categoryName, '정리함/수납함');
   assert.equal(detail.candidates[0].score, 85);
+});
+
+test('updateBatchCandidateStatus only overwrites the fields that were provided and always advances last_processed_at', async () => {
+  let capturedParams = null;
+  const db = {
+    async query(sql, params) {
+      capturedParams = params;
+      return { rows: [{ id: '11', batch_run_id: '5', category_policy_id: '2', supplier_product_no: '111', name: 'A', score: null, score_breakdown: {}, is_winner: true, raw_candidate_json: null, created_at: '2026-07-20T00:00:00Z', processing_status: 'analysis_completed', draft_id: '501', failure_stage: null, failure_message: null, last_processed_at: '2026-07-20T01:00:00Z', python_ran: true, codex_ran: true, main_image_generated: null, detail_images_generated_count: null, unresolved_fields_count: 1 }] };
+    },
+  };
+  const result = await updateBatchCandidateStatus(db, 11, { processingStatus: 'analysis_completed', draftId: 501, pythonRan: true, codexRan: true, unresolvedFieldsCount: 1 });
+  assert.deepEqual(capturedParams, [11, 'analysis_completed', 501, null, null, true, true, null, null, 1]);
+  assert.equal(result.processingStatus, 'analysis_completed');
+  assert.equal(result.draftId, 501);
+  assert.equal(result.unresolvedFieldsCount, 1);
+});
+
+test('linkDraftToBatch writes batch_run_id/batch_candidate_id onto the draft', async () => {
+  let capturedParams = null;
+  const db = { async query(sql, params) { capturedParams = params; return { rows: [] }; } };
+  await linkDraftToBatch(db, 501, { batchRunId: 5, batchCandidateId: 11 });
+  assert.deepEqual(capturedParams, [501, 5, 11]);
+});
+
+test('findDraftBySupplierProductNo returns the existing draft id, or null when none exists', async () => {
+  const dbHit = { async query() { return { rows: [{ id: '27' }] }; } };
+  assert.equal(await findDraftBySupplierProductNo(dbHit, '45413455'), 27);
+
+  const dbMiss = { async query() { return { rows: [] }; } };
+  assert.equal(await findDraftBySupplierProductNo(dbMiss, '99999999'), null);
 });

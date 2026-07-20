@@ -140,7 +140,7 @@ export async function saveEvaluatedCandidate(pool, candidate, { importBatchId, c
       collectedAt,
     });
     await client.query('commit');
-    return { saved: true, dbAction: saved.dbAction };
+    return { saved: true, dbAction: saved.dbAction, draftId: saved.draftId, supplierProductId: saved.supplierProductId };
   } catch (error) {
     await client.query('rollback');
     return { saved: false, error };
