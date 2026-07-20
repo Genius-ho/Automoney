@@ -3,7 +3,8 @@ import test from 'node:test';
 
 import {
   collectAndScoreCandidatesForCategory,
-  runAutoDiscoveryBatch,
+  runCandidateDiscoveryBatch,
+  runDailyProcessingBatch,
   selectRandomCategories,
 } from '../src/auto-discovery-batch.mjs';
 
@@ -79,13 +80,14 @@ test('collectAndScoreCandidatesForCategory reports no winner when the top score 
   assert.equal(result.top[0].isWinner, false);
 });
 
-function runAutoDiscoveryBatchDeps(overrides = {}) {
-  const calls = { finishBatchRun: [], recordBatchCandidates: [], releaseBatchLock: [], processWinnerCandidate: [] };
+function discoveryDeps(overrides = {}) {
+  const calls = { finishBatchRun: [], recordBatchCandidates: [], releaseDiscoveryLock: [], releaseLockOnly: [], enqueueCandidate: [] };
   let nextCandidateId = 1;
   return {
     calls,
     tryAcquireBatchLockImpl: async () => ({ minPassingScore: 60, intervalDays: 3 }),
-    releaseBatchLockImpl: async (_db, args) => { calls.releaseBatchLock.push(args); },
+    releaseDiscoveryLockImpl: async (_db, args) => { calls.releaseDiscoveryLock.push(args); },
+    releaseLockOnlyImpl: async () => { calls.releaseLockOnly.push(true); },
     createBatchRunImpl: async () => ({ id: 1 }),
     finishBatchRunImpl: async (_db, runId, args) => { calls.finishBatchRun.push({ runId, ...args }); return { id: runId, ...args }; },
     recordBatchCandidatesImpl: async (_db, runId, candidates) => {
@@ -94,15 +96,17 @@ function runAutoDiscoveryBatchDeps(overrides = {}) {
     },
     recordCategorySelectionsImpl: async () => {},
     selectRandomCategoriesImpl: async () => [policy(1), policy(2), policy(3)],
-    collectAndScoreCandidatesForCategoryImpl: async (p) => ({ policy: p, candidatesEvaluated: 5, top: [{ supplierProductNo: '1', name: 'A', score: 80, scoreBreakdown: {}, isWinner: true }], winner: { supplierProductNo: '1', name: 'A', score: 80 } }),
-    processWinnerCandidateImpl: async (_db, candidateRow) => { calls.processWinnerCandidate.push(candidateRow); return { outcome: 'success', draftId: 900 + candidateRow.id }; },
+    collectAndScoreCandidatesForCategoryImpl: async (p) => ({ policy: p, candidatesEvaluated: 5, top: [{ supplierProductNo: `sp-${p.id}`, name: 'A', score: 80, scoreBreakdown: {}, isWinner: true }], winner: { supplierProductNo: `sp-${p.id}`, name: 'A', score: 80 } }),
+    countActiveQueueItemsImpl: async () => 0,
+    isCandidateActiveOrQueuedImpl: async () => false,
+    enqueueCandidateImpl: async (_db, args) => { calls.enqueueCandidate.push(args); return { id: 100 + calls.enqueueCandidate.length, ...args }; },
     ...overrides,
   };
 }
 
-test('runAutoDiscoveryBatch does nothing (skipped) when the lock is already held', async () => {
+test('runCandidateDiscoveryBatch does nothing (skipped) when the lock is already held', async () => {
   let createCalled = false;
-  const result = await runAutoDiscoveryBatch({}, {
+  const result = await runCandidateDiscoveryBatch({}, {
     tryAcquireBatchLockImpl: async () => null,
     createBatchRunImpl: async () => { createCalled = true; return { id: 1 }; },
   });
@@ -111,52 +115,144 @@ test('runAutoDiscoveryBatch does nothing (skipped) when the lock is already held
   assert.equal(createCalled, false);
 });
 
-test('runAutoDiscoveryBatch happy path: creates a run, records category selections, scores each category, processes each winner sequentially, finishes completed, releases the lock', async () => {
-  const deps = runAutoDiscoveryBatchDeps();
-  const result = await runAutoDiscoveryBatch({}, deps);
+test('runCandidateDiscoveryBatch skips discovery entirely (no Codex, no draft creation) when the queue already has a backlog', async () => {
+  const deps = discoveryDeps({ countActiveQueueItemsImpl: async () => 2 });
+  let createCalled = false;
+  const result = await runCandidateDiscoveryBatch({}, { ...deps, createBatchRunImpl: async () => { createCalled = true; return { id: 1 }; } });
+  assert.equal(result.skipped, true);
+  assert.equal(result.reason, 'QUEUE_BACKLOG');
+  assert.equal(result.backlog, 2);
+  assert.equal(createCalled, false);
+  assert.equal(deps.calls.releaseDiscoveryLock.length, 1);
+});
+
+test('runCandidateDiscoveryBatch happy path: scores each category and enqueues each winner (never creates a draft, never calls Codex)', async () => {
+  const deps = discoveryDeps();
+  const result = await runCandidateDiscoveryBatch({}, deps);
 
   assert.equal(result.run.status, 'completed');
-  assert.equal(result.run.stageReached, 'stage2_completed');
+  assert.equal(result.run.stageReached, 'enqueued');
   assert.equal(result.categories.length, 3);
   assert.equal(deps.calls.recordBatchCandidates.length, 3);
-  assert.equal(deps.calls.processWinnerCandidate.length, 3); // one winner per category, processed one at a time
-  assert.equal(result.processed.length, 3);
-  assert.ok(result.processed.every((p) => p.outcome === 'success'));
-  assert.equal(deps.calls.releaseBatchLock.length, 1);
-  assert.ok(deps.calls.releaseBatchLock[0].nextRunAt);
+  assert.equal(deps.calls.enqueueCandidate.length, 3); // one winner per category
+  assert.equal(result.enqueued.length, 3);
+  assert.equal(deps.calls.releaseDiscoveryLock.length, 1);
+  assert.ok(deps.calls.releaseDiscoveryLock[0].nextRunAt);
 });
 
-test('runAutoDiscoveryBatch reports scored_preview_only (no Stage 2 work) when no category clears minPassingScore', async () => {
-  const deps = runAutoDiscoveryBatchDeps({
+test('runCandidateDiscoveryBatch skips a winner that is already queued or already drafted (dedup), without throwing', async () => {
+  const deps = discoveryDeps({ isCandidateActiveOrQueuedImpl: async (_db, no) => no === 'sp-2' });
+  const result = await runCandidateDiscoveryBatch({}, deps);
+  assert.equal(deps.calls.enqueueCandidate.length, 2); // category 2's winner was skipped as a dup
+  assert.equal(result.enqueued.length, 2);
+});
+
+test('runCandidateDiscoveryBatch reports enqueued even when no category clears minPassingScore (nothing to enqueue)', async () => {
+  const deps = discoveryDeps({
     collectAndScoreCandidatesForCategoryImpl: async (p) => ({ policy: p, candidatesEvaluated: 5, top: [], winner: null }),
   });
-  const result = await runAutoDiscoveryBatch({}, deps);
-  assert.equal(result.run.stageReached, 'scored_preview_only');
-  assert.equal(deps.calls.processWinnerCandidate.length, 0);
+  const result = await runCandidateDiscoveryBatch({}, deps);
+  assert.equal(result.enqueued.length, 0);
+  assert.equal(deps.calls.enqueueCandidate.length, 0);
 });
 
-test('runAutoDiscoveryBatch stops processing remaining winners (without throwing) once a quota-limit outcome is reported', async () => {
-  const processedIds = [];
-  const deps = runAutoDiscoveryBatchDeps({
-    processWinnerCandidateImpl: async (_db, candidateRow) => {
-      processedIds.push(candidateRow.id);
-      if (candidateRow.id === 1) return { outcome: 'failed', stage: 'analysis', quotaLimited: true };
-      return { outcome: 'success' };
-    },
-  });
-  const result = await runAutoDiscoveryBatch({}, deps);
-  assert.equal(result.run.stageReached, 'stage2_partial_quota_limited');
-  assert.deepEqual(processedIds, [1]); // stopped after the first quota-limited winner, never reached ids 2/3
-});
-
-test('runAutoDiscoveryBatch marks the run failed and still releases the lock when a category step throws', async () => {
-  const deps = runAutoDiscoveryBatchDeps({
+test('runCandidateDiscoveryBatch marks the run failed and still releases the lock when a category step throws', async () => {
+  const deps = discoveryDeps({
     collectAndScoreCandidatesForCategoryImpl: async () => { throw Object.assign(new Error('domeme down'), { code: 'DOMEME_UNAVAILABLE' }); },
   });
-  await assert.rejects(() => runAutoDiscoveryBatch({}, deps), /domeme down/);
+  await assert.rejects(() => runCandidateDiscoveryBatch({}, deps), /domeme down/);
   assert.equal(deps.calls.finishBatchRun.length, 1);
   assert.equal(deps.calls.finishBatchRun[0].status, 'failed');
   assert.equal(deps.calls.finishBatchRun[0].errorCode, 'DOMEME_UNAVAILABLE');
-  assert.equal(deps.calls.releaseBatchLock.length, 1);
-  assert.equal(deps.calls.processWinnerCandidate.length, 0);
+  assert.equal(deps.calls.releaseDiscoveryLock.length, 1);
+  assert.equal(deps.calls.enqueueCandidate.length, 0);
+});
+
+function queueItem(overrides = {}) {
+  return { id: 7, batchRunCandidateId: 5, supplierProductNo: '111', name: 'A', score: 80, status: 'queued', startedAt: null, ...overrides };
+}
+
+function processingDeps(overrides = {}) {
+  const calls = { updateQueueItemStatus: [], recordQueueItemPause: [], releaseProcessingLock: [], processWinnerCandidate: [] };
+  return {
+    calls,
+    tryAcquireBatchLockImpl: async () => ({ processingIntervalDays: 1 }),
+    releaseProcessingLockImpl: async (_db, args) => { calls.releaseProcessingLock.push(args); },
+    getNextQueueItemImpl: async () => queueItem(),
+    updateQueueItemStatusImpl: async (_db, id, patch) => { calls.updateQueueItemStatus.push({ id, ...patch }); },
+    recordQueueItemPauseImpl: async (_db, id, patch) => { calls.recordQueueItemPause.push({ id, ...patch }); },
+    updateBatchCandidateStatusImpl: async () => {},
+    getBatchRunCandidateByIdImpl: async () => ({ id: 5, batchRunId: 1, supplierProductNo: '111', rawCandidateJson: {} }),
+    processWinnerCandidateImpl: async (_db, candidateRow, opts) => { calls.processWinnerCandidate.push({ candidateRow, opts }); return { outcome: 'success', draftId: 501 }; },
+    ...overrides,
+  };
+}
+
+test('runDailyProcessingBatch does nothing (skipped) when the lock is already held', async () => {
+  const result = await runDailyProcessingBatch({}, { tryAcquireBatchLockImpl: async () => null });
+  assert.equal(result.skipped, true);
+  assert.equal(result.reason, 'ALREADY_RUNNING');
+});
+
+test('runDailyProcessingBatch does nothing (skipped) and releases the lock when the queue is empty', async () => {
+  const deps = processingDeps({ getNextQueueItemImpl: async () => null });
+  const result = await runDailyProcessingBatch({}, deps);
+  assert.equal(result.skipped, true);
+  assert.equal(result.reason, 'QUEUE_EMPTY');
+  assert.equal(deps.calls.releaseProcessingLock.length, 1);
+});
+
+test('runDailyProcessingBatch processes exactly one queue item and marks it awaiting_approval on success', async () => {
+  const deps = processingDeps();
+  const result = await runDailyProcessingBatch({}, deps);
+
+  assert.equal(deps.calls.processWinnerCandidate.length, 1);
+  assert.equal(result.outcome, 'success');
+  const finalUpdate = deps.calls.updateQueueItemStatus.find((u) => u.status === 'awaiting_approval');
+  assert.ok(finalUpdate);
+  assert.equal(finalUpdate.draftId, 501);
+  assert.equal(deps.calls.releaseProcessingLock.length, 1);
+});
+
+test('runDailyProcessingBatch marks the queue item failed (terminal) on a non-quota failure', async () => {
+  const deps = processingDeps({
+    processWinnerCandidateImpl: async () => ({ outcome: 'failed', stage: 'analysis', errorCode: 'NO_DETAIL_IMAGES', quotaLimited: false }),
+  });
+  await runDailyProcessingBatch({}, deps);
+  const failUpdate = deps.calls.updateQueueItemStatus.find((u) => u.status === 'failed');
+  assert.ok(failUpdate);
+  assert.equal(failUpdate.failureStage, 'analysis');
+  assert.equal(deps.calls.recordQueueItemPause.length, 0);
+});
+
+test('runDailyProcessingBatch pauses (does not force failed) the queue item on a quota-limited stop, so it resumes tomorrow', async () => {
+  const deps = processingDeps({
+    processWinnerCandidateImpl: async () => ({ outcome: 'failed', stage: 'image_generation_detail', errorCode: 'CODEX_RATE_LIMIT', quotaLimited: true }),
+  });
+  await runDailyProcessingBatch({}, deps);
+  assert.equal(deps.calls.recordQueueItemPause.length, 1);
+  assert.equal(deps.calls.recordQueueItemPause[0].failureStage, 'image_generation_detail');
+  assert.ok(!deps.calls.updateQueueItemStatus.some((u) => u.status === 'failed'));
+});
+
+test('runDailyProcessingBatch marks the queue item failed when processWinnerCandidate reports a duplicate draft', async () => {
+  const deps = processingDeps({
+    processWinnerCandidateImpl: async () => ({ outcome: 'skipped_duplicate', draftId: 27 }),
+  });
+  await runDailyProcessingBatch({}, deps);
+  const failUpdate = deps.calls.updateQueueItemStatus.find((u) => u.status === 'failed');
+  assert.ok(failUpdate);
+  assert.equal(failUpdate.failureStage, 'draft_creation');
+  assert.equal(failUpdate.draftId, 27);
+});
+
+test('runDailyProcessingBatch mirrors processWinnerCandidate progress updates onto the queue item live', async () => {
+  const deps = processingDeps({
+    processWinnerCandidateImpl: async (db, candidateRow, opts) => {
+      await opts.updateBatchCandidateStatusImpl(db, candidateRow.id, { processingStatus: 'image_generation_running' });
+      return { outcome: 'success', draftId: 501 };
+    },
+  });
+  await runDailyProcessingBatch({}, deps);
+  assert.ok(deps.calls.updateQueueItemStatus.some((u) => u.status === 'generating_images'));
 });

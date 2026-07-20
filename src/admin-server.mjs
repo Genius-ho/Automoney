@@ -5,9 +5,10 @@ import { createHash } from 'node:crypto';
 
 import { loadAiSecrets, loadCodexConfig, loadCoupangConfig, loadDatabaseUrl, loadEnvConfig, loadJobPathsConfig, loadNaverConfig, loadPricingRules, loadPythonConfig } from './config.mjs';
 import { DomemeClient } from './domeme-client.mjs';
-import { runAutoDiscoveryBatch } from './auto-discovery-batch.mjs';
+import { runCandidateDiscoveryBatch, runDailyProcessingBatch } from './auto-discovery-batch.mjs';
 import { getBatchScheduleState, updateBatchScheduleState } from './batch-schedule-store.mjs';
 import { getBatchRunDetail, listBatchRuns } from './batch-run-store.mjs';
+import { countActiveQueueItems, getNextQueueItem, listQueue } from './processing-queue-store.mjs';
 import { uploadApprovedImagesToR2 } from './r2-publisher.mjs';
 import { clearProviderCredential, listProviderSettings, listTaskRouting, saveProviderSetting, saveTaskRouting, testProviderSetting } from './ai/provider-settings-store.mjs';
 import { NaverShoppingClient } from './naver-shopping-client.mjs';
@@ -108,9 +109,21 @@ export async function createAdminServer({ rootDir = process.cwd() } = {}) {
     if (!autoBatchDeps) return;
     try {
       const state = await getBatchScheduleState(db);
-      if (!state || state.isRunning || new Date(state.nextRunAt) > new Date()) return;
-      const result = await runAutoDiscoveryBatch(db, { rootDir, ...autoBatchDeps });
-      console.log(`autoBatch.tick=${result.skipped ? 'skipped' : result.run?.status}`);
+      if (!state || state.isRunning) return;
+      // Daily processing (the Codex-heavy cycle) takes priority when both
+      // happen to be due at once -- "큐에 미완료 상품이 있으면 새 후보 발굴보다
+      // 기존 큐 처리를 우선". runCandidateDiscoveryBatch itself also refuses
+      // to do any work while a backlog remains, so checking processing first
+      // here is belt-and-suspenders, not load-bearing on its own.
+      if (new Date(state.processingNextRunAt) <= new Date()) {
+        const result = await runDailyProcessingBatch(db, { rootDir, ...autoBatchDeps });
+        console.log(`autoBatch.processingTick=${result.skipped ? `skipped:${result.reason}` : result.outcome}`);
+        return;
+      }
+      if (new Date(state.nextRunAt) <= new Date()) {
+        const result = await runCandidateDiscoveryBatch(db, { rootDir, ...autoBatchDeps });
+        console.log(`autoBatch.discoveryTick=${result.skipped ? `skipped:${result.reason}` : result.run?.status}`);
+      }
     } catch (error) {
       console.error(`autoBatch.tickError=${error.message}`);
     }
@@ -534,16 +547,35 @@ async function handleRequest({ request, response, db, aiSecrets, rootDir }) {
       intervalDays: body.intervalDays != null ? Number(body.intervalDays) : undefined,
       nextRunAt: body.nextRunAt || undefined,
       minPassingScore: body.minPassingScore != null ? Number(body.minPassingScore) : undefined,
+      processingIntervalDays: body.processingIntervalDays != null ? Number(body.processingIntervalDays) : undefined,
+      processingNextRunAt: body.processingNextRunAt || undefined,
     });
     sendJson(response, 200, { schedule });
     return;
   }
 
-  if (url.pathname === '/api/auto-batch/run-now' && request.method === 'POST') {
+  if (url.pathname === '/api/auto-batch/discovery/run-now' && request.method === 'POST') {
     const autoBatchDeps = await loadAutoBatchDeps(rootDir);
     if (!autoBatchDeps) { sendJson(response, 503, { error: 'Domeme 설정 또는 pricing-rules.json을 불러올 수 없어 배치를 실행할 수 없습니다', code: 'AUTO_BATCH_CONFIG_UNAVAILABLE' }); return; }
-    const result = await runAutoDiscoveryBatch(db, { rootDir, ...autoBatchDeps });
+    const result = await runCandidateDiscoveryBatch(db, { rootDir, ...autoBatchDeps });
     sendJson(response, result.skipped ? 409 : 200, result);
+    return;
+  }
+
+  if (url.pathname === '/api/auto-batch/processing/run-now' && request.method === 'POST') {
+    const autoBatchDeps = await loadAutoBatchDeps(rootDir);
+    if (!autoBatchDeps) { sendJson(response, 503, { error: 'Domeme 설정 또는 pricing-rules.json을 불러올 수 없어 배치를 실행할 수 없습니다', code: 'AUTO_BATCH_CONFIG_UNAVAILABLE' }); return; }
+    const result = await runDailyProcessingBatch(db, { rootDir, ...autoBatchDeps });
+    sendJson(response, result.skipped ? 409 : 200, result);
+    return;
+  }
+
+  if (url.pathname === '/api/auto-batch/queue' && request.method === 'GET') {
+    const status = url.searchParams.get('status') || undefined;
+    const [queue, activeCount, nextItem] = await Promise.all([
+      listQueue(db, { status }), countActiveQueueItems(db), getNextQueueItem(db),
+    ]);
+    sendJson(response, 200, { queue, queueLength: activeCount, nextItem });
     return;
   }
 
@@ -852,22 +884,35 @@ function adminHtml() {
       else if(view==='registrations')loadRegistrationsView();
       else if(view==='autoBatch')loadAutoBatchView();
     }
+    const QUEUE_STATUS_LABELS={queued:'대기 중',analyzing:'분석 중',generating_images:'이미지 생성 중',awaiting_approval:'승인 대기',ready_for_registration:'등록 준비 완료',failed:'실패'};
     async function loadAutoBatchView(){
       const el=document.getElementById('specialView');
       el.innerHTML='<p class="muted" style="padding:12px">불러오는 중...</p>';
-      const [scheduleData,runsData]=await Promise.all([api('/api/auto-batch/schedule'),api('/api/auto-batch/runs?limit=10')]);
+      const [scheduleData,runsData,queueData]=await Promise.all([api('/api/auto-batch/schedule'),api('/api/auto-batch/runs?limit=10'),api('/api/auto-batch/queue')]);
       const s=scheduleData.schedule||{};
+      const next=queueData.nextItem;
       el.innerHTML='<div style="padding:12px">'
-        +'<div class="section"><h3>스케줄 상태</h3>'
-        +'<div>실행 중: '+(s.isRunning?'예 (실행 중)':'아니오')+'</div>'
-        +'<div>다음 실행 예정: '+escapeHtml(s.nextRunAt||'-')+'</div>'
-        +'<div>마지막 실행: '+escapeHtml(s.lastRunAt||'-')+'</div>'
-        +'<label>실행 주기 (일)</label><input id="autoBatchIntervalDays" type="number" min="1" value="'+(s.intervalDays??3)+'">'
+        +'<div class="section"><h3>후보 발굴 (3일 주기, Codex 미사용)</h3>'
+        +'<div>실행 중: '+(s.isRunning?'예':'아니오')+'</div>'
+        +'<div>마지막 발굴 실행일: '+escapeHtml(s.lastRunAt||'-')+'</div>'
+        +'<div>다음 발굴 예정일: '+escapeHtml(s.nextRunAt||'-')+'</div>'
+        +'<label>발굴 주기 (일)</label><input id="autoBatchIntervalDays" type="number" min="1" value="'+(s.intervalDays??3)+'">'
         +'<label>최소 통과 점수</label><input id="autoBatchMinScore" type="number" min="0" max="100" value="'+(s.minPassingScore??60)+'">'
-        +'<p><button id="autoBatchSaveScheduleButton" type="button">스케줄 저장</button> <button id="autoBatchRunNowButton" type="button">지금 실행</button></p>'
+        +'<p><button id="autoBatchSaveScheduleButton" type="button">스케줄 저장</button> <button id="autoBatchDiscoveryRunNowButton" type="button">발굴 지금 실행</button></p>'
+        +'</div>'
+        +'<div class="section"><h3>실제 처리 (하루 1건, Codex 사용)</h3>'
+        +'<div>마지막 처리 실행일: '+escapeHtml(s.processingLastRunAt||'-')+'</div>'
+        +'<div>다음 처리 예정일: '+escapeHtml(s.processingNextRunAt||'-')+'</div>'
+        +'<label>처리 주기 (일)</label><input id="autoBatchProcessingIntervalDays" type="number" min="1" value="'+(s.processingIntervalDays??1)+'">'
+        +'<p><button id="autoBatchSaveProcessingScheduleButton" type="button">처리 주기 저장</button> <button id="autoBatchProcessingRunNowButton" type="button">처리 지금 실행</button></p>'
         +'<div id="autoBatchActionResult" class="muted"></div>'
         +'</div>'
-        +'<div class="section"><h3>실행 이력</h3><div id="autoBatchRunsList">'+autoBatchRunsListHtml(runsData.runs)+'</div></div>'
+        +'<div class="section"><h3>큐 상태</h3>'
+        +'<div>현재 큐 길이 (미완료): '+queueData.queueLength+'</div>'
+        +'<div>오늘/다음 처리 대상: '+(next?escapeHtml(next.name||next.supplierProductNo)+' (점수 '+next.score+', 상태 '+escapeHtml(QUEUE_STATUS_LABELS[next.status]||next.status)+')':'없음')+'</div>'
+        +'<div id="autoBatchQueueList">'+autoBatchQueueListHtml(queueData.queue)+'</div>'
+        +'</div>'
+        +'<div class="section"><h3>발굴 실행 이력</h3><div id="autoBatchRunsList">'+autoBatchRunsListHtml(runsData.runs)+'</div></div>'
         +'<div id="autoBatchRunDetail"></div>'
         +'</div>';
       document.getElementById('autoBatchSaveScheduleButton').onclick=async()=>{
@@ -879,18 +924,44 @@ function adminHtml() {
           await loadAutoBatchView();
         }catch(error){resultEl.textContent=error.message;}
       };
-      document.getElementById('autoBatchRunNowButton').onclick=async()=>{
+      document.getElementById('autoBatchSaveProcessingScheduleButton').onclick=async()=>{
         const resultEl=document.getElementById('autoBatchActionResult');
-        resultEl.textContent='실행 중... (카테고리 수집·점수화에 시간이 걸릴 수 있습니다)';
+        resultEl.textContent='저장 중...';
         try{
-          const result=await api('/api/auto-batch/run-now',{method:'POST',body:'{}'});
-          resultEl.textContent=result.skipped?'이미 실행 중이라 건너뜀':'실행 완료 (runId='+result.run.id+')';
+          await api('/api/auto-batch/schedule',{method:'PATCH',body:JSON.stringify({processingIntervalDays:Number(document.getElementById('autoBatchProcessingIntervalDays').value)})});
+          resultEl.textContent='저장 완료';
+          await loadAutoBatchView();
+        }catch(error){resultEl.textContent=error.message;}
+      };
+      document.getElementById('autoBatchDiscoveryRunNowButton').onclick=async()=>{
+        const resultEl=document.getElementById('autoBatchActionResult');
+        resultEl.textContent='후보 발굴 실행 중...';
+        try{
+          const result=await api('/api/auto-batch/discovery/run-now',{method:'POST',body:'{}'});
+          resultEl.textContent=result.skipped?('건너뜀: '+result.reason):'발굴 완료 (runId='+result.run.id+', 신규 큐 적재 '+result.enqueued.length+'건)';
+          await loadAutoBatchView();
+        }catch(error){resultEl.textContent=error.message;}
+      };
+      document.getElementById('autoBatchProcessingRunNowButton').onclick=async()=>{
+        const resultEl=document.getElementById('autoBatchActionResult');
+        resultEl.textContent='오늘의 상품 처리 중... (분석·이미지 생성에 시간이 걸릴 수 있습니다)';
+        try{
+          const result=await api('/api/auto-batch/processing/run-now',{method:'POST',body:'{}'});
+          resultEl.textContent=result.skipped?('건너뜀: '+result.reason):'처리 완료: '+result.outcome+(result.draftId?(' (draft #'+result.draftId+')'):'');
           await loadAutoBatchView();
         }catch(error){resultEl.textContent=error.message;}
       };
       for(const button of el.querySelectorAll('[data-auto-batch-run-id]')){
         button.onclick=()=>loadAutoBatchRunDetail(Number(button.dataset.autoBatchRunId));
       }
+    }
+    function autoBatchQueueListHtml(queue){
+      if(!queue||!queue.length)return '<p class="muted">큐가 비어 있습니다.</p>';
+      return '<table><thead><tr><th>상품</th><th>점수</th><th>상태</th><th>draft</th><th>실패사유</th></tr></thead><tbody>'
+        +queue.map(q=>'<tr><td>'+escapeHtml(q.name||q.supplierProductNo)+'</td><td>'+(q.score??'-')+'</td><td>'+escapeHtml(QUEUE_STATUS_LABELS[q.status]||q.status)+'</td>'
+          +'<td>'+(q.draftId?'<a href="/admin?draftId='+q.draftId+'">#'+q.draftId+'</a>':'-')+'</td>'
+          +'<td>'+(q.failureMessage?escapeHtml(q.failureStage||'')+': '+escapeHtml(q.failureMessage):'-')+'</td></tr>').join('')
+        +'</tbody></table>';
     }
     function autoBatchRunsListHtml(runs){
       if(!runs||!runs.length)return '<p class="muted">아직 실행 이력이 없습니다.</p>';

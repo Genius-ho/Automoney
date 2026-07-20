@@ -1,6 +1,6 @@
 import { saveEvaluatedCandidate } from './candidate-collector.mjs';
 import { sliceLongDetailImagesForDraft } from './image-slicer.mjs';
-import { runProductAnalysis, applyProductAnalysis } from './product-analysis-orchestrator.mjs';
+import { applyProductAnalysis, getLatestAnalysisRun, runProductAnalysis } from './product-analysis-orchestrator.mjs';
 import { generateDetailImageSet, generateMainImage } from './manual-ai/codex-image-runner.mjs';
 import { findDraftBySupplierProductNo, linkDraftToBatch, updateBatchCandidateStatus } from './batch-run-store.mjs';
 
@@ -17,7 +17,7 @@ function isQuotaLimited(codeOrLog) {
   return QUOTA_LOG_PATTERN.test(String(codeOrLog || ''));
 }
 
-// One winner candidate, start to finish: dedup check -> draft creation ->
+// One winner candidate, start to finish: draft creation-or-reuse ->
 // detail-image slicing -> Python/Codex analysis -> safe-field auto-apply ->
 // main image -> detail image set -> awaiting_image_approval. Every step
 // updates batch_run_candidates.processing_status so a partial failure is
@@ -25,6 +25,14 @@ function isQuotaLimited(codeOrLog) {
 // Coupang/Naver API, never approves an image, never touches draft
 // 27/46/64 (a different supplier_product_no by construction -- dedup would
 // skip this candidate entirely if it ever collided).
+//
+// "draft 생성 또는 기존 draft 재사용": candidateRow.draftId is only ever set
+// by THIS function's own earlier updateBatchCandidateStatusImpl call (once
+// draft_created fires), so its presence means this exact candidate already
+// has its own draft from a prior attempt (e.g. resumed the next day after a
+// quota pause) -- reuse it directly rather than running the dedup check,
+// which would otherwise wrongly treat the candidate's own draft as a
+// collision with itself and report a false skipped_duplicate.
 export async function processWinnerCandidate(db, candidateRow, {
   rootDir,
   jobDir,
@@ -38,35 +46,40 @@ export async function processWinnerCandidate(db, candidateRow, {
   updateBatchCandidateStatusImpl = updateBatchCandidateStatus,
   sliceLongDetailImagesForDraftImpl = sliceLongDetailImagesForDraft,
   runProductAnalysisImpl = runProductAnalysis,
+  getLatestAnalysisRunImpl = getLatestAnalysisRun,
   applyProductAnalysisImpl = applyProductAnalysis,
   generateMainImageImpl = generateMainImage,
   generateDetailImageSetImpl = generateDetailImageSet,
 } = {}) {
-  const existingDraftId = await findDraftBySupplierProductNoImpl(db, candidateRow.supplierProductNo);
-  if (existingDraftId) {
-    await updateBatchCandidateStatusImpl(db, candidateRow.id, {
-      processingStatus: 'failed',
-      failureStage: 'draft_creation',
-      failureMessage: `이미 존재하는 draft(#${existingDraftId})와 동일한 supplier_product_no -- 중복 생성 건너뜀`,
-    });
-    return { outcome: 'skipped_duplicate', draftId: existingDraftId };
-  }
+  let draftId = candidateRow.draftId || null;
 
-  const saved = await saveEvaluatedCandidateImpl(db, candidateRow.rawCandidateJson, {
-    importBatchId: `auto-batch-${batchRunId}`,
-    collectedAt: new Date().toISOString(),
-  });
-  if (!saved.saved) {
-    await updateBatchCandidateStatusImpl(db, candidateRow.id, {
-      processingStatus: 'failed',
-      failureStage: 'draft_creation',
-      failureMessage: saved.error?.message || 'draft 생성 실패',
+  if (!draftId) {
+    const existingDraftId = await findDraftBySupplierProductNoImpl(db, candidateRow.supplierProductNo);
+    if (existingDraftId) {
+      await updateBatchCandidateStatusImpl(db, candidateRow.id, {
+        processingStatus: 'failed',
+        failureStage: 'draft_creation',
+        failureMessage: `이미 존재하는 draft(#${existingDraftId})와 동일한 supplier_product_no -- 중복 생성 건너뜀`,
+      });
+      return { outcome: 'skipped_duplicate', draftId: existingDraftId };
+    }
+
+    const saved = await saveEvaluatedCandidateImpl(db, candidateRow.rawCandidateJson, {
+      importBatchId: `auto-batch-${batchRunId}`,
+      collectedAt: new Date().toISOString(),
     });
-    return { outcome: 'failed', stage: 'draft_creation' };
+    if (!saved.saved) {
+      await updateBatchCandidateStatusImpl(db, candidateRow.id, {
+        processingStatus: 'failed',
+        failureStage: 'draft_creation',
+        failureMessage: saved.error?.message || 'draft 생성 실패',
+      });
+      return { outcome: 'failed', stage: 'draft_creation' };
+    }
+    draftId = saved.draftId;
+    await linkDraftToBatchImpl(db, draftId, { batchRunId, batchCandidateId: candidateRow.id });
+    await updateBatchCandidateStatusImpl(db, candidateRow.id, { processingStatus: 'draft_created', draftId });
   }
-  const draftId = saved.draftId;
-  await linkDraftToBatchImpl(db, draftId, { batchRunId, batchCandidateId: candidateRow.id });
-  await updateBatchCandidateStatusImpl(db, candidateRow.id, { processingStatus: 'draft_created', draftId });
 
   // Best-effort: analysis's own NO_DETAIL_IMAGES check is the authoritative
   // "원본 이미지 부족" failure signal below, so a slicing hiccup here isn't
@@ -74,7 +87,12 @@ export async function processWinnerCandidate(db, candidateRow, {
   await sliceLongDetailImagesForDraftImpl(db, draftId, { rootDir }).catch(() => {});
 
   await updateBatchCandidateStatusImpl(db, candidateRow.id, { processingStatus: 'analysis_running' });
-  const run = await runProductAnalysisImpl({ db, rootDir, draftId, codexConfig, pythonConfig, jobPathsConfig });
+  // Resume case: if a prior attempt on this same draft already completed
+  // analysis successfully (e.g. the quota limit hit during image
+  // generation instead), reuse that result rather than spending another
+  // round of Codex analysis calls re-doing work that already succeeded.
+  const priorRun = await getLatestAnalysisRunImpl(db, draftId);
+  const run = priorRun?.status === 'success' ? priorRun : await runProductAnalysisImpl({ db, rootDir, draftId, codexConfig, pythonConfig, jobPathsConfig });
   if (run.status !== 'success') {
     const failureMessage = run.errorMessage || run.codexErrorMessage || run.pythonErrorMessage || run.errorCode || 'analysis failed';
     await updateBatchCandidateStatusImpl(db, candidateRow.id, {

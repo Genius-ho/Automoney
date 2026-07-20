@@ -3,7 +3,9 @@ import test from 'node:test';
 
 import {
   getBatchScheduleState,
-  releaseBatchLock,
+  releaseDiscoveryLock,
+  releaseLockOnly,
+  releaseProcessingLock,
   tryAcquireBatchLock,
   updateBatchScheduleState,
 } from '../src/batch-schedule-store.mjs';
@@ -15,6 +17,9 @@ function fakeRow(overrides = {}) {
     last_run_at: null,
     is_running: false,
     min_passing_score: 60,
+    processing_interval_days: 1,
+    processing_next_run_at: '2026-07-21T00:00:00Z',
+    processing_last_run_at: null,
     updated_at: '2026-07-20T00:00:00Z',
     ...overrides,
   };
@@ -25,12 +30,14 @@ test('getBatchScheduleState returns null when the single row is somehow missing'
   assert.equal(await getBatchScheduleState(db), null);
 });
 
-test('getBatchScheduleState maps the row to camelCase', async () => {
+test('getBatchScheduleState maps both the discovery and processing schedule fields to camelCase', async () => {
   const db = { async query() { return { rows: [fakeRow()] }; } };
   const state = await getBatchScheduleState(db);
   assert.equal(state.intervalDays, 3);
   assert.equal(state.isRunning, false);
   assert.equal(state.minPassingScore, 60);
+  assert.equal(state.processingIntervalDays, 1);
+  assert.equal(state.processingNextRunAt, '2026-07-21T00:00:00Z');
 });
 
 test('updateBatchScheduleState only overwrites fields that are provided', async () => {
@@ -42,7 +49,7 @@ test('updateBatchScheduleState only overwrites fields that are provided', async 
     },
   };
   await updateBatchScheduleState(db, { intervalDays: 5 });
-  assert.deepEqual(capturedParams, [5, null, null]);
+  assert.deepEqual(capturedParams, [5, null, null, null, null]);
 });
 
 test('tryAcquireBatchLock only succeeds when is_running was false (atomic compare-and-set)', async () => {
@@ -63,15 +70,44 @@ test('tryAcquireBatchLock returns null when a batch is already running (no row u
   assert.equal(await tryAcquireBatchLock(db), null);
 });
 
-test('releaseBatchLock clears is_running and stamps last_run_at', async () => {
+test('releaseDiscoveryLock clears is_running and stamps the discovery last_run_at/next_run_at only', async () => {
+  let capturedSql = null;
   let capturedParams = null;
   const db = {
     async query(sql, params) {
+      capturedSql = sql;
       capturedParams = params;
       return { rows: [fakeRow({ is_running: false, last_run_at: '2026-07-20T01:00:00Z' })] };
     },
   };
-  const state = await releaseBatchLock(db, { nextRunAt: '2026-07-23T00:00:00Z' });
+  const state = await releaseDiscoveryLock(db, { nextRunAt: '2026-07-23T00:00:00Z' });
   assert.equal(state.isRunning, false);
+  assert.match(capturedSql, /next_run_at = coalesce/);
+  assert.ok(!capturedSql.includes('processing_next_run_at ='));
   assert.deepEqual(capturedParams, [null, '2026-07-23T00:00:00Z']);
+});
+
+test('releaseProcessingLock clears is_running and stamps the processing last_run_at/next_run_at only', async () => {
+  let capturedSql = null;
+  let capturedParams = null;
+  const db = {
+    async query(sql, params) {
+      capturedSql = sql;
+      capturedParams = params;
+      return { rows: [fakeRow({ is_running: false, processing_last_run_at: '2026-07-20T01:00:00Z' })] };
+    },
+  };
+  const state = await releaseProcessingLock(db, { nextRunAt: '2026-07-21T00:00:00Z' });
+  assert.equal(state.isRunning, false);
+  assert.match(capturedSql, /processing_next_run_at = coalesce/);
+  assert.ok(!capturedSql.includes('\n       next_run_at ='));
+  assert.deepEqual(capturedParams, [null, '2026-07-21T00:00:00Z']);
+});
+
+test('releaseLockOnly clears is_running without touching either schedule', async () => {
+  let capturedSql = null;
+  const db = { async query(sql) { capturedSql = sql; return { rows: [fakeRow({ is_running: false })] }; } };
+  const state = await releaseLockOnly(db);
+  assert.equal(state.isRunning, false);
+  assert.ok(!capturedSql.includes('next_run_at'));
 });

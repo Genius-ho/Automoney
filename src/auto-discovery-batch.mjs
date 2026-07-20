@@ -1,8 +1,27 @@
 import { collectCandidates as collectCandidatesReal, evaluateCandidates as evaluateCandidatesReal } from './candidate-collector.mjs';
 import { computeCompetitivenessScore as computeCompetitivenessScoreReal } from './competitiveness-score.mjs';
 import { getRecentlySelectedCategoryIds, listActiveCategoryPolicies, recordCategorySelections as recordCategorySelectionsReal } from './category-policy-store.mjs';
-import { releaseBatchLock as releaseBatchLockReal, tryAcquireBatchLock as tryAcquireBatchLockReal } from './batch-schedule-store.mjs';
-import { createBatchRun as createBatchRunReal, finishBatchRun as finishBatchRunReal, recordBatchCandidates as recordBatchCandidatesReal } from './batch-run-store.mjs';
+import {
+  releaseDiscoveryLock as releaseDiscoveryLockReal,
+  releaseLockOnly as releaseLockOnlyReal,
+  releaseProcessingLock as releaseProcessingLockReal,
+  tryAcquireBatchLock as tryAcquireBatchLockReal,
+} from './batch-schedule-store.mjs';
+import {
+  createBatchRun as createBatchRunReal,
+  finishBatchRun as finishBatchRunReal,
+  getBatchRunCandidateById as getBatchRunCandidateByIdReal,
+  recordBatchCandidates as recordBatchCandidatesReal,
+  updateBatchCandidateStatus as updateBatchCandidateStatusReal,
+} from './batch-run-store.mjs';
+import {
+  countActiveQueueItems as countActiveQueueItemsReal,
+  enqueueCandidate as enqueueCandidateReal,
+  getNextQueueItem as getNextQueueItemReal,
+  isCandidateActiveOrQueued as isCandidateActiveOrQueuedReal,
+  recordQueueItemPause as recordQueueItemPauseReal,
+  updateQueueItemStatus as updateQueueItemStatusReal,
+} from './processing-queue-store.mjs';
 import { processWinnerCandidate as processWinnerCandidateReal } from './batch-winner-processor.mjs';
 
 const CANDIDATES_STORED_PER_CATEGORY = 5;
@@ -80,9 +99,10 @@ export async function collectAndScoreCandidatesForCategory(policy, {
       scoreBreakdown: entry.breakdown,
       isWinner: winner != null && index === 0,
       // Full candidate (raw/normalized/filter/prices), not just a display
-      // summary -- Stage 2's processWinnerCandidate feeds this straight into
-      // saveEvaluatedCandidate to create the draft, so it must be everything
-      // that function needs, exactly as evaluateCandidates() produced it.
+      // summary -- the daily processing cycle's processWinnerCandidate feeds
+      // this straight into saveEvaluatedCandidate to create the draft, so it
+      // must be everything that function needs, exactly as
+      // evaluateCandidates() produced it.
       rawCandidateJson: {
         productNo: entry.candidate.productNo,
         raw: entry.candidate.raw,
@@ -95,39 +115,44 @@ export async function collectAndScoreCandidatesForCategory(policy, {
   };
 }
 
-// Top-level orchestrator. Stage 1 selects categories and scores candidates;
-// Stage 2 then carries each category's winner (if any) through draft
-// creation, analysis, and image generation -- sequentially, one winner at a
-// time (never in parallel), all inside the same lock so Codex/Python usage
-// stays serialized for the whole run. Never calls any Coupang/Naver API and
-// never auto-approves an image -- that stays Stage 3/4 and a human,
-// respectively.
-export async function runAutoDiscoveryBatch(db, {
+// Light cycle (every 3 days by default, no Codex usage at all): select
+// categories, score candidates, enqueue each category's winner into
+// processing_queue (dedup-checked against both the active queue and
+// existing drafts) -- never creates a draft, never runs analysis or image
+// generation. "큐에 미완료 상품이 있으면 새 후보 발굴보다 기존 큐 처리를
+// 우선": if any non-failed queue item still exists, this cycle does no
+// discovery work at all this tick (still advances next_run_at so it simply
+// re-checks next time, rather than spinning).
+export async function runCandidateDiscoveryBatch(db, {
   rootDir,
-  jobDir,
   domemeClientImpl,
   pricingRules,
-  codexConfig,
-  pythonConfig,
-  jobPathsConfig = {},
   categoryCount = 3,
   excludeRecentDays = 30,
   targetCandidateCount = 30,
   pageSize = 20,
   scoreContext = {},
   tryAcquireBatchLockImpl = tryAcquireBatchLockReal,
-  releaseBatchLockImpl = releaseBatchLockReal,
+  releaseDiscoveryLockImpl = releaseDiscoveryLockReal,
+  releaseLockOnlyImpl = releaseLockOnlyReal,
   createBatchRunImpl = createBatchRunReal,
   finishBatchRunImpl = finishBatchRunReal,
   recordBatchCandidatesImpl = recordBatchCandidatesReal,
   recordCategorySelectionsImpl = recordCategorySelectionsReal,
   selectRandomCategoriesImpl = selectRandomCategories,
   collectAndScoreCandidatesForCategoryImpl = collectAndScoreCandidatesForCategory,
-  processWinnerCandidateImpl = processWinnerCandidateReal,
+  countActiveQueueItemsImpl = countActiveQueueItemsReal,
+  isCandidateActiveOrQueuedImpl = isCandidateActiveOrQueuedReal,
+  enqueueCandidateImpl = enqueueCandidateReal,
 } = {}) {
   const lock = await tryAcquireBatchLockImpl(db);
-  if (!lock) {
-    return { skipped: true, reason: 'ALREADY_RUNNING' };
+  if (!lock) return { skipped: true, reason: 'ALREADY_RUNNING' };
+
+  const backlog = await countActiveQueueItemsImpl(db);
+  if (backlog > 0) {
+    const nextRunAt = new Date(Date.now() + lock.intervalDays * 24 * 60 * 60 * 1000).toISOString();
+    await releaseDiscoveryLockImpl(db, { nextRunAt });
+    return { skipped: true, reason: 'QUEUE_BACKLOG', backlog };
   }
 
   let run = null;
@@ -137,7 +162,7 @@ export async function runAutoDiscoveryBatch(db, {
     await recordCategorySelectionsImpl(db, run.id, categories.map((category) => category.id));
 
     const results = [];
-    const winnerRows = [];
+    const enqueued = [];
     for (const policy of categories) {
       const result = await collectAndScoreCandidatesForCategoryImpl(policy, {
         domemeClientImpl,
@@ -151,29 +176,17 @@ export async function runAutoDiscoveryBatch(db, {
       const recorded = await recordBatchCandidatesImpl(db, run.id, result.top.map((candidate) => ({ ...candidate, categoryPolicyId: policy.id })));
       results.push(result);
       const winnerRow = recorded.find((row) => row.isWinner);
-      if (winnerRow) winnerRows.push(winnerRow);
-    }
-
-    // Section 3 ("각 상품 순차 처리"): one winner at a time, never Promise.all.
-    // A quota/rate-limit hit stops processing the *remaining* winners for
-    // this run (they stay processingStatus='selected', pickupable later)
-    // instead of throwing -- an expected, anticipated condition per spec,
-    // not a run failure.
-    const processed = [];
-    let quotaStopped = false;
-    for (const winnerRow of winnerRows) {
-      if (quotaStopped) break;
-      const outcome = await processWinnerCandidateImpl(db, winnerRow, {
-        rootDir, jobDir: jobDir || jobPathsConfig.jobDir, codexConfig, pythonConfig, jobPathsConfig, batchRunId: run.id,
+      if (!winnerRow) continue;
+      if (await isCandidateActiveOrQueuedImpl(db, winnerRow.supplierProductNo)) continue; // dedup: already queued or already has a draft
+      const queued = await enqueueCandidateImpl(db, {
+        batchRunCandidateId: winnerRow.id, categoryPolicyId: policy.id,
+        supplierProductNo: winnerRow.supplierProductNo, name: winnerRow.name, score: winnerRow.score,
       });
-      processed.push({ candidateId: winnerRow.id, ...outcome });
-      if (outcome.quotaLimited) quotaStopped = true;
+      enqueued.push(queued);
     }
 
-    const stageReached = winnerRows.length === 0 ? 'scored_preview_only'
-      : quotaStopped ? 'stage2_partial_quota_limited' : 'stage2_completed';
-    const finished = await finishBatchRunImpl(db, run.id, { status: 'completed', stageReached });
-    return { run: finished, categories: results, processed };
+    const finished = await finishBatchRunImpl(db, run.id, { status: 'completed', stageReached: 'enqueued' });
+    return { run: finished, categories: results, enqueued };
   } catch (error) {
     if (run) {
       await finishBatchRunImpl(db, run.id, { status: 'failed', errorCode: error.code || 'BATCH_FAILED', errorMessage: error.message });
@@ -181,6 +194,85 @@ export async function runAutoDiscoveryBatch(db, {
     throw error;
   } finally {
     const nextRunAt = new Date(Date.now() + lock.intervalDays * 24 * 60 * 60 * 1000).toISOString();
-    await releaseBatchLockImpl(db, { nextRunAt });
+    await releaseDiscoveryLockImpl(db, { nextRunAt });
+  }
+}
+
+// A candidate's fine-grained batch_run_candidates.processing_status, mapped
+// onto the coarser processing_queue.status vocabulary the admin UI and
+// getNextQueueItem's resume logic use. 'failed' is deliberately not mapped
+// here -- runDailyProcessingBatch decides the final queue status itself
+// after processWinnerCandidate returns, since a quota-limited stop must
+// leave the queue item at its last in-progress stage (resumable tomorrow),
+// not force it to 'failed' (terminal) the way every other failure does.
+function mapCandidateStatusToQueueStatus(processingStatus) {
+  if (processingStatus === 'draft_created' || processingStatus === 'analysis_running' || processingStatus === 'analysis_completed') return 'analyzing';
+  if (processingStatus === 'image_generation_running') return 'generating_images';
+  if (processingStatus === 'awaiting_image_approval') return 'awaiting_approval';
+  return null;
+}
+
+// Heavy cycle (daily by default): pops exactly ONE item -- resuming
+// anything already mid-flight before ever starting a fresh one -- and runs
+// it through processWinnerCandidate (draft -> analysis -> images). This is
+// the one place Codex actually gets called, capped at once per day
+// regardless of how many items discovery has queued.
+export async function runDailyProcessingBatch(db, {
+  rootDir,
+  jobDir,
+  codexConfig,
+  pythonConfig,
+  jobPathsConfig = {},
+  tryAcquireBatchLockImpl = tryAcquireBatchLockReal,
+  releaseProcessingLockImpl = releaseProcessingLockReal,
+  getNextQueueItemImpl = getNextQueueItemReal,
+  updateQueueItemStatusImpl = updateQueueItemStatusReal,
+  recordQueueItemPauseImpl = recordQueueItemPauseReal,
+  updateBatchCandidateStatusImpl = updateBatchCandidateStatusReal,
+  getBatchRunCandidateByIdImpl = getBatchRunCandidateByIdReal,
+  processWinnerCandidateImpl = processWinnerCandidateReal,
+} = {}) {
+  const lock = await tryAcquireBatchLockImpl(db);
+  if (!lock) return { skipped: true, reason: 'ALREADY_RUNNING' };
+
+  try {
+    const queueItem = await getNextQueueItemImpl(db);
+    if (!queueItem) return { skipped: true, reason: 'QUEUE_EMPTY' };
+
+    const candidateRow = await getBatchRunCandidateByIdImpl(db, queueItem.batchRunCandidateId);
+    await updateQueueItemStatusImpl(db, queueItem.id, { status: 'analyzing', startedAt: queueItem.startedAt || new Date().toISOString() });
+
+    // Fans every batch_run_candidates status update processWinnerCandidate
+    // already makes out to processing_queue too, so the queue's coarse
+    // status always mirrors the candidate's fine-grained progress live --
+    // without this, processWinnerCandidate itself needs no changes at all.
+    const mirroringStatusImpl = async (dbArg, candidateId, patch) => {
+      const result = await updateBatchCandidateStatusImpl(dbArg, candidateId, patch);
+      const queueStatus = mapCandidateStatusToQueueStatus(patch.processingStatus);
+      if (queueStatus) await updateQueueItemStatusImpl(dbArg, queueItem.id, { status: queueStatus, draftId: patch.draftId });
+      return result;
+    };
+
+    const outcome = await processWinnerCandidateImpl(db, candidateRow, {
+      rootDir, jobDir: jobDir || jobPathsConfig.jobDir, codexConfig, pythonConfig, jobPathsConfig, batchRunId: candidateRow.batchRunId,
+      updateBatchCandidateStatusImpl: mirroringStatusImpl,
+    });
+
+    if (outcome.outcome === 'success') {
+      await updateQueueItemStatusImpl(db, queueItem.id, { status: 'awaiting_approval', draftId: outcome.draftId });
+    } else if (outcome.outcome === 'skipped_duplicate') {
+      await updateQueueItemStatusImpl(db, queueItem.id, { status: 'failed', failureStage: 'draft_creation', failureMessage: '이미 존재하는 draft와 동일한 상품 -- 건너뜀', draftId: outcome.draftId });
+    } else if (outcome.quotaLimited) {
+      // Leave status at whatever in-progress stage the mirror last set --
+      // resumed tomorrow by getNextQueueItem, not retried today.
+      await recordQueueItemPauseImpl(db, queueItem.id, { failureStage: outcome.stage, failureMessage: `Codex 사용량 한도로 일시중단: ${outcome.errorCode || ''}` });
+    } else {
+      await updateQueueItemStatusImpl(db, queueItem.id, { status: 'failed', failureStage: outcome.stage, failureMessage: outcome.errorCode || 'unknown failure' });
+    }
+
+    return { queueItemId: queueItem.id, ...outcome };
+  } finally {
+    const nextRunAt = new Date(Date.now() + lock.processingIntervalDays * 24 * 60 * 60 * 1000).toISOString();
+    await releaseProcessingLockImpl(db, { nextRunAt });
   }
 }

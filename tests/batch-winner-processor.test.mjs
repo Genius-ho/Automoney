@@ -23,6 +23,7 @@ function baseDeps(overrides = {}) {
     linkDraftToBatchImpl: async () => {},
     updateBatchCandidateStatusImpl: async (_db, candidateId, patch) => { statusUpdates.push({ candidateId, ...patch }); return null; },
     sliceLongDetailImagesForDraftImpl: async () => ({ checked: 1, longImages: 1, generatedSlices: 3, failed: 0, failures: [] }),
+    getLatestAnalysisRunImpl: async () => null,
     runProductAnalysisImpl: async () => ({ status: 'success', pythonStatus: 'success', codexStatus: 'success', mergedAnalysis: { unresolvedFields: ['manufacturer'] } }),
     applyProductAnalysisImpl: async () => ({ appliedFields: ['material', 'dimensions'], blockedFields: [{ field: 'manufacturer', reason: 'NO_EVIDENCE_LEGAL_FIELD' }] }),
     generateMainImageImpl: async () => ({ result: { id: 1 }, generatedFileCount: 1 }),
@@ -43,6 +44,33 @@ test('processWinnerCandidate skips (never creates a draft) when a draft with the
   assert.equal(outcome.draftId, 27);
   assert.equal(createCalled, false);
   assert.equal(deps.statusUpdates[0].failureStage, 'draft_creation');
+});
+
+test('processWinnerCandidate reuses its own already-created draft on resume instead of running the dedup check (which would wrongly report a duplicate)', async () => {
+  let dedupCalled = false;
+  let createCalled = false;
+  const deps = baseDeps({
+    findDraftBySupplierProductNoImpl: async () => { dedupCalled = true; return 117; }, // would be a false positive if ever consulted
+    saveEvaluatedCandidateImpl: async () => { createCalled = true; return { saved: true, draftId: 999 }; },
+  });
+  const outcome = await processWinnerCandidate({}, candidateRow({ draftId: 117 }), deps);
+  assert.equal(dedupCalled, false);
+  assert.equal(createCalled, false);
+  assert.equal(outcome.outcome, 'success');
+  assert.equal(outcome.draftId, 117);
+  // draft_created is never re-emitted on resume -- it already fired on the prior attempt.
+  assert.ok(!deps.statusUpdates.some((u) => u.processingStatus === 'draft_created'));
+});
+
+test('processWinnerCandidate skips re-running analysis on resume when a prior attempt on this draft already completed it successfully', async () => {
+  let analysisCalled = false;
+  const deps = baseDeps({
+    getLatestAnalysisRunImpl: async () => ({ id: 9, status: 'success', pythonStatus: 'success', codexStatus: 'success', mergedAnalysis: { unresolvedFields: [] } }),
+    runProductAnalysisImpl: async () => { analysisCalled = true; return { status: 'success', pythonStatus: 'success', codexStatus: 'success', mergedAnalysis: { unresolvedFields: [] } }; },
+  });
+  const outcome = await processWinnerCandidate({}, candidateRow({ draftId: 117 }), deps);
+  assert.equal(analysisCalled, false);
+  assert.equal(outcome.outcome, 'success');
 });
 
 test('processWinnerCandidate runs the full pipeline end to end and lands on awaiting_image_approval', async () => {

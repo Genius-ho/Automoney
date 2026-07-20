@@ -136,6 +136,16 @@ export async function findDraftBySupplierProductNo(db, supplierProductNo) {
   return result.rows[0] ? Number(result.rows[0].id) : null;
 }
 
+// Fetches the full candidate row (including raw_candidate_json) by id --
+// the daily processing cycle only stores a lightweight reference
+// (batchRunCandidateId) on each processing_queue row, so it looks the full
+// candidate back up here rather than duplicating raw_candidate_json into
+// processing_queue too.
+export async function getBatchRunCandidateById(db, id) {
+  const result = await db.query('select * from batch_run_candidates where id = $1', [id]);
+  return result.rows[0] ? toBatchRunCandidate(result.rows[0]) : null;
+}
+
 export async function getLatestBatchRun(db) {
   const result = await db.query('select * from batch_runs order by id desc limit 1');
   return result.rows[0] ? toBatchRun(result.rows[0]) : null;

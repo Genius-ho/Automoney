@@ -5,6 +5,7 @@ import {
   createBatchRun,
   findDraftBySupplierProductNo,
   finishBatchRun,
+  getBatchRunCandidateById,
   getBatchRunDetail,
   getLatestBatchRun,
   linkDraftToBatch,
@@ -131,4 +132,23 @@ test('findDraftBySupplierProductNo returns the existing draft id, or null when n
 
   const dbMiss = { async query() { return { rows: [] }; } };
   assert.equal(await findDraftBySupplierProductNo(dbMiss, '99999999'), null);
+});
+
+test('getBatchRunCandidateById returns the full candidate row (including rawCandidateJson), or null when unknown', async () => {
+  const dbHit = {
+    async query() {
+      return {
+        rows: [{
+          id: '5', batch_run_id: '1', category_policy_id: '2', supplier_product_no: '111', name: 'A',
+          score: '80', score_breakdown: {}, is_winner: true, raw_candidate_json: { productNo: '111' }, created_at: '2026-07-23T00:00:00Z',
+        }],
+      };
+    },
+  };
+  const candidate = await getBatchRunCandidateById(dbHit, 5);
+  assert.equal(candidate.id, 5);
+  assert.deepEqual(candidate.rawCandidateJson, { productNo: '111' });
+
+  const dbMiss = { async query() { return { rows: [] }; } };
+  assert.equal(await getBatchRunCandidateById(dbMiss, 999), null);
 });
