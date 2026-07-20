@@ -3,7 +3,11 @@ import { mkdir, readFile, rename, rm, writeFile } from 'node:fs/promises';
 import { extname, join, resolve } from 'node:path';
 import { createHash } from 'node:crypto';
 
-import { loadAiSecrets, loadCodexConfig, loadCoupangConfig, loadDatabaseUrl, loadJobPathsConfig, loadNaverConfig, loadPythonConfig } from './config.mjs';
+import { loadAiSecrets, loadCodexConfig, loadCoupangConfig, loadDatabaseUrl, loadEnvConfig, loadJobPathsConfig, loadNaverConfig, loadPricingRules, loadPythonConfig } from './config.mjs';
+import { DomemeClient } from './domeme-client.mjs';
+import { runAutoDiscoveryBatch } from './auto-discovery-batch.mjs';
+import { getBatchScheduleState, updateBatchScheduleState } from './batch-schedule-store.mjs';
+import { getBatchRunDetail, listBatchRuns } from './batch-run-store.mjs';
 import { uploadApprovedImagesToR2 } from './r2-publisher.mjs';
 import { clearProviderCredential, listProviderSettings, listTaskRouting, saveProviderSetting, saveTaskRouting, testProviderSetting } from './ai/provider-settings-store.mjs';
 import { NaverShoppingClient } from './naver-shopping-client.mjs';
@@ -64,6 +68,25 @@ export function renderManualMainImageWorkflowSection({request={},sourceMainImage
 
 function escapeHtmlForSection(value) { return String(value).replaceAll('&', '&amp;').replaceAll('<', '&lt;').replaceAll('>', '&gt;'); }
 
+const AUTO_BATCH_TICK_INTERVAL_MS = 5 * 60 * 1000;
+
+// Loaded once at startup, not per-tick -- Domeme credentials and pricing
+// rules don't change during the process lifetime. Missing/invalid config
+// here disables the auto-discovery scheduler tick (logged, not fatal) rather
+// than crashing the whole admin server, since nothing else in admin-server.mjs
+// has ever required Domeme/pricing-rules.json access before this feature.
+async function loadAutoBatchDeps(rootDir) {
+  try {
+    const envConfig = await loadEnvConfig(rootDir);
+    const pricingRules = await loadPricingRules(join(rootDir, 'pricing-rules.json'));
+    const domemeClientImpl = new DomemeClient({ apiKey: envConfig.domemeApiKey, endpoint: envConfig.domemeEndpoint });
+    return { domemeClientImpl, pricingRules };
+  } catch (error) {
+    console.error(`autoBatch.configUnavailable=${error.message}`);
+    return null;
+  }
+}
+
 export async function createAdminServer({ rootDir = process.cwd() } = {}) {
   const databaseUrl = await loadDatabaseUrl(rootDir);
   const aiSecrets = await loadAiSecrets(rootDir);
@@ -76,7 +99,22 @@ export async function createAdminServer({ rootDir = process.cwd() } = {}) {
     });
   });
 
+  const autoBatchDeps = await loadAutoBatchDeps(rootDir);
+  const tickHandle = setInterval(async () => {
+    if (!autoBatchDeps) return;
+    try {
+      const state = await getBatchScheduleState(db);
+      if (!state || state.isRunning || new Date(state.nextRunAt) > new Date()) return;
+      const result = await runAutoDiscoveryBatch(db, { rootDir, ...autoBatchDeps });
+      console.log(`autoBatch.tick=${result.skipped ? 'skipped' : result.run?.status}`);
+    } catch (error) {
+      console.error(`autoBatch.tickError=${error.message}`);
+    }
+  }, AUTO_BATCH_TICK_INTERVAL_MS);
+  tickHandle.unref?.();
+
   server.on('close', () => {
+    clearInterval(tickHandle);
     db.end().catch(() => {});
   });
 
@@ -481,6 +519,44 @@ async function handleRequest({ request, response, db, aiSecrets, rootDir }) {
     return;
   }
 
+  if (url.pathname === '/api/auto-batch/schedule' && request.method === 'GET') {
+    sendJson(response, 200, { schedule: await getBatchScheduleState(db) });
+    return;
+  }
+
+  if (url.pathname === '/api/auto-batch/schedule' && request.method === 'PATCH') {
+    const body = await readJson(request);
+    const schedule = await updateBatchScheduleState(db, {
+      intervalDays: body.intervalDays != null ? Number(body.intervalDays) : undefined,
+      nextRunAt: body.nextRunAt || undefined,
+      minPassingScore: body.minPassingScore != null ? Number(body.minPassingScore) : undefined,
+    });
+    sendJson(response, 200, { schedule });
+    return;
+  }
+
+  if (url.pathname === '/api/auto-batch/run-now' && request.method === 'POST') {
+    const autoBatchDeps = await loadAutoBatchDeps(rootDir);
+    if (!autoBatchDeps) { sendJson(response, 503, { error: 'Domeme 설정 또는 pricing-rules.json을 불러올 수 없어 배치를 실행할 수 없습니다', code: 'AUTO_BATCH_CONFIG_UNAVAILABLE' }); return; }
+    const result = await runAutoDiscoveryBatch(db, { rootDir, ...autoBatchDeps });
+    sendJson(response, result.skipped ? 409 : 200, result);
+    return;
+  }
+
+  if (url.pathname === '/api/auto-batch/runs' && request.method === 'GET') {
+    const limit = Number(url.searchParams.get('limit') || 20);
+    sendJson(response, 200, { runs: await listBatchRuns(db, { limit }) });
+    return;
+  }
+
+  const autoBatchRunDetailMatch = url.pathname.match(/^\/api\/auto-batch\/runs\/(\d+)$/);
+  if (autoBatchRunDetailMatch && request.method === 'GET') {
+    const detail = await getBatchRunDetail(db, Number(autoBatchRunDetailMatch[1]));
+    if (!detail) { sendJson(response, 404, { error: 'Batch run not found', code: 'BATCH_RUN_NOT_FOUND' }); return; }
+    sendJson(response, 200, { run: detail });
+    return;
+  }
+
   const analysisRunMatch = url.pathname.match(/^\/api\/product-drafts\/(\d+)\/analysis\/run$/);
   if (analysisRunMatch && request.method === 'POST') {
     const draftId = Number(analysisRunMatch[1]);
@@ -738,6 +814,7 @@ function adminHtml() {
         <button id="viewAllButton" class="primary" type="button">전체</button>
         <button id="viewRecommendButton" type="button">추천</button>
         <button id="viewRegistrationsButton" type="button">등록·재고관리</button>
+        <button id="viewAutoBatchButton" type="button">자동배치</button>
       </div>
       <div class="toolbar">
         <select id="statusFilter"><option value="">all</option><option value="draft">draft</option><option value="needs_review">needs_review</option><option value="blocked">blocked</option><option value="approved">approved</option></select>
@@ -759,7 +836,7 @@ function adminHtml() {
     const statusFilter=document.getElementById('statusFilter');const naverWinnerFilter=document.getElementById('naverWinnerFilter');const finalDecisionFilter=document.getElementById('finalDecisionFilter');const batchFilter=document.getElementById('batchFilter');const collectedOnly=document.getElementById('collectedOnly');
     document.getElementById('reloadButton').addEventListener('click',loadList);document.getElementById('naverCandidateButton').addEventListener('click',()=>{naverWinnerFilter.value='candidate';loadList();});statusFilter.addEventListener('change',loadList);naverWinnerFilter.addEventListener('change',loadList);finalDecisionFilter.addEventListener('change',loadList);batchFilter.addEventListener('change',loadList);collectedOnly.addEventListener('change',loadList);
     let currentView='all';
-    const viewButtons={all:document.getElementById('viewAllButton'),recommend:document.getElementById('viewRecommendButton'),registrations:document.getElementById('viewRegistrationsButton')};
+    const viewButtons={all:document.getElementById('viewAllButton'),recommend:document.getElementById('viewRecommendButton'),registrations:document.getElementById('viewRegistrationsButton'),autoBatch:document.getElementById('viewAutoBatchButton')};
     for(const [view,button] of Object.entries(viewButtons))button.addEventListener('click',()=>switchView(view));
     function switchView(view){
       currentView=view;
@@ -769,6 +846,71 @@ function adminHtml() {
       if(view==='all')loadList();
       else if(view==='recommend')loadRecommendView();
       else if(view==='registrations')loadRegistrationsView();
+      else if(view==='autoBatch')loadAutoBatchView();
+    }
+    async function loadAutoBatchView(){
+      const el=document.getElementById('specialView');
+      el.innerHTML='<p class="muted" style="padding:12px">불러오는 중...</p>';
+      const [scheduleData,runsData]=await Promise.all([api('/api/auto-batch/schedule'),api('/api/auto-batch/runs?limit=10')]);
+      const s=scheduleData.schedule||{};
+      el.innerHTML='<div style="padding:12px">'
+        +'<div class="section"><h3>스케줄 상태</h3>'
+        +'<div>실행 중: '+(s.isRunning?'예 (실행 중)':'아니오')+'</div>'
+        +'<div>다음 실행 예정: '+escapeHtml(s.nextRunAt||'-')+'</div>'
+        +'<div>마지막 실행: '+escapeHtml(s.lastRunAt||'-')+'</div>'
+        +'<label>실행 주기 (일)</label><input id="autoBatchIntervalDays" type="number" min="1" value="'+(s.intervalDays??3)+'">'
+        +'<label>최소 통과 점수</label><input id="autoBatchMinScore" type="number" min="0" max="100" value="'+(s.minPassingScore??60)+'">'
+        +'<p><button id="autoBatchSaveScheduleButton" type="button">스케줄 저장</button> <button id="autoBatchRunNowButton" type="button">지금 실행</button></p>'
+        +'<div id="autoBatchActionResult" class="muted"></div>'
+        +'</div>'
+        +'<div class="section"><h3>실행 이력</h3><div id="autoBatchRunsList">'+autoBatchRunsListHtml(runsData.runs)+'</div></div>'
+        +'<div id="autoBatchRunDetail"></div>'
+        +'</div>';
+      document.getElementById('autoBatchSaveScheduleButton').onclick=async()=>{
+        const resultEl=document.getElementById('autoBatchActionResult');
+        resultEl.textContent='저장 중...';
+        try{
+          await api('/api/auto-batch/schedule',{method:'PATCH',body:JSON.stringify({intervalDays:Number(document.getElementById('autoBatchIntervalDays').value),minPassingScore:Number(document.getElementById('autoBatchMinScore').value)})});
+          resultEl.textContent='저장 완료';
+          await loadAutoBatchView();
+        }catch(error){resultEl.textContent=error.message;}
+      };
+      document.getElementById('autoBatchRunNowButton').onclick=async()=>{
+        const resultEl=document.getElementById('autoBatchActionResult');
+        resultEl.textContent='실행 중... (카테고리 수집·점수화에 시간이 걸릴 수 있습니다)';
+        try{
+          const result=await api('/api/auto-batch/run-now',{method:'POST',body:'{}'});
+          resultEl.textContent=result.skipped?'이미 실행 중이라 건너뜀':'실행 완료 (runId='+result.run.id+')';
+          await loadAutoBatchView();
+        }catch(error){resultEl.textContent=error.message;}
+      };
+      for(const button of el.querySelectorAll('[data-auto-batch-run-id]')){
+        button.onclick=()=>loadAutoBatchRunDetail(Number(button.dataset.autoBatchRunId));
+      }
+    }
+    function autoBatchRunsListHtml(runs){
+      if(!runs||!runs.length)return '<p class="muted">아직 실행 이력이 없습니다.</p>';
+      return runs.map(r=>'<div><button type="button" data-auto-batch-run-id="'+r.id+'">#'+r.id+'</button> '
+        +escapeHtml(r.status)+' / '+escapeHtml(r.stageReached||'-')+' / '+escapeHtml(r.startedAt||'-')
+        +(r.errorMessage?' / <span class="badge reasonBlock">'+escapeHtml(r.errorMessage)+'</span>':'')+'</div>').join('');
+    }
+    async function loadAutoBatchRunDetail(runId){
+      const el=document.getElementById('autoBatchRunDetail');
+      el.innerHTML='<p class="muted">불러오는 중...</p>';
+      const data=await api('/api/auto-batch/runs/'+runId);
+      const run=data.run;
+      const byCategory={};
+      for(const c of run.candidates||[]){(byCategory[c.categoryPolicyId]=byCategory[c.categoryPolicyId]||{categoryName:c.categoryName,segmentName:c.segmentName,items:[]}).items.push(c);}
+      const categoriesHtml=Object.values(byCategory).map(group=>{
+        const winner=group.items.find(i=>i.isWinner);
+        return '<div class="section"><h4>'+escapeHtml(group.segmentName)+' / '+escapeHtml(group.categoryName)+'</h4>'
+          +(winner
+            ?'<div><strong>선정: '+escapeHtml(winner.name||winner.supplierProductNo)+'</strong> (점수 '+winner.score+')</div><ul>'+Object.entries(winner.scoreBreakdown||{}).map(([k,v])=>'<li>'+escapeHtml(k)+': '+v.points+'/'+v.max+' -- '+escapeHtml(v.reason)+'</li>').join('')+'</ul>'
+            :'<div class="muted">기준 미달로 선정된 상품 없음</div>')
+          +'<div class="muted">평가 후보 상위 '+group.items.length+'개 중 표시</div>'
+          +'</div>';
+      }).join('');
+      el.innerHTML='<h3>실행 #'+run.id+' 상세</h3><div>상태: '+escapeHtml(run.status)+' / stage='+escapeHtml(run.stageReached||'-')+'</div>'+categoriesHtml;
     }
     async function loadRecommendView(){
       const data=await api('/api/product-drafts?finalDecision='+encodeURIComponent('등록후보')+'&limit=4');
