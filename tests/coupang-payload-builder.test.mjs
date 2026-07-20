@@ -160,6 +160,59 @@ test('mapOptionsToMandatoryAttributes reports a third mandatory attribute unreso
   assert.deepEqual(result.unresolvedMandatoryAttributes, ['수량']);
 });
 
+test('mapOptionsToMandatoryAttributes synthesizes exactly one item for a genuine no-option (single-SKU) draft', () => {
+  const result = mapOptionsToMandatoryAttributes({
+    draftOptions: [],
+    mandatoryOptionNames: ['색상', '사이즈', '단 수'],
+    sizeAttributeValue: '47 x 16 x 15.5cm',
+    additionalAttributeValues: { 색상: '투명', '단 수': '1' },
+    singleItemStockQuantity: 200,
+  });
+
+  assert.equal(result.items.length, 1);
+  assert.equal(result.items[0].optionValue, null);
+  assert.equal(result.items[0].stockQuantity, 200);
+  assert.deepEqual(result.items[0].attributes, [
+    { attributeTypeName: '색상', attributeValueName: '투명' },
+    { attributeTypeName: '사이즈', attributeValueName: '47 x 16 x 15.5cm' },
+    { attributeTypeName: '단 수', attributeValueName: '1' },
+  ]);
+  assert.deepEqual(result.unresolvedMandatoryAttributes, []);
+  assert.deepEqual(result.missingStock, []);
+});
+
+test('mapOptionsToMandatoryAttributes reports unresolved 색상 and missing stock for a no-option draft with no overrides supplied', () => {
+  const result = mapOptionsToMandatoryAttributes({
+    draftOptions: [],
+    mandatoryOptionNames: ['색상', '사이즈', '단 수'],
+  });
+
+  assert.equal(result.items.length, 1);
+  assert.deepEqual(result.unresolvedMandatoryAttributes, ['색상', '사이즈', '단 수']);
+  assert.deepEqual(result.missingStock, ['(단일상품)']);
+});
+
+test('mapOptionsToMandatoryAttributes attaches attributeValueUnit for a NUMBER-datatype mandatory attribute, derived from category meta', () => {
+  const result = mapOptionsToMandatoryAttributes({
+    draftOptions: [],
+    mandatoryOptionNames: ['색상', '사이즈', '단 수'],
+    sizeAttributeValue: '47 x 16 x 15.5cm',
+    additionalAttributeValues: { 색상: '투명', '단 수': '1' },
+    singleItemStockQuantity: 10,
+    attributeMeta: [
+      { attributeTypeName: '색상', dataType: 'STRING', basicUnit: '없음', usableUnits: [] },
+      { attributeTypeName: '사이즈', dataType: 'STRING', basicUnit: '없음', usableUnits: [] },
+      { attributeTypeName: '단 수', dataType: 'NUMBER', basicUnit: '개', usableUnits: ['단'] },
+    ],
+  });
+
+  assert.deepEqual(result.items[0].attributes, [
+    { attributeTypeName: '색상', attributeValueName: '투명' },
+    { attributeTypeName: '사이즈', attributeValueName: '47 x 16 x 15.5cm' },
+    { attributeTypeName: '단 수', attributeValueName: '1', attributeValueUnit: '단' },
+  ]);
+});
+
 function categoryMetaFixture() {
   return {
     displayCategoryCode: 71691,

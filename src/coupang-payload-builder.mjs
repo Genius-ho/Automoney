@@ -72,28 +72,60 @@ function nonEmpty(value) {
 // attribute alongside 색상/사이즈 -- so any further non-색상 mandatory names
 // are filled from `additionalAttributeValues` (keyed by attribute name).
 // Anything left unfilled is reported unresolved instead of guessed.
-export function mapOptionsToMandatoryAttributes({ draftOptions, mandatoryOptionNames, stockByOptionValue = {}, sizeAttributeValue = null, additionalAttributeValues = {}, exposed = null }) {
+// When a draft has no Domeme option rows at all (a genuine single-SKU,
+// no-variant product), there is no per-option row to read a 색상 value or
+// stock quantity from. In that case exactly one synthetic item is built
+// instead, with every mandatory attribute (색상 included) and the stock
+// quantity coming from the same admin-supplied overrides used for every
+// other unresolved field -- `additionalAttributeValues` keyed by the
+// mandatory attribute's own name, and `singleItemStockQuantity`.
+export function mapOptionsToMandatoryAttributes({ draftOptions, mandatoryOptionNames, stockByOptionValue = {}, sizeAttributeValue = null, additionalAttributeValues = {}, exposed = null, singleItemStockQuantity = null, attributeMeta = [] }) {
   const colorAttributeName = mandatoryOptionNames.find((name) => name === '색상') || null;
   const remainingAttributeNames = mandatoryOptionNames.filter((name) => name !== colorAttributeName);
   const sizeAttributeName = remainingAttributeNames[0] || null;
   const exposedField = exposed ? { exposed } : {};
+  const hasOptions = (draftOptions || []).length > 0;
 
   const valueForAttribute = (name) => (name === sizeAttributeName
     ? sizeAttributeValue
     : (Object.hasOwn(additionalAttributeValues, name) ? additionalAttributeValues[name] : null));
 
-  const items = (draftOptions || []).map((option) => ({
-    optionValue: option.optionValue,
-    additionalPrice: option.additionalPrice || 0,
-    stockQuantity: Object.hasOwn(stockByOptionValue, option.optionValue) ? stockByOptionValue[option.optionValue] : null,
-    attributes: [
-      colorAttributeName ? { attributeTypeName: colorAttributeName, attributeValueName: option.optionValue, ...exposedField } : null,
-      ...remainingAttributeNames.map((name) => ({ attributeTypeName: name, attributeValueName: valueForAttribute(name), ...exposedField })),
-    ].filter(Boolean),
-  }));
+  // Coupang rejects a NUMBER-datatype mandatory attribute (e.g. "단 수") that
+  // carries a bare numeric string with no unit -- confirmed by a real
+  // createProduct rejection ("유효하지 않은 구매 옵션 값 혹은 단위가 존재합니다").
+  // The category meta names the allowed unit(s) itself (usableUnits, falling
+  // back to basicUnit), so it is derived here rather than guessed per call.
+  const unitForAttribute = (name) => {
+    const meta = attributeMeta.find((attr) => attr.attributeTypeName === name);
+    if (!meta || meta.dataType !== 'NUMBER') return null;
+    return meta.usableUnits?.[0] || (meta.basicUnit && meta.basicUnit !== '없음' ? meta.basicUnit : null);
+  };
+  const unitField = (name) => { const unit = unitForAttribute(name); return unit ? { attributeValueUnit: unit } : {}; };
 
-  const unresolvedMandatoryAttributes = remainingAttributeNames.filter((name) => !valueForAttribute(name));
-  const missingStock = items.filter((item) => item.stockQuantity === null).map((item) => item.optionValue);
+  const items = hasOptions
+    ? (draftOptions || []).map((option) => ({
+      optionValue: option.optionValue,
+      additionalPrice: option.additionalPrice || 0,
+      stockQuantity: Object.hasOwn(stockByOptionValue, option.optionValue) ? stockByOptionValue[option.optionValue] : null,
+      attributes: [
+        colorAttributeName ? { attributeTypeName: colorAttributeName, attributeValueName: option.optionValue, ...exposedField } : null,
+        ...remainingAttributeNames.map((name) => ({ attributeTypeName: name, attributeValueName: valueForAttribute(name), ...unitField(name), ...exposedField })),
+      ].filter(Boolean),
+    }))
+    : [{
+      optionValue: null,
+      additionalPrice: 0,
+      stockQuantity: singleItemStockQuantity,
+      attributes: [
+        colorAttributeName ? { attributeTypeName: colorAttributeName, attributeValueName: Object.hasOwn(additionalAttributeValues, colorAttributeName) ? additionalAttributeValues[colorAttributeName] : null, ...exposedField } : null,
+        ...remainingAttributeNames.map((name) => ({ attributeTypeName: name, attributeValueName: valueForAttribute(name), ...unitField(name), ...exposedField })),
+      ].filter(Boolean),
+    }];
+
+  const unresolvedMandatoryAttributes = hasOptions
+    ? remainingAttributeNames.filter((name) => !valueForAttribute(name))
+    : mandatoryOptionNames.filter((name) => !items[0].attributes.find((attr) => attr.attributeTypeName === name)?.attributeValueName);
+  const missingStock = items.filter((item) => item.stockQuantity === null).map((item) => item.optionValue ?? '(단일상품)');
 
   return { items, unresolvedMandatoryAttributes, missingStock };
 }
@@ -171,8 +203,16 @@ export function buildCoupangProductPayload({
   const noticeValues = {
     종류: draft.optimizedTitle || null,
     '품명 및 모델명': supplierNoticeFields.modelName ?? draft.optimizedTitle ?? null,
+    // Unlike "품명 및 모델명" (a combined field that prefers the real model
+    // name when Domeme provides one), a bare "품명" field means just the
+    // product's own name -- falling back through modelName here would leak
+    // Domeme's literal "해당없음" ("not applicable") placeholder into the
+    // product name notice for products with no separate model name.
+    '품명': draft.optimizedTitle ?? null,
     소재: material,
+    '주요 소재': material,
     치수: verifiedSize ?? supplierNoticeFields.size,
+    크기: verifiedSize ?? supplierNoticeFields.size,
     '제조자(수입자)': supplierNoticeFields.manufacturer,
     제조국: supplierNoticeFields.countryOfOrigin,
     '제조국(원산지)': supplierNoticeFields.countryOfOrigin,
@@ -230,7 +270,7 @@ export function buildCoupangProductPayload({
     returnAddressDetail: returnAddress.returnAddressDetail ?? null,
     items: optionMapping.items.map((item, index) => ({
       ...(sellerProductItemIds[index] ? { sellerProductItemId: sellerProductItemIds[index] } : {}),
-      itemName: itemNameOverride ?? item.optionValue,
+      itemName: itemNameOverride ?? item.optionValue ?? sellerProductNameOverride ?? draft.optimizedTitle,
       originalPrice: draft.salePrice,
       salePrice: draft.salePrice,
       stockQuantity: item.stockQuantity,

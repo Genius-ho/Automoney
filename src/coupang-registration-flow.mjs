@@ -186,7 +186,7 @@ export async function previewCategoryAndShipping(db, draftId, { coupangConfig, c
 // WING-검수 style ready/missing report, adapted from the read-only
 // scripts/coupang-preflight.mjs logic so both surfaces agree on what
 // "ready to register" means.
-function buildReadinessReport({ draft, prediction, categoryMeta, optionMapping, outboundShippingPlace, returnShippingCenter, shippingSettings, material, verifiedSize, manufacturer, countryOfOrigin, mainImageUrl, detailImageUrls, noticeCategoryTemplateName }) {
+function buildReadinessReport({ draft, prediction, categoryMeta, optionMapping, outboundShippingPlace, returnShippingCenter, shippingSettings, material, verifiedSize, manufacturer, countryOfOrigin, mainImageUrl, detailImageUrls, noticeCategoryTemplateName, resolvedNotices = [] }) {
   const ready = [];
   const missing = [];
 
@@ -204,8 +204,18 @@ function buildReadinessReport({ draft, prediction, categoryMeta, optionMapping, 
     else missing.push(`필수 구매옵션 미해결: ${JSON.stringify(optionMapping.unresolvedMandatoryAttributes)}`);
     if (optionMapping.missingStock.length === 0) ready.push('전체 옵션 재고수량 입력됨');
     else missing.push(`재고수량 미입력 옵션: ${JSON.stringify(optionMapping.missingStock)}`);
-    if (noticeCategoryTemplateName) ready.push(`고시정보 템플릿 선택: ${noticeCategoryTemplateName}`);
-    else missing.push('고시정보 템플릿 미선택');
+    if (noticeCategoryTemplateName) {
+      ready.push(`고시정보 템플릿 선택: ${noticeCategoryTemplateName}`);
+      const template = (categoryMeta.noticeCategoryTemplates || []).find((t) => t.noticeCategoryName === noticeCategoryTemplateName);
+      const unresolvedNoticeFields = (template?.noticeCategoryDetailNames || [])
+        .filter((detail) => detail.required === 'MANDATORY')
+        .filter((detail) => !resolvedNotices.find((n) => n.noticeCategoryDetailName === detail.noticeCategoryDetailName)?.content)
+        .map((detail) => detail.noticeCategoryDetailName);
+      if (unresolvedNoticeFields.length === 0) ready.push('고시정보 필수 항목 전부 입력됨');
+      else missing.push(`고시정보 미입력: ${JSON.stringify(unresolvedNoticeFields)}`);
+    } else {
+      missing.push('고시정보 템플릿 미선택');
+    }
     if (categoryMeta.mandatoryCertificationNames.length > 0) missing.push(`필수 인증정보: ${JSON.stringify(categoryMeta.mandatoryCertificationNames)}`);
     else ready.push('필수 인증정보 없음');
   } else {
@@ -277,8 +287,10 @@ export async function buildRegistrationPreview(db, rootDir, draftId, {
       draftOptions: draft.options,
       mandatoryOptionNames: categoryMeta.mandatoryOptionNames,
       stockByOptionValue: { ...stockByOptionValue, ...(overrides.stockByOptionValue || {}) },
-      sizeAttributeValue: overrides.sizeAttributeValue ?? appliedAnalysis?.dimensions ?? null,
+      sizeAttributeValue: overrides.sizeAttributeValue ?? overrides.dimensions ?? appliedAnalysis?.dimensions ?? null,
       additionalAttributeValues: overrides.additionalAttributeValues || {},
+      singleItemStockQuantity: overrides.singleItemStockQuantity ?? null,
+      attributeMeta: categoryMeta.attributes || [],
     })
     : { items: [], unresolvedMandatoryAttributes: [], missingStock: [] };
 
@@ -315,6 +327,7 @@ export async function buildRegistrationPreview(db, rootDir, draftId, {
     handlingCaution,
     warrantyStandard,
     asPhoneNumber,
+    noticeContentOverrides: overrides.noticeContentOverrides || {},
     saleStartedAt,
     saleEndedAt: SELLER_FIXED_CONFIG.saleEndedAt,
     deliveryCompanyCode: SELLER_FIXED_CONFIG.deliveryCompanyCode,
@@ -331,6 +344,7 @@ export async function buildRegistrationPreview(db, rootDir, draftId, {
   const readiness = buildReadinessReport({
     draft, prediction, categoryMeta, optionMapping, outboundShippingPlace, returnShippingCenter, shippingSettings,
     material, verifiedSize, manufacturer, countryOfOrigin, mainImageUrl, detailImageUrls, noticeCategoryTemplateName,
+    resolvedNotices: payload.items?.[0]?.notices || [],
   });
 
   const requestHash = createHash('sha256').update(JSON.stringify(payload)).digest('hex');

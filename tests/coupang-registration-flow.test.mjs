@@ -249,6 +249,47 @@ test('buildRegistrationPreview reports readiness.blocked when the category has n
   assert.ok(preview.readiness.missing.length > 0);
 });
 
+test('buildRegistrationPreview blocks on an unresolved MANDATORY notice field even when material/size/manufacturer/country are all resolved', async () => {
+  const db = makeDraftsDb([]);
+  const furnitureCategoryMeta = {
+    ...CATEGORY_META,
+    noticeCategoryTemplates: [{
+      noticeCategoryName: '가구',
+      noticeCategoryDetailNames: [
+        { noticeCategoryDetailName: '주요 소재', required: 'MANDATORY' },
+        { noticeCategoryDetailName: '구성품', required: 'MANDATORY' },
+      ],
+    }],
+  };
+  const preview = await buildRegistrationPreview(db, '/repo', 46, commonPreviewDeps({
+    categoryAdapterImpl: fakeCategoryAdapter({ categoryMeta: furnitureCategoryMeta }),
+  }));
+
+  assert.equal(preview.readiness.blocked, true);
+  assert.ok(preview.readiness.missing.some((line) => line.includes('구성품')));
+  // 주요 소재 resolves via the 소재 synonym even though the template names it differently.
+  assert.ok(!preview.readiness.missing.some((line) => line.includes('주요 소재')));
+});
+
+test('buildRegistrationPreview forwards overrides.noticeContentOverrides into the payload notices and unblocks readiness', async () => {
+  const db = makeDraftsDb([]);
+  const furnitureCategoryMeta = {
+    ...CATEGORY_META,
+    noticeCategoryTemplates: [{
+      noticeCategoryName: '가구',
+      noticeCategoryDetailNames: [{ noticeCategoryDetailName: '구성품', required: 'MANDATORY' }],
+    }],
+  };
+  const preview = await buildRegistrationPreview(db, '/repo', 46, commonPreviewDeps({
+    categoryAdapterImpl: fakeCategoryAdapter({ categoryMeta: furnitureCategoryMeta }),
+    overrides: { noticeContentOverrides: { 구성품: '선반 1개, 고정 브래킷 2개' } },
+  }));
+
+  const notice = preview.payload.items[0].notices.find((n) => n.noticeCategoryDetailName === '구성품');
+  assert.equal(notice.content, '선반 1개, 고정 브래킷 2개');
+  assert.equal(preview.readiness.blocked, false);
+});
+
 test('createDirectRegistration refuses draft 64 without calling the Coupang client at all', async () => {
   const db = makeDraftsDb([]);
   const client = fakeCoupangClient();
