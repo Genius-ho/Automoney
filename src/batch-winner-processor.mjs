@@ -17,14 +17,10 @@ function isQuotaLimited(codeOrLog) {
   return QUOTA_LOG_PATTERN.test(String(codeOrLog || ''));
 }
 
-// One winner candidate, start to finish: draft creation-or-reuse ->
-// detail-image slicing -> Python/Codex analysis -> safe-field auto-apply ->
-// main image -> detail image set -> awaiting_image_approval. Every step
-// updates batch_run_candidates.processing_status so a partial failure is
-// visible in the admin UI without needing to re-read logs. Never calls any
-// Coupang/Naver API, never approves an image, never touches draft
-// 27/46/64 (a different supplier_product_no by construction -- dedup would
-// skip this candidate entirely if it ever collided).
+// Draft creation-or-reuse + detail-image slicing only -- the part of the old
+// fused processWinnerCandidate that has to run once, unconditionally, before
+// a draft can be registered OR improved. Never calls Codex/Python, never
+// touches Coupang/Naver.
 //
 // "draft 생성 또는 기존 draft 재사용": candidateRow.draftId is only ever set
 // by THIS function's own earlier updateBatchCandidateStatusImpl call (once
@@ -33,23 +29,14 @@ function isQuotaLimited(codeOrLog) {
 // quota pause) -- reuse it directly rather than running the dedup check,
 // which would otherwise wrongly treat the candidate's own draft as a
 // collision with itself and report a false skipped_duplicate.
-export async function processWinnerCandidate(db, candidateRow, {
+export async function prepareCandidateDraft(db, candidateRow, {
   rootDir,
-  jobDir,
-  codexConfig,
-  pythonConfig,
-  jobPathsConfig = {},
   batchRunId,
   saveEvaluatedCandidateImpl = saveEvaluatedCandidate,
   findDraftBySupplierProductNoImpl = findDraftBySupplierProductNo,
   linkDraftToBatchImpl = linkDraftToBatch,
   updateBatchCandidateStatusImpl = updateBatchCandidateStatus,
   sliceLongDetailImagesForDraftImpl = sliceLongDetailImagesForDraft,
-  runProductAnalysisImpl = runProductAnalysis,
-  getLatestAnalysisRunImpl = getLatestAnalysisRun,
-  applyProductAnalysisImpl = applyProductAnalysis,
-  generateMainImageImpl = generateMainImage,
-  generateDetailImageSetImpl = generateDetailImageSet,
 } = {}) {
   let draftId = candidateRow.draftId || null;
 
@@ -82,9 +69,39 @@ export async function processWinnerCandidate(db, candidateRow, {
   }
 
   // Best-effort: analysis's own NO_DETAIL_IMAGES check is the authoritative
-  // "원본 이미지 부족" failure signal below, so a slicing hiccup here isn't
-  // itself fatal to the candidate.
+  // "원본 이미지 부족" failure signal downstream, so a slicing hiccup here
+  // isn't itself fatal to the candidate.
   await sliceLongDetailImagesForDraftImpl(db, draftId, { rootDir }).catch(() => {});
+
+  return { outcome: 'ready', draftId };
+}
+
+// The "개선" stage for one already-drafted, already-registered winner
+// candidate: Python/Codex analysis -> safe-field auto-apply -> main image ->
+// detail image set -> awaiting_image_approval. Every step updates
+// batch_run_candidates.processing_status so a partial failure is visible in
+// the admin UI without needing to re-read logs. Assumes prepareCandidateDraft
+// already ran (candidateRow.draftId must be set) -- never creates a draft
+// itself. Never calls any Coupang/Naver API, never approves an image, never
+// touches draft 27/46/64 (a different supplier_product_no by construction --
+// dedup would skip this candidate entirely if it ever collided).
+export async function processWinnerCandidate(db, candidateRow, {
+  rootDir,
+  jobDir,
+  codexConfig,
+  pythonConfig,
+  jobPathsConfig = {},
+  updateBatchCandidateStatusImpl = updateBatchCandidateStatus,
+  runProductAnalysisImpl = runProductAnalysis,
+  getLatestAnalysisRunImpl = getLatestAnalysisRun,
+  applyProductAnalysisImpl = applyProductAnalysis,
+  generateMainImageImpl = generateMainImage,
+  generateDetailImageSetImpl = generateDetailImageSet,
+} = {}) {
+  const draftId = candidateRow.draftId;
+  if (!draftId) {
+    throw Object.assign(new Error('processWinnerCandidate requires candidateRow.draftId -- run prepareCandidateDraft first'), { code: 'DRAFT_NOT_PREPARED' });
+  }
 
   await updateBatchCandidateStatusImpl(db, candidateRow.id, { processingStatus: 'analysis_running' });
   // Resume case: if a prior attempt on this same draft already completed

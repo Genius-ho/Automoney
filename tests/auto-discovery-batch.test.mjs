@@ -168,12 +168,16 @@ test('runCandidateDiscoveryBatch marks the run failed and still releases the loc
   assert.equal(deps.calls.enqueueCandidate.length, 0);
 });
 
+// Default queueItem is already mid-flight (status='analyzing', draftId
+// already set) -- the "resume the 개선 stage" branch. Tests that exercise
+// the other branch (a fresh 'queued' item with no draft yet) override
+// status/draftId explicitly.
 function queueItem(overrides = {}) {
-  return { id: 7, batchRunCandidateId: 5, supplierProductNo: '111', name: 'A', score: 80, status: 'queued', startedAt: null, ...overrides };
+  return { id: 7, batchRunCandidateId: 5, supplierProductNo: '111', name: 'A', score: 80, status: 'analyzing', draftId: 501, startedAt: '2026-01-01T00:00:00.000Z', ...overrides };
 }
 
 function processingDeps(overrides = {}) {
-  const calls = { updateQueueItemStatus: [], recordQueueItemPause: [], releaseProcessingLock: [], processWinnerCandidate: [] };
+  const calls = { updateQueueItemStatus: [], recordQueueItemPause: [], releaseProcessingLock: [], processWinnerCandidate: [], prepareCandidateDraft: [] };
   return {
     calls,
     tryAcquireBatchLockImpl: async () => ({ processingIntervalDays: 1 }),
@@ -182,7 +186,8 @@ function processingDeps(overrides = {}) {
     updateQueueItemStatusImpl: async (_db, id, patch) => { calls.updateQueueItemStatus.push({ id, ...patch }); },
     recordQueueItemPauseImpl: async (_db, id, patch) => { calls.recordQueueItemPause.push({ id, ...patch }); },
     updateBatchCandidateStatusImpl: async () => {},
-    getBatchRunCandidateByIdImpl: async () => ({ id: 5, batchRunId: 1, supplierProductNo: '111', rawCandidateJson: {} }),
+    getBatchRunCandidateByIdImpl: async () => ({ id: 5, batchRunId: 1, supplierProductNo: '111', rawCandidateJson: {}, draftId: 501 }),
+    prepareCandidateDraftImpl: async (_db, candidateRow, opts) => { calls.prepareCandidateDraft.push({ candidateRow, opts }); return { outcome: 'ready', draftId: 501 }; },
     processWinnerCandidateImpl: async (_db, candidateRow, opts) => { calls.processWinnerCandidate.push({ candidateRow, opts }); return { outcome: 'success', draftId: 501 }; },
     ...overrides,
   };
@@ -202,11 +207,12 @@ test('runDailyProcessingBatch does nothing (skipped) and releases the lock when 
   assert.equal(deps.calls.releaseProcessingLock.length, 1);
 });
 
-test('runDailyProcessingBatch processes exactly one queue item and marks it awaiting_approval on success', async () => {
+test('runDailyProcessingBatch resumes an in-progress queue item via processWinnerCandidate and marks it awaiting_approval on success', async () => {
   const deps = processingDeps();
   const result = await runDailyProcessingBatch({}, deps);
 
   assert.equal(deps.calls.processWinnerCandidate.length, 1);
+  assert.equal(deps.calls.prepareCandidateDraft.length, 0);
   assert.equal(result.outcome, 'success');
   const finalUpdate = deps.calls.updateQueueItemStatus.find((u) => u.status === 'awaiting_approval');
   assert.ok(finalUpdate);
@@ -235,17 +241,6 @@ test('runDailyProcessingBatch pauses (does not force failed) the queue item on a
   assert.ok(!deps.calls.updateQueueItemStatus.some((u) => u.status === 'failed'));
 });
 
-test('runDailyProcessingBatch marks the queue item failed when processWinnerCandidate reports a duplicate draft', async () => {
-  const deps = processingDeps({
-    processWinnerCandidateImpl: async () => ({ outcome: 'skipped_duplicate', draftId: 27 }),
-  });
-  await runDailyProcessingBatch({}, deps);
-  const failUpdate = deps.calls.updateQueueItemStatus.find((u) => u.status === 'failed');
-  assert.ok(failUpdate);
-  assert.equal(failUpdate.failureStage, 'draft_creation');
-  assert.equal(failUpdate.draftId, 27);
-});
-
 test('runDailyProcessingBatch mirrors processWinnerCandidate progress updates onto the queue item live', async () => {
   const deps = processingDeps({
     processWinnerCandidateImpl: async (db, candidateRow, opts) => {
@@ -255,4 +250,41 @@ test('runDailyProcessingBatch mirrors processWinnerCandidate progress updates on
   });
   await runDailyProcessingBatch({}, deps);
   assert.ok(deps.calls.updateQueueItemStatus.some((u) => u.status === 'generating_images'));
+});
+
+test('runDailyProcessingBatch prepares (never analyzes) a fresh queued item and lands it at ready_for_registration', async () => {
+  const deps = processingDeps({
+    getNextQueueItemImpl: async () => queueItem({ status: 'queued', draftId: null, startedAt: null }),
+  });
+  const result = await runDailyProcessingBatch({}, deps);
+
+  assert.equal(deps.calls.prepareCandidateDraft.length, 1);
+  assert.equal(deps.calls.processWinnerCandidate.length, 0);
+  assert.equal(result.outcome, 'ready');
+  const finalUpdate = deps.calls.updateQueueItemStatus.find((u) => u.status === 'ready_for_registration');
+  assert.ok(finalUpdate);
+  assert.equal(finalUpdate.draftId, 501);
+});
+
+test('runDailyProcessingBatch marks a fresh queued item failed when prepareCandidateDraft reports a duplicate draft', async () => {
+  const deps = processingDeps({
+    getNextQueueItemImpl: async () => queueItem({ status: 'queued', draftId: null, startedAt: null }),
+    prepareCandidateDraftImpl: async () => ({ outcome: 'skipped_duplicate', draftId: 27 }),
+  });
+  await runDailyProcessingBatch({}, deps);
+  const failUpdate = deps.calls.updateQueueItemStatus.find((u) => u.status === 'failed');
+  assert.ok(failUpdate);
+  assert.equal(failUpdate.failureStage, 'draft_creation');
+  assert.equal(failUpdate.draftId, 27);
+});
+
+test('runDailyProcessingBatch marks a fresh queued item failed when prepareCandidateDraft itself fails', async () => {
+  const deps = processingDeps({
+    getNextQueueItemImpl: async () => queueItem({ status: 'queued', draftId: null, startedAt: null }),
+    prepareCandidateDraftImpl: async () => ({ outcome: 'failed', stage: 'draft_creation' }),
+  });
+  await runDailyProcessingBatch({}, deps);
+  const failUpdate = deps.calls.updateQueueItemStatus.find((u) => u.status === 'failed');
+  assert.ok(failUpdate);
+  assert.equal(failUpdate.failureStage, 'draft_creation');
 });

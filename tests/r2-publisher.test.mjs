@@ -67,3 +67,32 @@ test('uploadApprovedImagesToR2 keys objects under drafts/{draftId}/coupang/ so d
   });
   assert.ok(deps.calls.put[0].key.startsWith('drafts/46/coupang/'));
 });
+
+test('uploadApprovedImagesToR2 falls back to .jpg for a raw supplier URL with a query string and no real extension', async () => {
+  const deps = fakeDeps();
+  deps.fetchImpl = async () => ({ arrayBuffer: async () => Buffer.from('supplier-bytes') });
+  const rawSupplierUrl = 'https://img.domeggook.com/upload/item/2026/06/19/1781825629EB1168742EAA76D939F9BF/1781825629EB1168742EAA76D939F9BF_img_760?hash=a803c03e63702a4736e211efbbb740a8';
+  const result = await uploadApprovedImagesToR2({
+    rootDir: '/repo',
+    draftId: 46,
+    mainImageLocalUrl: rawSupplierUrl,
+    detailImageLocalUrls: [],
+    ...deps,
+  });
+  assert.match(deps.calls.put[0].key, /^drafts\/46\/coupang\/[0-9a-f]{16}\.jpg$/);
+  assert.ok(result.mainImageUrl.startsWith('https://pub.example/drafts/46/coupang/'));
+});
+
+test('uploadApprovedImagesToR2 keeps a real extension found in the URL path even when a query string follows it', async () => {
+  const deps = fakeDeps();
+  deps.fetchImpl = async () => ({ arrayBuffer: async () => Buffer.from('supplier-bytes') });
+  const result = await uploadApprovedImagesToR2({
+    rootDir: '/repo',
+    draftId: 46,
+    mainImageLocalUrl: 'https://img.domeggook.com/upload/item/photo.png?hash=abc',
+    detailImageLocalUrls: [],
+    ...deps,
+  });
+  assert.match(deps.calls.put[0].key, /\.png$/);
+  assert.ok(result.mainImageUrl);
+});

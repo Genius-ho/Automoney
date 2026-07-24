@@ -38,6 +38,23 @@ export async function loadNaverConfig(rootDir = process.cwd()) {
   return { clientId, clientSecret };
 }
 
+// Separate from loadNaverConfig -- NAVER_CLIENT_ID/SECRET there are the
+// search/데이터랩 openapi.naver.com keys (market research only, see
+// naver-shopping-client.mjs). Registering a real product requires a
+// completely different credential pair, issued via the 네이버 커머스API센터
+// (commerce.naver.com) app registration, so this stays its own function/env
+// var names to make the two impossible to mix up.
+export async function loadNaverCommerceConfig(rootDir = process.cwd()) {
+  const values = await loadEnvValues(rootDir);
+  const pick = (name) => values[name] || process.env[name];
+  const clientId = pick('NAVER_COMMERCE_CLIENT_ID');
+  const clientSecret = pick('NAVER_COMMERCE_CLIENT_SECRET');
+  const channelId = pick('NAVER_COMMERCE_CHANNEL_ID') || null;
+  if (!clientId) throw new Error('NAVER_COMMERCE_CLIENT_ID is missing in .env');
+  if (!clientSecret) throw new Error('NAVER_COMMERCE_CLIENT_SECRET is missing in .env');
+  return { clientId, clientSecret, channelId };
+}
+
 export async function loadR2Config(rootDir = process.cwd()) {
   const values = await loadEnvValues(rootDir);
   const pick = (name) => values[name] || process.env[name];

@@ -3,12 +3,12 @@ import { mkdir, readFile, rename, rm, writeFile } from 'node:fs/promises';
 import { extname, join, resolve } from 'node:path';
 import { createHash } from 'node:crypto';
 
-import { loadAiSecrets, loadCodexConfig, loadCoupangConfig, loadDatabaseUrl, loadEnvConfig, loadJobPathsConfig, loadNaverConfig, loadPricingRules, loadPythonConfig } from './config.mjs';
+import { loadAiSecrets, loadCodexConfig, loadCoupangConfig, loadDatabaseUrl, loadEnvConfig, loadJobPathsConfig, loadNaverCommerceConfig, loadNaverConfig, loadPricingRules, loadPythonConfig } from './config.mjs';
 import { DomemeClient } from './domeme-client.mjs';
 import { runCandidateDiscoveryBatch, runDailyProcessingBatch } from './auto-discovery-batch.mjs';
 import { getBatchScheduleState, updateBatchScheduleState } from './batch-schedule-store.mjs';
 import { getBatchRunDetail, listBatchRuns } from './batch-run-store.mjs';
-import { countActiveQueueItems, getNextQueueItem, listQueue } from './processing-queue-store.mjs';
+import { countActiveQueueItems, getNextQueueItem, listQueue, updateQueueItemStatus } from './processing-queue-store.mjs';
 import { uploadApprovedImagesToR2 } from './r2-publisher.mjs';
 import { clearProviderCredential, listProviderSettings, listTaskRouting, saveProviderSetting, saveTaskRouting, testProviderSetting } from './ai/provider-settings-store.mjs';
 import { NaverShoppingClient } from './naver-shopping-client.mjs';
@@ -21,6 +21,8 @@ import { getCoupangRegistration, linkCoupangRegistration, listCoupangRegistratio
 import { applyProductAnalysis, buildApplyPreview, getAppliedAnalysis, getAnalysisRun, getLatestAnalysisRun, listAnalysisRuns, runProductAnalysis } from './product-analysis-orchestrator.mjs';
 import { buildRegistrationPreview, createDirectRegistration, extractList, previewCategoryAndShipping, requestCoupangSaleApproval, selectRegistrationTarget, validateSellerShippingSettings } from './coupang-registration-flow.mjs';
 import { getSellerShippingSettings, saveSellerShippingSettings } from './coupang-seller-settings-store.mjs';
+import { NaverCommerceClient } from './naver-commerce-client.mjs';
+import { createNaverDirectRegistration } from './naver-registration-flow.mjs';
 import { createPgPool, runSchema } from './postgres-store.mjs';
 import { isAllowedPublicAssetPath } from './public-assets.mjs';
 import { buildMainImagePackage } from './manual-ai/package-builder.mjs';
@@ -579,6 +581,54 @@ async function handleRequest({ request, response, db, aiSecrets, rootDir }) {
     return;
   }
 
+  // Manual "지금 등록" trigger for a queue item sitting at
+  // ready_for_registration -- draft + detail-image slicing already happened
+  // (prepareCandidateDraft), this is the one gated step that puts a real
+  // (temporary-saved) product on Coupang. Never fired automatically by the
+  // daily/discovery batches -- always a human clicking the button.
+  const queueRegisterMatch = url.pathname.match(/^\/api\/auto-batch\/queue\/(\d+)\/register$/);
+  if (queueRegisterMatch && request.method === 'POST') {
+    const queueId = Number(queueRegisterMatch[1]);
+    const queue = await listQueue(db);
+    const target = queue.find((row) => row.id === queueId);
+    if (!target) { sendJson(response, 404, { error: 'Queue item not found', code: 'QUEUE_ITEM_NOT_FOUND' }); return; }
+    if (!target.draftId) { sendJson(response, 409, { error: '아직 draft가 준비되지 않은 큐 항목입니다', code: 'DRAFT_NOT_READY' }); return; }
+    try {
+      const coupangConfig = await loadCoupangConfig(rootDir);
+      const client = new CoupangClient(coupangConfig);
+      const result = await createDirectRegistration(db, rootDir, target.draftId, { mode: 'raw', confirm: true, coupangConfig, clientImpl: client });
+      await updateQueueItemStatus(db, queueId, { status: 'analyzing' });
+      sendJson(response, 200, { result });
+    } catch (error) {
+      sendJson(response, error.code === 'REGISTRATION_NOT_READY' ? 422 : 500, { error: error.message, code: error.code || 'REGISTER_FAILED', readiness: error.readiness });
+    }
+    return;
+  }
+
+  // Naver counterpart of the queue-register endpoint above -- independent
+  // action, never gated on the Coupang registration having happened first
+  // or vice versa. Does not itself change queue status (only the Coupang
+  // registration does, since that's the channel treated as primary/required
+  // for the queue item to be considered "registered" -- see
+  // auto-discovery-batch.mjs's runDailyProcessingBatch).
+  const queueRegisterNaverMatch = url.pathname.match(/^\/api\/auto-batch\/queue\/(\d+)\/register-naver$/);
+  if (queueRegisterNaverMatch && request.method === 'POST') {
+    const queueId = Number(queueRegisterNaverMatch[1]);
+    const queue = await listQueue(db);
+    const target = queue.find((row) => row.id === queueId);
+    if (!target) { sendJson(response, 404, { error: 'Queue item not found', code: 'QUEUE_ITEM_NOT_FOUND' }); return; }
+    if (!target.draftId) { sendJson(response, 409, { error: '아직 draft가 준비되지 않은 큐 항목입니다', code: 'DRAFT_NOT_READY' }); return; }
+    try {
+      const naverConfig = await loadNaverCommerceConfig(rootDir);
+      const client = new NaverCommerceClient(naverConfig);
+      const result = await createNaverDirectRegistration(db, rootDir, target.draftId, { confirm: true, naverConfig, clientImpl: client });
+      sendJson(response, 200, { result });
+    } catch (error) {
+      sendJson(response, error.code === 'REGISTRATION_NOT_READY' ? 422 : 500, { error: error.message, code: error.code || 'REGISTER_FAILED', readiness: error.readiness });
+    }
+    return;
+  }
+
   if (url.pathname === '/api/auto-batch/runs' && request.method === 'GET') {
     const limit = Number(url.searchParams.get('limit') || 20);
     sendJson(response, 200, { runs: await listBatchRuns(db, { limit }) });
@@ -954,13 +1004,45 @@ function adminHtml() {
       for(const button of el.querySelectorAll('[data-auto-batch-run-id]')){
         button.onclick=()=>loadAutoBatchRunDetail(Number(button.dataset.autoBatchRunId));
       }
+      for(const button of el.querySelectorAll('[data-queue-register-id]')){
+        button.onclick=async()=>{
+          const queueId=Number(button.dataset.queueRegisterId);
+          const resultEl=document.getElementById('autoBatchActionResult');
+          button.disabled=true;
+          resultEl.textContent='쿠팡에 등록 중... (임시저장 상태로 실제 상품이 생성됩니다)';
+          try{
+            const data=await api('/api/auto-batch/queue/'+queueId+'/register',{method:'POST',body:'{}'});
+            resultEl.textContent='등록 완료: sellerProductId='+data.result.sellerProductId;
+            await loadAutoBatchView();
+          }catch(error){
+            resultEl.textContent='등록 실패: '+error.message+(error.details?.readiness?(' / 미확정: '+JSON.stringify(error.details.readiness.missing)):'');
+            button.disabled=false;
+          }
+        };
+      }
+      for(const button of el.querySelectorAll('[data-queue-register-naver-id]')){
+        button.onclick=async()=>{
+          const queueId=Number(button.dataset.queueRegisterNaverId);
+          const resultEl=document.getElementById('autoBatchActionResult');
+          button.disabled=true;
+          resultEl.textContent='네이버에 등록 중...';
+          try{
+            const data=await api('/api/auto-batch/queue/'+queueId+'/register-naver',{method:'POST',body:'{}'});
+            resultEl.textContent='네이버 등록 완료: originProductNo='+data.result.originProductNo;
+          }catch(error){
+            resultEl.textContent='네이버 등록 실패: '+error.message+(error.details?.readiness?(' / 미확정: '+JSON.stringify(error.details.readiness.missing)):'');
+            button.disabled=false;
+          }
+        };
+      }
     }
     function autoBatchQueueListHtml(queue){
       if(!queue||!queue.length)return '<p class="muted">큐가 비어 있습니다.</p>';
-      return '<table><thead><tr><th>상품</th><th>점수</th><th>상태</th><th>draft</th><th>실패사유</th></tr></thead><tbody>'
+      return '<table><thead><tr><th>상품</th><th>점수</th><th>상태</th><th>draft</th><th>실패사유</th><th>액션</th></tr></thead><tbody>'
         +queue.map(q=>'<tr><td>'+escapeHtml(q.name||q.supplierProductNo)+'</td><td>'+(q.score??'-')+'</td><td>'+escapeHtml(QUEUE_STATUS_LABELS[q.status]||q.status)+'</td>'
           +'<td>'+(q.draftId?'<a href="/admin?draftId='+q.draftId+'">#'+q.draftId+'</a>':'-')+'</td>'
-          +'<td>'+(q.failureMessage?escapeHtml(q.failureStage||'')+': '+escapeHtml(q.failureMessage):'-')+'</td></tr>').join('')
+          +'<td>'+(q.failureMessage?escapeHtml(q.failureStage||'')+': '+escapeHtml(q.failureMessage):'-')+'</td>'
+          +'<td>'+(q.status==='ready_for_registration'?'<button type="button" data-queue-register-id="'+q.id+'">지금 등록 (쿠팡)</button> <button type="button" data-queue-register-naver-id="'+q.id+'">지금 등록 (네이버)</button>':'-')+'</td></tr>').join('')
         +'</tbody></table>';
     }
     function autoBatchRunsListHtml(runs){

@@ -22,7 +22,7 @@ import {
   recordQueueItemPause as recordQueueItemPauseReal,
   updateQueueItemStatus as updateQueueItemStatusReal,
 } from './processing-queue-store.mjs';
-import { processWinnerCandidate as processWinnerCandidateReal } from './batch-winner-processor.mjs';
+import { prepareCandidateDraft as prepareCandidateDraftReal, processWinnerCandidate as processWinnerCandidateReal } from './batch-winner-processor.mjs';
 
 const CANDIDATES_STORED_PER_CATEGORY = 5;
 
@@ -205,18 +205,34 @@ export async function runCandidateDiscoveryBatch(db, {
 // after processWinnerCandidate returns, since a quota-limited stop must
 // leave the queue item at its last in-progress stage (resumable tomorrow),
 // not force it to 'failed' (terminal) the way every other failure does.
+// 'draft_created' is not mapped here -- that status is only ever set by
+// prepareCandidateDraft, which runDailyProcessingBatch calls directly
+// (not through this mirror), landing the queue at 'ready_for_registration'
+// instead.
 function mapCandidateStatusToQueueStatus(processingStatus) {
-  if (processingStatus === 'draft_created' || processingStatus === 'analysis_running' || processingStatus === 'analysis_completed') return 'analyzing';
+  if (processingStatus === 'analysis_running' || processingStatus === 'analysis_completed') return 'analyzing';
   if (processingStatus === 'image_generation_running') return 'generating_images';
   if (processingStatus === 'awaiting_image_approval') return 'awaiting_approval';
   return null;
 }
 
-// Heavy cycle (daily by default): pops exactly ONE item -- resuming
-// anything already mid-flight before ever starting a fresh one -- and runs
-// it through processWinnerCandidate (draft -> analysis -> images). This is
-// the one place Codex actually gets called, capped at once per day
-// regardless of how many items discovery has queued.
+// Heavy cycle (daily by default), one of two things per tick -- never both,
+// capping real work (Codex usage, and now also a brand-new draft) at once
+// per day regardless of how many items discovery has queued:
+//
+// 1. Resume anything already mid-flight in the "개선" stage (analyzing /
+//    generating_images) via processWinnerCandidate. This is the one place
+//    Codex actually gets called.
+// 2. Otherwise, if nothing is mid-flight, prepare exactly one fresh queued
+//    candidate's draft (prepareCandidateDraft -- no Codex, no Coupang/Naver
+//    call) and land it at 'ready_for_registration', where it waits for a
+//    human to click "지금 등록" (see coupang-registration-flow.mjs's raw
+//    mode + admin-server.mjs's /api/auto-batch/queue/:id/register). Items
+//    already sitting at 'ready_for_registration' are invisible to
+//    getNextQueueItem (it only looks at analyzing/generating_images/queued),
+//    so this cycle neither advances nor blocks on them -- it just leaves
+//    them for the admin and, once nothing else is in progress, prepares the
+//    next-highest-score queued item instead.
 export async function runDailyProcessingBatch(db, {
   rootDir,
   jobDir,
@@ -230,6 +246,7 @@ export async function runDailyProcessingBatch(db, {
   recordQueueItemPauseImpl = recordQueueItemPauseReal,
   updateBatchCandidateStatusImpl = updateBatchCandidateStatusReal,
   getBatchRunCandidateByIdImpl = getBatchRunCandidateByIdReal,
+  prepareCandidateDraftImpl = prepareCandidateDraftReal,
   processWinnerCandidateImpl = processWinnerCandidateReal,
 } = {}) {
   const lock = await tryAcquireBatchLockImpl(db);
@@ -240,6 +257,19 @@ export async function runDailyProcessingBatch(db, {
     if (!queueItem) return { skipped: true, reason: 'QUEUE_EMPTY' };
 
     const candidateRow = await getBatchRunCandidateByIdImpl(db, queueItem.batchRunCandidateId);
+
+    if (queueItem.status === 'queued') {
+      const prepared = await prepareCandidateDraftImpl(db, candidateRow, { rootDir, batchRunId: candidateRow.batchRunId });
+      if (prepared.outcome === 'ready') {
+        await updateQueueItemStatusImpl(db, queueItem.id, { status: 'ready_for_registration', draftId: prepared.draftId, startedAt: queueItem.startedAt || new Date().toISOString() });
+      } else if (prepared.outcome === 'skipped_duplicate') {
+        await updateQueueItemStatusImpl(db, queueItem.id, { status: 'failed', failureStage: 'draft_creation', failureMessage: '이미 존재하는 draft와 동일한 상품 -- 건너뜀', draftId: prepared.draftId });
+      } else {
+        await updateQueueItemStatusImpl(db, queueItem.id, { status: 'failed', failureStage: 'draft_creation', failureMessage: 'draft 준비 실패' });
+      }
+      return { queueItemId: queueItem.id, ...prepared };
+    }
+
     await updateQueueItemStatusImpl(db, queueItem.id, { status: 'analyzing', startedAt: queueItem.startedAt || new Date().toISOString() });
 
     // Fans every batch_run_candidates status update processWinnerCandidate
@@ -254,14 +284,12 @@ export async function runDailyProcessingBatch(db, {
     };
 
     const outcome = await processWinnerCandidateImpl(db, candidateRow, {
-      rootDir, jobDir: jobDir || jobPathsConfig.jobDir, codexConfig, pythonConfig, jobPathsConfig, batchRunId: candidateRow.batchRunId,
+      rootDir, jobDir: jobDir || jobPathsConfig.jobDir, codexConfig, pythonConfig, jobPathsConfig,
       updateBatchCandidateStatusImpl: mirroringStatusImpl,
     });
 
     if (outcome.outcome === 'success') {
       await updateQueueItemStatusImpl(db, queueItem.id, { status: 'awaiting_approval', draftId: outcome.draftId });
-    } else if (outcome.outcome === 'skipped_duplicate') {
-      await updateQueueItemStatusImpl(db, queueItem.id, { status: 'failed', failureStage: 'draft_creation', failureMessage: '이미 존재하는 draft와 동일한 상품 -- 건너뜀', draftId: outcome.draftId });
     } else if (outcome.quotaLimited) {
       // Leave status at whatever in-progress stage the mirror last set --
       // resumed tomorrow by getNextQueueItem, not retried today.

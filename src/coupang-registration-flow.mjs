@@ -112,6 +112,29 @@ async function evaluateCandidate(db, draftId, { getCoupangRegistrationImpl, getA
   return { eligible: true, reason: null };
 }
 
+// Source images for `mode: 'raw'` registration -- the draft's own
+// supplier-collected images (product_images), available immediately after
+// prepareCandidateDraft's draft-creation + detail-slicing step, well before
+// any Codex-generated main/detail images exist. Main image keeps only its
+// external supplier URL (never mirrored to a local public/ file); detail
+// images use whatever sliceLongDetailImagesForDraft produced
+// (image_type='detail_slice', already a local /generated-images/... path).
+export async function getDraftRawImages(db, draftId) {
+  const pick = (row) => row?.stored_url || row?.original_url || row?.url || null;
+  const mainRow = (await db.query(
+    `select stored_url, original_url, url from product_images where product_draft_id = $1 and image_type = 'main' order by image_index limit 1`,
+    [draftId],
+  )).rows[0];
+  const detailRows = (await db.query(
+    `select stored_url, original_url, url from product_images where product_draft_id = $1 and image_type = 'detail_slice' order by image_index`,
+    [draftId],
+  )).rows;
+  return {
+    mainImageLocalUrl: pick(mainRow),
+    detailImageLocalUrls: detailRows.map(pick).filter(Boolean),
+  };
+}
+
 // Step "대상 상품" selection: checks the preferred draft (46 by default)
 // first and reports exactly why it's disqualified if it is, then scans every
 // other non-protected draft in id order for the first eligible one. Never
@@ -186,15 +209,25 @@ export async function previewCategoryAndShipping(db, draftId, { coupangConfig, c
 // WING-검수 style ready/missing report, adapted from the read-only
 // scripts/coupang-preflight.mjs logic so both surfaces agree on what
 // "ready to register" means.
-function buildReadinessReport({ draft, prediction, categoryMeta, optionMapping, outboundShippingPlace, returnShippingCenter, shippingSettings, material, verifiedSize, manufacturer, countryOfOrigin, mainImageUrl, detailImageUrls, noticeCategoryTemplateName, resolvedNotices = [] }) {
+function buildReadinessReport({ draft, prediction, categoryMeta, optionMapping, outboundShippingPlace, returnShippingCenter, shippingSettings, material, verifiedSize, manufacturer, countryOfOrigin, mainImageUrl, detailImageUrls, noticeCategoryTemplateName, resolvedNotices = [], mode = 'improved' }) {
   const ready = [];
   const missing = [];
 
   if (draft.optimizedTitle) ready.push(`상품명: ${draft.optimizedTitle}`); else missing.push('최적화 상품명');
   if (draft.salePrice) ready.push(`판매가: ${draft.salePrice}`); else missing.push('판매가');
   if (mainImageUrl) ready.push('대표이미지 R2 공개 URL 확보'); else missing.push('대표이미지 R2 업로드');
-  if (detailImageUrls.length === 10) ready.push(`상세이미지 R2 공개 URL ${detailImageUrls.length}장 확보`);
-  else missing.push(`상세이미지 10장 필요 (현재 ${detailImageUrls.length}장)`);
+  // `mode: 'raw'` registers with the draft's original supplier images before
+  // any improvement pass has run, so it only requires at least one detail
+  // image rather than the exact 10-image set an improved (Codex-generated)
+  // registration produces.
+  if (mode === 'raw') {
+    if (detailImageUrls.length > 0) ready.push(`원본 상세이미지 ${detailImageUrls.length}장 확보`);
+    else missing.push('원본 상세이미지가 없습니다');
+  } else if (detailImageUrls.length === 10) {
+    ready.push(`상세이미지 R2 공개 URL ${detailImageUrls.length}장 확보`);
+  } else {
+    missing.push(`상세이미지 10장 필요 (현재 ${detailImageUrls.length}장)`);
+  }
 
   if (prediction?.displayCategoryCode) ready.push(`추천 카테고리: ${prediction.displayCategoryCode} (${prediction.categoryName})`);
   else missing.push('쿠팡 카테고리 예측 실패 -- 수동 지정 필요');
@@ -243,6 +276,7 @@ function buildReadinessReport({ draft, prediction, categoryMeta, optionMapping, 
 // R2 upload.
 export async function buildRegistrationPreview(db, rootDir, draftId, {
   overrides = {},
+  mode = 'improved',
   coupangConfig,
   clientImpl,
   categoryAdapterImpl,
@@ -251,6 +285,7 @@ export async function buildRegistrationPreview(db, rootDir, draftId, {
   getAppliedAnalysisImpl = getAppliedAnalysis,
   getApprovedManualMainImageImpl = getApprovedManualMainImage,
   getApprovedManualDetailSetImpl = getApprovedManualDetailSet,
+  getDraftRawImagesImpl = getDraftRawImages,
   getSellerShippingSettingsImpl = getSellerShippingSettings,
 } = {}) {
   if (draftId === PROTECTED_DRAFT_ID) throw Object.assign(new Error('draft 64는 보호 대상입니다'), { code: 'DRAFT_PROTECTED' });
@@ -259,10 +294,24 @@ export async function buildRegistrationPreview(db, rootDir, draftId, {
     await previewCategoryAndShipping(db, draftId, { coupangConfig, clientImpl, categoryAdapterImpl, exportProductDraftImpl, getSellerShippingSettingsImpl });
 
   const appliedAnalysis = await getAppliedAnalysisImpl(db, draftId);
-  const mainImage = await getApprovedManualMainImageImpl(db, draftId);
-  const detailSet = await getApprovedManualDetailSetImpl(db, draftId);
-  if (!mainImage || !detailSet) {
-    throw Object.assign(new Error('승인된 대표이미지 또는 상세이미지 세트가 없습니다'), { code: 'IMAGES_NOT_APPROVED' });
+
+  let mainImageLocalUrl;
+  let detailImageLocalUrls;
+  if (mode === 'raw') {
+    const rawImages = await getDraftRawImagesImpl(db, draftId);
+    if (!rawImages.mainImageLocalUrl || rawImages.detailImageLocalUrls.length === 0) {
+      throw Object.assign(new Error('원본 대표이미지 또는 상세이미지가 없습니다'), { code: 'IMAGES_NOT_APPROVED' });
+    }
+    mainImageLocalUrl = rawImages.mainImageLocalUrl;
+    detailImageLocalUrls = rawImages.detailImageLocalUrls;
+  } else {
+    const mainImage = await getApprovedManualMainImageImpl(db, draftId);
+    const detailSet = await getApprovedManualDetailSetImpl(db, draftId);
+    if (!mainImage || !detailSet) {
+      throw Object.assign(new Error('승인된 대표이미지 또는 상세이미지 세트가 없습니다'), { code: 'IMAGES_NOT_APPROVED' });
+    }
+    mainImageLocalUrl = mainImage.coupangStoredUrl;
+    detailImageLocalUrls = detailSet.images.map((image) => image.normalizedStoredUrl);
   }
 
   const draftRow = (await db.query('select supplier_product_id from product_drafts where id = $1', [draftId])).rows[0];
@@ -272,8 +321,8 @@ export async function buildRegistrationPreview(db, rootDir, draftId, {
   const { mainImageUrl, detailImageUrls } = await uploadImpl({
     rootDir,
     draftId,
-    mainImageLocalUrl: mainImage.coupangStoredUrl,
-    detailImageLocalUrls: detailSet.images.map((image) => image.normalizedStoredUrl),
+    mainImageLocalUrl,
+    detailImageLocalUrls,
   });
 
   const stockByOptionValue = Object.fromEntries(
@@ -345,6 +394,7 @@ export async function buildRegistrationPreview(db, rootDir, draftId, {
     draft, prediction, categoryMeta, optionMapping, outboundShippingPlace, returnShippingCenter, shippingSettings,
     material, verifiedSize, manufacturer, countryOfOrigin, mainImageUrl, detailImageUrls, noticeCategoryTemplateName,
     resolvedNotices: payload.items?.[0]?.notices || [],
+    mode,
   });
 
   const requestHash = createHash('sha256').update(JSON.stringify(payload)).digest('hex');
@@ -361,6 +411,7 @@ export async function buildRegistrationPreview(db, rootDir, draftId, {
 // separate step the user does in WING themselves.
 export async function createDirectRegistration(db, rootDir, draftId, {
   overrides = {},
+  mode = 'improved',
   confirm = false,
   coupangConfig,
   clientImpl,
@@ -375,7 +426,7 @@ export async function createDirectRegistration(db, rootDir, draftId, {
     throw Object.assign(new Error(`이미 등록된 draft입니다 (status=${existing.status}${existing.sellerProductId ? `, sellerProductId=${existing.sellerProductId}` : ''})`), { code: 'ALREADY_REGISTERED', existing });
   }
 
-  const preview = await buildRegistrationPreviewImpl(db, rootDir, draftId, { overrides, coupangConfig, clientImpl });
+  const preview = await buildRegistrationPreviewImpl(db, rootDir, draftId, { overrides, mode, coupangConfig, clientImpl });
   if (preview.readiness.blocked) {
     throw Object.assign(new Error('미확정 항목이 남아있어 등록할 수 없습니다'), { code: 'REGISTRATION_NOT_READY', readiness: preview.readiness });
   }

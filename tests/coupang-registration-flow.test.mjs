@@ -11,6 +11,29 @@ import {
   validateSellerShippingSettings,
 } from '../src/coupang-registration-flow.mjs';
 
+function rawModePreviewDeps(overridesToDeps = {}) {
+  return {
+    mode: 'raw',
+    coupangConfig: { vendorId: 'A00000000', vendorUserId: 'seller1' },
+    clientImpl: fakeCoupangClient(),
+    categoryAdapterImpl: fakeCategoryAdapter(),
+    exportProductDraftImpl: async () => fakeDraft(),
+    getSellerShippingSettingsImpl: async () => CONFIGURED_SHIPPING_SETTINGS,
+    // A fresh draft has no applied analysis yet -- raw registration relies on
+    // supplierNoticeFields (from raw_json) + SELLER_FIXED_CONFIG fallbacks.
+    getAppliedAnalysisImpl: async () => null,
+    getDraftRawImagesImpl: async () => ({
+      mainImageLocalUrl: 'https://domeggook.example/product/main.jpg',
+      detailImageLocalUrls: ['/generated-images/drafts/501/detail-1-slice-001.jpg', '/generated-images/drafts/501/detail-2-slice-001.jpg'],
+    }),
+    uploadImpl: async ({ detailImageLocalUrls }) => ({
+      mainImageUrl: 'https://pub.example/drafts/501/coupang/main.jpg',
+      detailImageUrls: detailImageLocalUrls.map((_, i) => `https://pub.example/drafts/501/coupang/detail-${i + 1}.jpg`),
+    }),
+    ...overridesToDeps,
+  };
+}
+
 const CONFIGURED_SHIPPING_SETTINGS = { outboundShippingPlaceCode: '111', outboundShippingPlaceName: '행당 출고지', returnCenterCode: '222', returnCenterName: '반품지1' };
 
 function makeDraftsDb(ids) {
@@ -205,6 +228,43 @@ test('buildRegistrationPreview refuses a draft with no approved images', async (
     () => buildRegistrationPreview(db, '/repo', 46, commonPreviewDeps({ getApprovedManualMainImageImpl: async () => null })),
     (error) => error.code === 'IMAGES_NOT_APPROVED',
   );
+});
+
+test('buildRegistrationPreview in raw mode registers with the draft\'s own supplier images, never requiring approved manual images', async () => {
+  const db = makeDraftsDb([]);
+  let approvedImageCheckCalled = false;
+  const preview = await buildRegistrationPreview(db, '/repo', 501, rawModePreviewDeps({
+    getApprovedManualMainImageImpl: async () => { approvedImageCheckCalled = true; return null; },
+    getApprovedManualDetailSetImpl: async () => { approvedImageCheckCalled = true; return null; },
+  }));
+  assert.equal(approvedImageCheckCalled, false);
+  assert.equal(preview.mainImageUrl, 'https://pub.example/drafts/501/coupang/main.jpg');
+  assert.equal(preview.detailImageUrls.length, 2);
+});
+
+test('buildRegistrationPreview in raw mode accepts fewer than 10 detail images (unlike improved mode)', async () => {
+  const db = makeDraftsDb([]);
+  const preview = await buildRegistrationPreview(db, '/repo', 501, rawModePreviewDeps());
+  assert.ok(preview.readiness.ready.some((line) => line.includes('원본 상세이미지 2장')));
+  assert.ok(!preview.readiness.missing.some((line) => line.includes('상세이미지')));
+});
+
+test('buildRegistrationPreview in raw mode still blocks when no raw images exist at all', async () => {
+  const db = makeDraftsDb([]);
+  await assert.rejects(
+    () => buildRegistrationPreview(db, '/repo', 501, rawModePreviewDeps({
+      getDraftRawImagesImpl: async () => ({ mainImageLocalUrl: null, detailImageLocalUrls: [] }),
+    })),
+    (error) => error.code === 'IMAGES_NOT_APPROVED',
+  );
+});
+
+test('buildRegistrationPreview in improved mode (default) still requires exactly 10 detail images', async () => {
+  const db = makeDraftsDb([]);
+  const preview = await buildRegistrationPreview(db, '/repo', 46, commonPreviewDeps({
+    getApprovedManualDetailSetImpl: async () => ({ images: Array.from({ length: 3 }, (_, i) => ({ normalizedStoredUrl: `/generated-ai-images/drafts/46/detail/manual/r1-v1/detail-${i + 1}.jpg` })) }),
+  }));
+  assert.ok(preview.readiness.missing.some((line) => line.includes('상세이미지 10장 필요')));
 });
 
 test('buildRegistrationPreview assembles a requested=false payload using applied-analysis values and seller-fixed config, with a clean (non-blocked) readiness report', async () => {
