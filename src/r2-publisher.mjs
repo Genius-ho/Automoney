@@ -16,17 +16,30 @@ function readPublicAsset(rootDir, value) {
   return readFile(filePath);
 }
 
-// Raw supplier image URLs (e.g. Domeggook's `.../img_760?hash=...`) often
-// carry a query string and no real file extension, so naively taking
-// whatever follows the URL's last "." (which may be inside the query string,
-// or inside the hostname when the path has no dot at all) produces garbage
-// like "com/upload/item/...?hash=..." and an invalid R2 key. Only trust an
-// extension found in the path portion (before any "?"), and fall back to jpg
-// -- objects are always stored as image/jpeg regardless, see putObject below.
-function extensionFor(localUrl) {
-  const path = /^https?:\/\//i.test(localUrl) ? localUrl.split('?')[0] : localUrl;
-  const match = path.match(/\.([a-zA-Z0-9]{2,5})$/);
-  return match ? match[1].toLowerCase() : 'jpg';
+// The URL/filename a raw supplier image arrives under is not trustworthy --
+// Domeggook URLs often carry a query string and no real extension at all
+// (e.g. `.../img_760?hash=...`), and separately, the file behind a `.jpg`
+// name is sometimes actually a PNG (confirmed live 2026-07-24: Naver's
+// createOriginProduct rejected a registration with "올바른 이미지 파일이 아닙니다"
+// because the object had been stored as Content-Type: image/jpeg while its
+// bytes were a PNG). Sniff the real format from the file's own
+// magic bytes instead of trusting the URL or hardcoding image/jpeg, and use
+// that for both the R2 key's extension and the object's Content-Type so the
+// two always agree. Defaults to jpg/image/jpeg for anything unrecognized.
+function detectImageFormat(buffer) {
+  if (buffer.length >= 8 && buffer[0] === 0x89 && buffer[1] === 0x50 && buffer[2] === 0x4e && buffer[3] === 0x47) {
+    return { extension: 'png', contentType: 'image/png' };
+  }
+  if (buffer.length >= 3 && buffer[0] === 0xff && buffer[1] === 0xd8 && buffer[2] === 0xff) {
+    return { extension: 'jpg', contentType: 'image/jpeg' };
+  }
+  if (buffer.length >= 12 && buffer.toString('ascii', 0, 4) === 'RIFF' && buffer.toString('ascii', 8, 12) === 'WEBP') {
+    return { extension: 'webp', contentType: 'image/webp' };
+  }
+  if (buffer.length >= 6 && (buffer.toString('ascii', 0, 6) === 'GIF87a' || buffer.toString('ascii', 0, 6) === 'GIF89a')) {
+    return { extension: 'gif', contentType: 'image/gif' };
+  }
+  return { extension: 'jpg', contentType: 'image/jpeg' };
 }
 
 // Approved main/detail images are served locally by the admin server
@@ -50,11 +63,11 @@ export async function uploadApprovedImagesToR2({ rootDir, draftId, mainImageLoca
       ? Buffer.from(await (await fetchImpl(localUrl)).arrayBuffer())
       : await readPublicAssetImpl(rootDir, localUrl);
     const hash = createHash('sha256').update(buffer).digest('hex').slice(0, 16);
-    const extension = extensionFor(localUrl);
+    const { extension, contentType } = detectImageFormat(buffer);
     const key = `drafts/${draftId}/coupang/${hash}.${extension}`;
     const existing = await client.headObject(key);
     if (existing) return existing.publicUrl;
-    const { publicUrl } = await client.putObject(key, buffer, 'image/jpeg');
+    const { publicUrl } = await client.putObject(key, buffer, contentType);
     return publicUrl;
   };
   const mainImageUrl = await upload(mainImageLocalUrl);

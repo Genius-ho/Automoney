@@ -68,9 +68,14 @@ test('uploadApprovedImagesToR2 keys objects under drafts/{draftId}/coupang/ so d
   assert.ok(deps.calls.put[0].key.startsWith('drafts/46/coupang/'));
 });
 
-test('uploadApprovedImagesToR2 falls back to .jpg for a raw supplier URL with a query string and no real extension', async () => {
+test('uploadApprovedImagesToR2 keys a raw supplier URL with a query string and no real extension under a content-sniffed .jpg', async () => {
+  // Whatever the URL looks like must never leak into the key -- only the
+  // actual bytes decide the extension. This URL shape (Domeggook's
+  // `...img_760?hash=...`) is exactly what previously produced an invalid,
+  // slash-containing R2 key.
   const deps = fakeDeps();
-  deps.fetchImpl = async () => ({ arrayBuffer: async () => Buffer.from('supplier-bytes') });
+  const jpegBytes = Buffer.from([0xff, 0xd8, 0xff, 0xe0, 0, 0, 0, 0]);
+  deps.fetchImpl = async () => ({ arrayBuffer: async () => jpegBytes });
   const rawSupplierUrl = 'https://img.domeggook.com/upload/item/2026/06/19/1781825629EB1168742EAA76D939F9BF/1781825629EB1168742EAA76D939F9BF_img_760?hash=a803c03e63702a4736e211efbbb740a8';
   const result = await uploadApprovedImagesToR2({
     rootDir: '/repo',
@@ -80,19 +85,27 @@ test('uploadApprovedImagesToR2 falls back to .jpg for a raw supplier URL with a 
     ...deps,
   });
   assert.match(deps.calls.put[0].key, /^drafts\/46\/coupang\/[0-9a-f]{16}\.jpg$/);
+  assert.equal(deps.calls.put[0].contentType, 'image/jpeg');
   assert.ok(result.mainImageUrl.startsWith('https://pub.example/drafts/46/coupang/'));
 });
 
-test('uploadApprovedImagesToR2 keeps a real extension found in the URL path even when a query string follows it', async () => {
+// Naver's createOriginProduct rejected a live registration with "올바른
+// 이미지 파일이 아닙니다" because a file had been stored as
+// Content-Type: image/jpeg while its actual bytes were a PNG (the old
+// hardcoded-image/jpeg behavior). Extension and Content-Type must always
+// match the real file, regardless of what the source URL's name implies.
+test('uploadApprovedImagesToR2 sniffs a PNG by its magic bytes and stores it with a matching extension and Content-Type, even under a .jpg-looking URL', async () => {
   const deps = fakeDeps();
-  deps.fetchImpl = async () => ({ arrayBuffer: async () => Buffer.from('supplier-bytes') });
+  const pngBytes = Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a, 0, 0, 0, 0]);
+  deps.fetchImpl = async () => ({ arrayBuffer: async () => pngBytes });
   const result = await uploadApprovedImagesToR2({
     rootDir: '/repo',
     draftId: 46,
-    mainImageLocalUrl: 'https://img.domeggook.com/upload/item/photo.png?hash=abc',
+    mainImageLocalUrl: 'https://img.domeggook.com/upload/item/main.jpg?hash=abc',
     detailImageLocalUrls: [],
     ...deps,
   });
   assert.match(deps.calls.put[0].key, /\.png$/);
+  assert.equal(deps.calls.put[0].contentType, 'image/png');
   assert.ok(result.mainImageUrl);
 });

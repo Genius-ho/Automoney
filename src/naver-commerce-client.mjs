@@ -104,12 +104,47 @@ export class NaverCommerceClient {
     return this.request('GET', `/v1/categories/${categoryId}/attributes`, { operation: 'get_category_attributes' });
   }
 
+  // Confirmed live 2026-07-24: createOriginProduct rejects any
+  // originAreaCode that isn't one of these ~535 codes ("원산지 상세코드 항목이
+  // 유효하지 않습니다"), a free-text country string is not accepted. See
+  // pickOriginAreaCode in naver-registration-flow.mjs for the client-side
+  // match against this list.
+  async getOriginAreas() {
+    return this.request('GET', '/v1/product-origin-areas', { operation: 'get_origin_areas' });
+  }
+
   async createOriginProduct(payload) {
     return this.request('POST', '/v2/products', { body: payload, operation: 'create_origin_product' });
   }
 
   async getProduct(originProductNo) {
     return this.request('GET', `/v2/products/origin-products/${originProductNo}`, { operation: 'get_product' });
+  }
+
+  // createOriginProduct rejects arbitrary external image URLs (R2, or any
+  // other host) with "올바른 이미지 파일이 아닙니다" even when the file is a
+  // perfectly valid image -- confirmed live 2026-07-24. Naver's own docs
+  // (commerce-api-naver/commerce-api discussions #117/#1666) require images
+  // to first go through this multipart upload endpoint, whose response URLs
+  // are the only ones createOriginProduct actually accepts. The multipart
+  // field name must be "imageFiles" for every file, even when uploading more
+  // than one in the same request.
+  async uploadImages(images) {
+    const accessToken = await this.getAccessToken();
+    const form = new FormData();
+    for (const { buffer, filename, contentType } of images) {
+      form.append('imageFiles', new Blob([buffer], { type: contentType }), filename);
+    }
+    const response = await this.fetchImpl(`${this.baseUrl}/v1/product-images/upload`, {
+      method: 'POST',
+      headers: { Authorization: `Bearer ${accessToken}` },
+      body: form,
+    });
+    const text = await response.text();
+    if (!response.ok) {
+      throw new NaverCommerceApiError({ status: response.status, operation: 'upload_images', bodyPreview: previewBody(text), path: '/v1/product-images/upload' });
+    }
+    return parseJson(text);
   }
 }
 

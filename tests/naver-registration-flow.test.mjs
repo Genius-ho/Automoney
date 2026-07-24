@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
 
-import { createNaverDirectRegistration, buildNaverRegistrationPreview, pickBestNaverCategory } from '../src/naver-registration-flow.mjs';
+import { createNaverDirectRegistration, buildNaverRegistrationPreview, pickBestNaverCategory, pickOriginAreaCode, uploadImagesToNaver } from '../src/naver-registration-flow.mjs';
 import { PROTECTED_DRAFT_ID } from '../src/coupang-registration-flow.mjs';
 
 function makeDb() {
@@ -19,11 +19,19 @@ function makeDb() {
 // searchCategories' real shape (confirmed live 2026-07-24): a flat array of
 // every category in the tree, not `{ data: [...] }` with a `categoryId`
 // field -- see pickBestNaverCategory's comment in naver-registration-flow.mjs.
-function fakeNaverClient({ searchResult = [{ id: '50000803', name: '정리함', last: true, wholeCategoryName: '생활/건강>수납/정리>정리함' }], createResult = { data: { originProductNo: '7777777777', channelProducts: [{ channelProductNo: '8888888888' }] } } } = {}) {
+// getOriginAreas' real shape (confirmed live 2026-07-24): { originAreaCodeNames:
+// [{ code, name }] }, name using "수입산:아시아>중국"-style separators -- see
+// pickOriginAreaCode's comment in naver-registration-flow.mjs.
+function fakeNaverClient({
+  searchResult = [{ id: '50000803', name: '정리함', last: true, wholeCategoryName: '생활/건강>수납/정리>정리함' }],
+  originAreasResult = { originAreaCodeNames: [{ code: '0200037', name: '수입산:아시아>중국' }] },
+  createResult = { data: { originProductNo: '7777777777', channelProducts: [{ channelProductNo: '8888888888' }] } },
+} = {}) {
   const calls = { searchCategories: 0, createOriginProduct: 0 };
   return {
     calls,
     async searchCategories() { calls.searchCategories += 1; return searchResult; },
+    async getOriginAreas() { return originAreasResult; },
     async createOriginProduct(payload) { calls.createOriginProduct += 1; this.lastPayload = payload; return createResult; },
   };
 }
@@ -40,6 +48,13 @@ function commonPreviewDeps(overrides = {}) {
     uploadImpl: async ({ detailImageLocalUrls }) => ({
       mainImageUrl: 'https://pub.example/drafts/501/naver/main.jpg',
       detailImageUrls: detailImageLocalUrls.map((_, i) => `https://pub.example/drafts/501/naver/detail-${i + 1}.jpg`),
+    }),
+    // createOriginProduct only accepts image URLs Naver's own upload API
+    // returned (see uploadImagesToNaver's comment), so the R2 URLs above
+    // always make one more hop through this before reaching the payload.
+    uploadImagesToNaverImpl: async (_client, { mainImageUrl, detailImageUrls }) => ({
+      mainImageUrl: mainImageUrl.replace('pub.example', 'naver-cdn.example'),
+      detailImageUrls: detailImageUrls.map((url) => url.replace('pub.example', 'naver-cdn.example')),
     }),
     ...overrides,
   };
@@ -65,6 +80,82 @@ test('pickBestNaverCategory returns null for an empty or non-array category list
   assert.equal(pickBestNaverCategory(null, '정리함'), null);
 });
 
+// createOriginProduct rejects a free-text origin string outright ("원산지
+// 상세코드 항목이 유효하지 않습니다", confirmed live 2026-07-24); this app's own
+// normalized country string uses "/"-joined segments while Naver's own list
+// uses ":"/">" -- pickOriginAreaCode has to bridge the two separator styles.
+test('pickOriginAreaCode matches this app\'s "/"-joined country string against Naver\'s ":"/">"-joined name', () => {
+  const originAreaCodeNames = [
+    { code: '00', name: '국산' },
+    { code: '0200037', name: '수입산:아시아>중국' },
+    { code: '0200038', name: '수입산:아시아>일본' },
+  ];
+  assert.equal(pickOriginAreaCode(originAreaCodeNames, '수입산 / 아시아 / 중국'), '0200037');
+});
+
+test('pickOriginAreaCode matches a domestic-only string to the general 국산 entry, not an unrelated sub-region', () => {
+  const originAreaCodeNames = [
+    { code: '00', name: '국산' },
+    { code: '0001', name: '국산:강원도' },
+  ];
+  assert.equal(pickOriginAreaCode(originAreaCodeNames, '국산'), '00');
+});
+
+test('pickOriginAreaCode returns null when nothing matches or input is missing', () => {
+  assert.equal(pickOriginAreaCode([{ code: '00', name: '국산' }], '수입산 / 유럽 / 프랑스'), null);
+  assert.equal(pickOriginAreaCode([], '국산'), null);
+  assert.equal(pickOriginAreaCode(null, '국산'), null);
+  assert.equal(pickOriginAreaCode([{ code: '00', name: '국산' }], null), null);
+});
+
+// createOriginProduct rejected R2-hosted URLs outright with "올바른 이미지
+// 파일이 아닙니다" (confirmed live 2026-07-24) -- only URLs Naver's own
+// POST /v1/product-images/upload returns are accepted, so every R2 URL has
+// to be re-fetched and re-uploaded through that endpoint first.
+test('uploadImagesToNaver fetches each R2 URL, uploads all of them through client.uploadImages in one call, and maps main/detail URLs back in order', async () => {
+  const calls = [];
+  const client = {
+    async uploadImages(files) {
+      calls.push(files);
+      return { images: files.map((_, i) => ({ url: `https://shop-phinf.pstatic.net/img-${i}.png` })) };
+    },
+  };
+  const fetchImpl = async (url) => ({
+    arrayBuffer: async () => Buffer.from(`bytes-for-${url}`),
+    headers: { get: () => 'image/png' },
+  });
+  const result = await uploadImagesToNaver(client, {
+    mainImageUrl: 'https://pub.example/main.png',
+    detailImageUrls: ['https://pub.example/detail-1.png', 'https://pub.example/detail-2.png'],
+    fetchImpl,
+  });
+  assert.equal(calls[0].length, 3, 'main image + 2 detail images uploaded in a single call');
+  assert.equal(calls[0][0].contentType, 'image/png');
+  assert.equal(result.mainImageUrl, 'https://shop-phinf.pstatic.net/img-0.png');
+  assert.deepEqual(result.detailImageUrls, ['https://shop-phinf.pstatic.net/img-1.png', 'https://shop-phinf.pstatic.net/img-2.png']);
+});
+
+// The real upload endpoint 400s past 10 files in one call ("업로드대상 이미지
+// 파일은 최대 10개 까지만 등록할 수 있습니다", confirmed live 2026-07-24) -- a raw
+// registration's main + 13 detail-slice images (14 total) hit exactly this.
+test('uploadImagesToNaver batches more than 10 images into sequential uploadImages calls and reassembles the URLs in order', async () => {
+  const calls = [];
+  const client = {
+    async uploadImages(files) {
+      calls.push(files.length);
+      return { images: files.map((f) => ({ url: `https://shop-phinf.pstatic.net/${f.filename}.png` })) };
+    },
+  };
+  const fetchImpl = async (url) => ({ arrayBuffer: async () => Buffer.from(url), headers: { get: () => 'image/jpeg' } });
+  const detailImageUrls = Array.from({ length: 13 }, (_, i) => `https://pub.example/detail-${i + 1}.jpg`);
+  const result = await uploadImagesToNaver(client, { mainImageUrl: 'https://pub.example/main.jpg', detailImageUrls, fetchImpl });
+
+  assert.deepEqual(calls, [10, 4], 'main + 13 details = 14 files, batched as 10 then 4');
+  assert.equal(result.mainImageUrl, 'https://shop-phinf.pstatic.net/image-0.jpg.png');
+  assert.equal(result.detailImageUrls.length, 13);
+  assert.equal(result.detailImageUrls[12], 'https://shop-phinf.pstatic.net/image-13.jpg.png');
+});
+
 test('buildNaverRegistrationPreview refuses draft 64 immediately', async () => {
   await assert.rejects(
     () => buildNaverRegistrationPreview(makeDb(), '/repo', PROTECTED_DRAFT_ID, commonPreviewDeps()),
@@ -86,7 +177,16 @@ test('buildNaverRegistrationPreview assembles a clean (non-blocked) readiness re
   assert.equal(preview.readiness.blocked, false);
   assert.equal(preview.payload.originProduct.leafCategoryId, '50000803');
   assert.equal(preview.payload.originProduct.salePrice, 19800);
-  assert.equal(preview.mainImageUrl, 'https://pub.example/drafts/501/naver/main.jpg');
+  assert.equal(preview.payload.originProduct.detailAttribute.originAreaInfo.originAreaCode, '0200037');
+  assert.equal(preview.mainImageUrl, 'https://naver-cdn.example/drafts/501/naver/main.jpg');
+});
+
+test('buildNaverRegistrationPreview reports readiness.blocked when the origin-area code cannot be matched', async () => {
+  const preview = await buildNaverRegistrationPreview(makeDb(), '/repo', 501, commonPreviewDeps({
+    clientImpl: fakeNaverClient({ originAreasResult: { originAreaCodeNames: [{ code: '00', name: '국산' }] } }),
+  }));
+  assert.equal(preview.readiness.blocked, true);
+  assert.ok(preview.readiness.missing.some((line) => line.includes('원산지')));
 });
 
 test('buildNaverRegistrationPreview reports readiness.blocked when category search returns nothing', async () => {

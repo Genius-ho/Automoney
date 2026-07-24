@@ -44,17 +44,88 @@ test('buildNaverOriginProductPayload falls back to null leafCategoryId when no c
   assert.equal(payload.originProduct.images.representativeImage, null);
 });
 
-test('buildNaverOriginProductPayload fills manufacturer/origin/size from supplierNoticeFields when not explicitly overridden', () => {
+test('buildNaverOriginProductPayload fills manufacturer/origin from supplierNoticeFields when not explicitly overridden', () => {
   const payload = buildNaverOriginProductPayload({
     draft: fakeDraft(),
     categoryId: '1',
     mainImageUrl: 'https://pub.example/main.jpg',
     detailImageUrls: ['https://pub.example/detail-1.jpg'],
-    supplierNoticeFields: { manufacturer: '공급처제조사', countryOfOrigin: '수입산 / 아시아 / 중국', size: '23.5cm x 13.5cm' },
+    supplierNoticeFields: { manufacturer: '공급처제조사', countryOfOrigin: '수입산 / 아시아 / 중국', modelName: 'MX-100' },
   });
   assert.equal(payload.originProduct.detailAttribute.manufacturerName, '공급처제조사');
-  assert.equal(payload.originProduct.detailAttribute.originAreaInfo.originAreaCode, '수입산 / 아시아 / 중국');
-  assert.equal(payload.originProduct.detailAttribute.productInfoProvidedNotice.etc.size, '23.5cm x 13.5cm');
+  // content stays the human-readable string; originAreaCode is a separate,
+  // explicitly-resolved param (see pickOriginAreaCode) since Naver only
+  // accepts its own origin-area codes there, not free text.
+  assert.equal(payload.originProduct.detailAttribute.originAreaInfo.content, '수입산 / 아시아 / 중국');
+  assert.equal(payload.originProduct.detailAttribute.productInfoProvidedNotice.etc.manufacturer, '공급처제조사');
+  assert.equal(payload.originProduct.detailAttribute.productInfoProvidedNotice.etc.modelName, 'MX-100');
+});
+
+// createOriginProduct rejects a free-text originAreaCode outright ("원산지
+// 상세코드 항목이 유효하지 않습니다", confirmed live 2026-07-24) -- it must be
+// passed in already resolved to one of Naver's own codes, or left null.
+test('buildNaverOriginProductPayload passes originAreaCode through as-is and defaults to null when not resolved', () => {
+  const resolved = buildNaverOriginProductPayload({ draft: fakeDraft(), categoryId: '1', mainImageUrl: null, detailImageUrls: [], originAreaCode: '0200037' });
+  assert.equal(resolved.originProduct.detailAttribute.originAreaInfo.originAreaCode, '0200037');
+
+  const unresolved = buildNaverOriginProductPayload({ draft: fakeDraft(), categoryId: '1', mainImageUrl: null, detailImageUrls: [] });
+  assert.equal(unresolved.originProduct.detailAttribute.originAreaInfo.originAreaCode, null);
+});
+
+// GET /v1/products-for-provided-notice confirmed live (2026-07-24) that
+// 'ETC' (not the Korean label) is the real enum value, and modelName is a
+// NotNull field on that type -- a live create_origin_product call 400'd on
+// exactly this before the fix (empty/missing modelName, wrong enum string).
+test('buildNaverOriginProductPayload uses the ETC enum constant and defaults modelName so a missing supplier model never leaves it null', () => {
+  const payload = buildNaverOriginProductPayload({
+    draft: fakeDraft(),
+    categoryId: '1',
+    mainImageUrl: null,
+    detailImageUrls: [],
+    supplierNoticeFields: {},
+  });
+  assert.equal(payload.originProduct.detailAttribute.productInfoProvidedNotice.productInfoProvidedNoticeType, 'ETC');
+  assert.equal(payload.originProduct.detailAttribute.productInfoProvidedNotice.etc.modelName, '해당없음');
+});
+
+// minorPurchasable and channelProductDisplayStatusType are both NotNull /
+// required-enum fields the real API rejected when absent. SUSPENSION keeps
+// a fresh registration hidden from sale until a human flips it to ON --
+// the same 자동 판매 승인 금지 gate Coupang's requestApproval step enforces.
+test('buildNaverOriginProductPayload defaults minorPurchasable to true and channelProductDisplayStatusType to SUSPENSION', () => {
+  const payload = buildNaverOriginProductPayload({ draft: fakeDraft(), categoryId: '1', mainImageUrl: null, detailImageUrls: [] });
+  assert.equal(payload.originProduct.detailAttribute.minorPurchasable, true);
+  assert.equal(payload.smartstoreChannelProduct.channelProductDisplayStatusType, 'SUSPENSION');
+});
+
+// afterServiceTelephoneNumber, originAreaInfo.importer, and
+// deliveryFee.deliveryFeePayType are all NotEmpty on the real API (confirmed
+// live 2026-07-24). importer has no real business name on file, so per user
+// instruction (2026-07-24) it defaults to pointing the buyer at the product
+// detail page. afterServiceTelephoneNumber has its own regex validator
+// ("숫자, -, +만 입력 가능") that rejects free text, so it defaults to the
+// user's real AS phone number (also supplied 2026-07-24) instead.
+test('buildNaverOriginProductPayload defaults AS phone to the real AS number, importer to "상세 페이지 참조", and deliveryFeePayType to PREPAID', () => {
+  const payload = buildNaverOriginProductPayload({ draft: fakeDraft(), categoryId: '1', mainImageUrl: null, detailImageUrls: [] });
+  assert.equal(payload.originProduct.detailAttribute.afterServiceInfo.afterServiceTelephoneNumber, '010-8795-2571');
+  assert.equal(payload.originProduct.detailAttribute.originAreaInfo.importer, '상세 페이지 참조');
+  assert.equal(payload.originProduct.deliveryInfo.deliveryFee.deliveryFeePayType, 'PREPAID');
+});
+
+test('buildNaverOriginProductPayload lets real AS phone / importer values override the defaults', () => {
+  const payload = buildNaverOriginProductPayload({ draft: fakeDraft(), categoryId: '1', mainImageUrl: null, detailImageUrls: [], asPhoneNumber: '010-1234-5678', importer: '다솜상사' });
+  assert.equal(payload.originProduct.detailAttribute.afterServiceInfo.afterServiceTelephoneNumber, '010-1234-5678');
+  assert.equal(payload.originProduct.detailAttribute.originAreaInfo.importer, '다솜상사');
+});
+
+// ExclusiveNotNull on the real API (confirmed live 2026-07-24): the ETC
+// notice block's afterServiceDirector and customerServicePhoneNumber may not
+// both be set at once.
+test('buildNaverOriginProductPayload only sets one of etc.afterServiceDirector/customerServicePhoneNumber, never both', () => {
+  const payload = buildNaverOriginProductPayload({ draft: fakeDraft(), categoryId: '1', mainImageUrl: null, detailImageUrls: [] });
+  const etc = payload.originProduct.detailAttribute.productInfoProvidedNotice.etc;
+  assert.equal(etc.afterServiceDirector, '010-8795-2571');
+  assert.equal(etc.customerServicePhoneNumber, null);
 });
 
 test('buildNaverOriginProductPayload includes smartstoreChannelProduct with the channel id when provided', () => {

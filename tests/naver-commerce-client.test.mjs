@@ -101,6 +101,46 @@ test('NaverCommerceClient.searchCategories queries by keyword', async () => {
   assert.equal(result.data[0].categoryId, '50000000');
 });
 
+// createOriginProduct rejects any image URL that didn't come from this
+// upload endpoint (confirmed live 2026-07-24, see naver-registration-flow.mjs's
+// uploadImagesToNaver comment) -- the multipart field name must be
+// "imageFiles" for every file per commerce-api-naver/commerce-api discussion #117.
+test('NaverCommerceClient.uploadImages posts each file under the imageFiles field with a bearer token', async () => {
+  let captured;
+  const fetchImpl = async (url, init) => {
+    if (String(url).includes('/v1/oauth2/token')) return tokenFetchImpl()(url);
+    captured = { url: String(url), method: init.method, authorization: init.headers.Authorization, body: init.body };
+    return { ok: true, status: 200, async text() { return JSON.stringify({ images: [{ url: 'https://shop-phinf.pstatic.net/a.png' }] }); } };
+  };
+  const client = new NaverCommerceClient({ clientId: 'client-1', clientSecret: '$2b$10$j7fv77w6f6U3cxYt80fLJ.', fetchImpl });
+
+  const result = await client.uploadImages([{ buffer: Buffer.from('abc'), filename: 'main.png', contentType: 'image/png' }]);
+
+  assert.equal(captured.url, 'https://api.commerce.naver.com/external/v1/product-images/upload');
+  assert.equal(captured.method, 'POST');
+  assert.equal(captured.authorization, 'Bearer token-abc');
+  assert.doesNotMatch(captured.authorization, /secret-1/);
+  const file = captured.body.get('imageFiles');
+  assert.equal(file.name, 'main.png');
+  assert.equal(file.type, 'image/png');
+  assert.equal(result.images[0].url, 'https://shop-phinf.pstatic.net/a.png');
+});
+
+test('NaverCommerceClient.getOriginAreas queries the origin-area code list', async () => {
+  let captured;
+  const fetchImpl = async (url, init) => {
+    if (String(url).includes('/v1/oauth2/token')) return tokenFetchImpl()(url);
+    captured = { url: String(url), method: init.method };
+    return { ok: true, status: 200, async text() { return JSON.stringify({ originAreaCodeNames: [{ code: '00', name: '국산' }] }); } };
+  };
+  const client = new NaverCommerceClient({ clientId: 'client-1', clientSecret: '$2b$10$j7fv77w6f6U3cxYt80fLJ.', fetchImpl });
+
+  const result = await client.getOriginAreas();
+
+  assert.equal(captured.url, 'https://api.commerce.naver.com/external/v1/product-origin-areas');
+  assert.equal(result.originAreaCodeNames[0].code, '00');
+});
+
 test('NaverCommerceClient surfaces a non-OK response as NaverCommerceApiError without leaking the secret', async () => {
   const fetchImpl = async (url) => {
     if (String(url).includes('/v1/oauth2/token')) return tokenFetchImpl()(url);

@@ -24,12 +24,76 @@ export function pickBestNaverCategory(categories, productName) {
   return leaves[0].id;
 }
 
-// Naver Commerce API registration -- built entirely from public API docs,
-// never yet exercised against a real credential (see
-// automoney_future_update_roadmap.md's Milestone 2 note). Every payload
-// field name here is a best-effort guess; expect a real fix commit the first
-// time createOriginProduct() actually runs live, the same way
-// coupang-registration-flow.mjs's own history has one (e7153b2).
+// createOriginProduct rejects R2 (or any other externally-hosted) image URLs
+// outright with "올바른 이미지 파일이 아닙니다", even when the file itself is
+// perfectly valid -- confirmed live 2026-07-24. Naver only accepts image
+// URLs its own POST /v1/product-images/upload endpoint returned, so every
+// image has to make a second hop through Naver's own upload API after
+// already being mirrored to R2 (R2 stays the durable, content-hash-deduped
+// copy this app controls; the Naver-hosted URL is only good for this one
+// registration payload).
+// The upload endpoint itself caps out at 10 files per call ("업로드대상 이미지
+// 파일은 최대 10개 까지만 등록할 수 있습니다", confirmed live 2026-07-24) -- a raw
+// registration's main + all detail-slice images together routinely exceeds
+// that, so batches of up to MAX_IMAGES_PER_UPLOAD get uploaded sequentially
+// (docs also note the account-wide upload endpoint only accepts one request
+// at a time) and the returned URLs are reassembled back in original order.
+const MAX_IMAGES_PER_UPLOAD = 10;
+
+// The upload endpoint validates the multipart filename's own extension
+// (PhotoInfraUpload.extension: "JPEG, JPG, GIF, PNG, BMP 파일만 업로드가
+// 가능합니다", confirmed live 2026-07-24) independently of the declared
+// Content-Type -- a filename like "image-0.bin" gets rejected even when the
+// bytes and Content-Type are a perfectly valid PNG.
+function extensionForContentType(contentType) {
+  if (contentType.includes('png')) return 'png';
+  if (contentType.includes('gif')) return 'gif';
+  if (contentType.includes('bmp')) return 'bmp';
+  return 'jpg';
+}
+
+// createOriginProduct rejects a free-text origin string outright ("원산지
+// 상세코드 항목이 유효하지 않습니다", confirmed live 2026-07-24) -- it only
+// accepts one of the ~535 codes GET /v1/product-origin-areas returns, keyed
+// by a "수입산:아시아>중국"-style name. This app's own normalized country
+// string (extractSupplierNoticeFields, e.g. "수입산 / 아시아 / 중국") uses
+// different separators, so match token-by-token rather than by exact string.
+export function pickOriginAreaCode(originAreaCodeNames, countryOfOrigin) {
+  if (!Array.isArray(originAreaCodeNames) || !countryOfOrigin) return null;
+  const tokens = String(countryOfOrigin).split(/[\s/_>:]+/).filter(Boolean);
+  if (tokens.length === 0) return null;
+  const match = originAreaCodeNames.find((entry) => entry.name && tokens.every((token) => entry.name.includes(token)));
+  return match ? match.code : null;
+}
+
+export async function uploadImagesToNaver(client, { mainImageUrl, detailImageUrls, fetchImpl = globalThis.fetch }) {
+  const fetchFile = async (url, index) => {
+    const response = await fetchImpl(url);
+    const buffer = Buffer.from(await response.arrayBuffer());
+    const contentType = response.headers?.get?.('content-type') || 'image/jpeg';
+    return { buffer, filename: `image-${index}.${extensionForContentType(contentType)}`, contentType };
+  };
+  const orderedUrls = [mainImageUrl, ...detailImageUrls];
+  const files = await Promise.all(orderedUrls.map((url, index) => fetchFile(url, index)));
+
+  const urls = [];
+  for (let start = 0; start < files.length; start += MAX_IMAGES_PER_UPLOAD) {
+    const batch = files.slice(start, start + MAX_IMAGES_PER_UPLOAD);
+    const result = await client.uploadImages(batch);
+    urls.push(...(result?.images || []).map((image) => image.url));
+  }
+  return { mainImageUrl: urls[0] ?? null, detailImageUrls: urls.slice(1) };
+}
+
+// Naver Commerce API registration -- exercised live against a real
+// credential and a real draft (2026-07-24, draft 46), same as
+// coupang-registration-flow.mjs's own history (e7153b2) had one real fix
+// commit the first time it ran live. This one needed several: images must
+// go through Naver's own upload API rather than being passed as external
+// URLs (uploadImagesToNaver), category search ignores its keyword param
+// entirely (pickBestNaverCategory), and originAreaCode must be one of
+// Naver's own origin-area codes rather than a free-text country string
+// (pickOriginAreaCode).
 //
 // Scope is intentionally narrower than the Coupang flow: only the raw-mode
 // registration the auto-discovery queue needs (register the draft's own
@@ -45,6 +109,7 @@ async function buildNaverRegistrationPreview(db, rootDir, draftId, {
   exportProductDraftImpl = exportProductDraft,
   getDraftRawImagesImpl = getDraftRawImages,
   uploadImpl = uploadApprovedImagesToR2,
+  uploadImagesToNaverImpl = uploadImagesToNaver,
 } = {}) {
   if (draftId === PROTECTED_DRAFT_ID) throw Object.assign(new Error('draft 64는 보호 대상입니다'), { code: 'DRAFT_PROTECTED' });
 
@@ -60,7 +125,7 @@ async function buildNaverRegistrationPreview(db, rootDir, draftId, {
   const supplierProduct = (await db.query('select raw_json from supplier_products where id = $1', [draftRow.supplier_product_id])).rows[0];
   const supplierNoticeFields = extractSupplierNoticeFields(supplierProduct.raw_json);
 
-  const { mainImageUrl, detailImageUrls } = await uploadImpl({
+  const { mainImageUrl: r2MainImageUrl, detailImageUrls: r2DetailImageUrls } = await uploadImpl({
     rootDir,
     draftId,
     mainImageLocalUrl: rawImages.mainImageLocalUrl,
@@ -68,9 +133,17 @@ async function buildNaverRegistrationPreview(db, rootDir, draftId, {
   });
 
   const client = clientImpl || new NaverCommerceClient(naverConfig);
+  const { mainImageUrl, detailImageUrls } = await uploadImagesToNaverImpl(client, {
+    mainImageUrl: r2MainImageUrl,
+    detailImageUrls: r2DetailImageUrls,
+  });
+
   const productName = draft.optimizedTitle || draft.name;
   const categorySearch = await client.searchCategories(productName);
   const categoryId = pickBestNaverCategory(categorySearch, productName);
+
+  const originAreas = await client.getOriginAreas();
+  const originAreaCode = pickOriginAreaCode(originAreas?.originAreaCodeNames, supplierNoticeFields.countryOfOrigin);
 
   const payload = buildNaverOriginProductPayload({
     draft,
@@ -78,6 +151,7 @@ async function buildNaverRegistrationPreview(db, rootDir, draftId, {
     mainImageUrl,
     detailImageUrls,
     supplierNoticeFields,
+    originAreaCode,
     countryOfOrigin: supplierNoticeFields.countryOfOrigin,
     manufacturer: supplierNoticeFields.manufacturer,
     deliveryCharge: draft.deliveryFee || 0,
@@ -88,9 +162,10 @@ async function buildNaverRegistrationPreview(db, rootDir, draftId, {
   const missing = [];
   if (draft.optimizedTitle) ready.push(`상품명: ${draft.optimizedTitle}`); else missing.push('최적화 상품명');
   if (draft.salePrice) ready.push(`판매가: ${draft.salePrice}`); else missing.push('판매가');
-  if (mainImageUrl) ready.push('대표이미지 R2 공개 URL 확보'); else missing.push('대표이미지 R2 업로드');
+  if (mainImageUrl) ready.push('대표이미지 네이버 업로드 완료'); else missing.push('대표이미지 네이버 업로드 실패');
   if (detailImageUrls.length > 0) ready.push(`원본 상세이미지 ${detailImageUrls.length}장 확보`); else missing.push('원본 상세이미지가 없습니다');
   if (categoryId) ready.push(`추천 카테고리: ${categoryId}`); else missing.push('네이버 카테고리 검색 실패 -- 수동 지정 필요');
+  if (originAreaCode) ready.push(`원산지 코드: ${originAreaCode}`); else missing.push('원산지 코드 매칭 실패 -- 수동 지정 필요');
 
   const requestHash = createHash('sha256').update(JSON.stringify(payload)).digest('hex');
   return { draft, payload, readiness: { ready, missing, blocked: missing.length > 0 }, requestHash, mainImageUrl, detailImageUrls };
