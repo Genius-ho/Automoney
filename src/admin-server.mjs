@@ -24,6 +24,8 @@ import { getSellerShippingSettings, saveSellerShippingSettings } from './coupang
 import { NaverCommerceClient } from './naver-commerce-client.mjs';
 import { createNaverDirectRegistration } from './naver-registration-flow.mjs';
 import { createPgPool, runSchema } from './postgres-store.mjs';
+import { listChannelOrders } from './channel-orders-store.mjs';
+import { maskOrderForLog } from './order-collector.mjs';
 import { isAllowedPublicAssetPath } from './public-assets.mjs';
 import { buildMainImagePackage } from './manual-ai/package-builder.mjs';
 import { buildDetailPagePackage } from './manual-ai/detail-package-builder.mjs';
@@ -572,6 +574,18 @@ async function handleRequest({ request, response, db, aiSecrets, rootDir }) {
     return;
   }
 
+  // Phase 7 (section 12.5): "매핑 실패 관리자 표시" -- admin-facing list of
+  // collected channel orders, filterable to the ones order-supplier-mapper.mjs
+  // couldn't resolve. Recipient PII masked per section 21 (never in the DB
+  // itself, only here and in logs -- see order-collector.mjs's maskOrderForLog).
+  if (url.pathname === '/api/channel-orders' && request.method === 'GET') {
+    const channel = url.searchParams.get('channel') || undefined;
+    const supplierMappingStatus = url.searchParams.get('mappingStatus') || undefined;
+    const orders = await listChannelOrders(db, { channel, supplierMappingStatus });
+    sendJson(response, 200, { orders: orders.map(maskOrderForLog) });
+    return;
+  }
+
   if (url.pathname === '/api/auto-batch/queue' && request.method === 'GET') {
     const status = url.searchParams.get('status') || undefined;
     const [queue, activeCount, nextItem] = await Promise.all([
@@ -901,6 +915,7 @@ function adminHtml() {
         <button id="viewRecommendButton" type="button">추천</button>
         <button id="viewRegistrationsButton" type="button">등록·재고관리</button>
         <button id="viewAutoBatchButton" type="button">자동배치</button>
+        <button id="viewChannelOrdersButton" type="button">주문</button>
       </div>
       <div class="toolbar">
         <select id="statusFilter"><option value="">all</option><option value="draft">draft</option><option value="needs_review">needs_review</option><option value="blocked">blocked</option><option value="approved">approved</option></select>
@@ -922,7 +937,7 @@ function adminHtml() {
     const statusFilter=document.getElementById('statusFilter');const naverWinnerFilter=document.getElementById('naverWinnerFilter');const finalDecisionFilter=document.getElementById('finalDecisionFilter');const batchFilter=document.getElementById('batchFilter');const collectedOnly=document.getElementById('collectedOnly');
     document.getElementById('reloadButton').addEventListener('click',loadList);document.getElementById('naverCandidateButton').addEventListener('click',()=>{naverWinnerFilter.value='candidate';loadList();});statusFilter.addEventListener('change',loadList);naverWinnerFilter.addEventListener('change',loadList);finalDecisionFilter.addEventListener('change',loadList);batchFilter.addEventListener('change',loadList);collectedOnly.addEventListener('change',loadList);
     let currentView='all';
-    const viewButtons={all:document.getElementById('viewAllButton'),recommend:document.getElementById('viewRecommendButton'),registrations:document.getElementById('viewRegistrationsButton'),autoBatch:document.getElementById('viewAutoBatchButton')};
+    const viewButtons={all:document.getElementById('viewAllButton'),recommend:document.getElementById('viewRecommendButton'),registrations:document.getElementById('viewRegistrationsButton'),autoBatch:document.getElementById('viewAutoBatchButton'),channelOrders:document.getElementById('viewChannelOrdersButton')};
     for(const [view,button] of Object.entries(viewButtons))button.addEventListener('click',()=>switchView(view));
     function switchView(view){
       currentView=view;
@@ -933,6 +948,7 @@ function adminHtml() {
       else if(view==='recommend')loadRecommendView();
       else if(view==='registrations')loadRegistrationsView();
       else if(view==='autoBatch')loadAutoBatchView();
+      else if(view==='channelOrders')loadChannelOrdersView();
     }
     const QUEUE_STATUS_LABELS={queued:'대기 중',analyzing:'분석 중',generating_images:'이미지 생성 중',awaiting_approval:'승인 대기',ready_for_registration:'등록 준비 완료',failed:'실패'};
     async function loadAutoBatchView(){
@@ -1050,6 +1066,36 @@ function adminHtml() {
       return runs.map(r=>'<div><button type="button" data-auto-batch-run-id="'+r.id+'">#'+r.id+'</button> '
         +escapeHtml(r.status)+' / '+escapeHtml(r.stageReached||'-')+' / '+escapeHtml(r.startedAt||'-')
         +(r.errorMessage?' / <span class="badge reasonBlock">'+escapeHtml(r.errorMessage)+'</span>':'')+'</div>').join('');
+    }
+    const ORDER_MAPPING_STATUS_LABELS={mapping_required:'매핑 필요',mapped:'매핑 완료'};
+    const ORDER_CHANNEL_LABELS={coupang:'쿠팡',naver:'네이버'};
+    let channelOrdersMappingFilter='';
+    async function loadChannelOrdersView(){
+      const el=document.getElementById('specialView');
+      el.innerHTML='<p class="muted" style="padding:12px">불러오는 중...</p>';
+      const query=channelOrdersMappingFilter?('?mappingStatus='+encodeURIComponent(channelOrdersMappingFilter)):'';
+      const data=await api('/api/channel-orders'+query);
+      const orders=data.orders||[];
+      const needsMapping=orders.filter(o=>o.supplierMappingStatus==='mapping_required').length;
+      el.innerHTML='<div style="padding:12px">'
+        +'<div class="section"><h3>쿠팡·네이버 주문 수집 (Phase 7)</h3>'
+        +'<div>표시된 '+orders.length+'건 중 매핑 필요: '+needsMapping+'건</div>'
+        +'<select id="channelOrdersMappingFilter"><option value="">전체</option><option value="mapping_required">매핑 필요</option><option value="mapped">매핑 완료</option></select>'
+        +'<div id="channelOrdersList">'+channelOrdersListHtml(orders)+'</div>'
+        +'</div></div>';
+      const filterEl=document.getElementById('channelOrdersMappingFilter');
+      filterEl.value=channelOrdersMappingFilter;
+      filterEl.addEventListener('change',()=>{channelOrdersMappingFilter=filterEl.value;loadChannelOrdersView();});
+    }
+    function channelOrdersListHtml(orders){
+      if(!orders||!orders.length)return '<p class="muted">수집된 주문이 없습니다.</p>';
+      return '<table><thead><tr><th>채널</th><th>주문번호</th><th>옵션</th><th>수량</th><th>금액</th><th>주문상태</th><th>수령인</th><th>주문시각</th><th>매핑상태</th><th>draft</th></tr></thead><tbody>'
+        +orders.map(o=>'<tr><td>'+escapeHtml(ORDER_CHANNEL_LABELS[o.channel]||o.channel)+'</td><td>'+escapeHtml(o.channelOrderId||'-')+'</td>'
+          +'<td>'+escapeHtml(o.optionInfo||'-')+'</td><td>'+(o.quantity??'-')+'</td><td>'+money(o.salePrice)+'</td>'
+          +'<td>'+escapeHtml(o.orderStatus||'-')+'</td><td>'+escapeHtml(o.recipientName||'-')+'</td><td>'+escapeHtml(o.orderedAt||'-')+'</td>'
+          +'<td>'+(o.supplierMappingStatus==='mapping_required'?'<span class="badge reasonBlock">':'<span class="badge">')+escapeHtml(ORDER_MAPPING_STATUS_LABELS[o.supplierMappingStatus]||o.supplierMappingStatus)+'</span></td>'
+          +'<td>'+(o.productDraftId?'<a href="/admin?draftId='+o.productDraftId+'">#'+o.productDraftId+'</a>':'-')+'</td></tr>').join('')
+        +'</tbody></table>';
     }
     const AUTO_BATCH_STATUS_LABELS={selected:'선정됨',draft_created:'draft 생성됨',analysis_running:'분석 중',analysis_completed:'분석 완료',image_generation_running:'이미지 생성 중',awaiting_image_approval:'이미지 승인 대기',failed:'실패'};
     async function loadAutoBatchRunDetail(runId){

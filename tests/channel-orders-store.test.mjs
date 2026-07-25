@@ -7,6 +7,7 @@ import {
   getOrderCollectionState,
   tryAcquireOrderCollectionLock,
   releaseOrderCollectionLock,
+  updateChannelOrderMapping,
 } from '../src/channel-orders-store.mjs';
 
 function fakeRow(overrides = {}) {
@@ -15,7 +16,7 @@ function fakeRow(overrides = {}) {
     channel_product_id: '3242596358', option_info: '블랙', quantity: '1', sale_price: '19900', order_status: 'ACCEPT',
     recipient_name: '홍길동', address: '서울시 강남구', postal_code: '06000', phone: '010-1234-5678',
     delivery_memo: null, ordered_at: '2026-07-25T00:00:00Z', cancelled_at: null,
-    supplier_mapping_status: 'mapping_required', supplier_product_id: null,
+    supplier_mapping_status: 'mapping_required', supplier_product_id: null, product_draft_id: null,
     created_at: '2026-07-25T00:00:00Z', updated_at: '2026-07-25T00:00:00Z', is_new: true,
     ...overrides,
   };
@@ -49,6 +50,23 @@ test('listChannelOrders filters by channel and supplierMappingStatus when provid
   assert.match(captured.sql, /channel = \$1/);
   assert.match(captured.sql, /supplier_mapping_status = \$2/);
   assert.deepEqual(captured.params, ['coupang', 'mapping_required']);
+});
+
+test('updateChannelOrderMapping updates status, productDraftId, and supplierProductId by order id', async () => {
+  let captured;
+  const db = {
+    async query(sql, params) {
+      captured = { sql, params };
+      return { rows: [fakeRow({ supplier_mapping_status: 'mapped', supplier_product_id: '900', product_draft_id: '46' })] };
+    },
+  };
+  const result = await updateChannelOrderMapping(db, 1, { supplierMappingStatus: 'mapped', productDraftId: 46, supplierProductId: 900 });
+  assert.match(captured.sql, /update channel_orders set/);
+  assert.match(captured.sql, /where id = \$1/);
+  assert.deepEqual(captured.params, [1, 'mapped', 46, 900]);
+  assert.equal(result.supplierMappingStatus, 'mapped');
+  assert.equal(result.productDraftId, 46);
+  assert.equal(result.supplierProductId, 900);
 });
 
 test('getOrderCollectionState returns null for an unknown channel', async () => {

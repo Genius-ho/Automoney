@@ -3,6 +3,7 @@ import {
   tryAcquireOrderCollectionLock,
   releaseOrderCollectionLock,
 } from './channel-orders-store.mjs';
+import { mapChannelOrder } from './order-supplier-mapper.mjs';
 
 // automoney_complete_automation_implementation_plan.md section 12 (Phase 7):
 // 쿠팡·네이버 주문 자동 수집. Read-only against each channel's order API,
@@ -83,6 +84,7 @@ export function normalizeNaverOrder(productOrder) {
 // shipment sync, not this collection step.
 export async function collectCoupangOrders(client, { createdAtFrom, createdAtTo, status = 'ACCEPT' }, {
   recordChannelOrderImpl = recordChannelOrder,
+  mapChannelOrderImpl = mapChannelOrder,
   db,
 } = {}) {
   const saved = [];
@@ -91,7 +93,9 @@ export async function collectCoupangOrders(client, { createdAtFrom, createdAtTo,
     const response = await client.listOrderSheets({ createdAtFrom, createdAtTo, status, nextToken });
     for (const orderSheet of response.data || []) {
       for (const normalized of normalizeCoupangOrder(orderSheet)) {
-        saved.push(await recordChannelOrderImpl(db, normalized));
+        const recorded = await recordChannelOrderImpl(db, normalized);
+        const mapped = await mapChannelOrderImpl(db, recorded, { coupangClientImpl: client });
+        saved.push({ ...mapped, isNew: recorded.isNew });
       }
     }
     nextToken = response.nextToken || undefined;
@@ -101,6 +105,7 @@ export async function collectCoupangOrders(client, { createdAtFrom, createdAtTo,
 
 export async function collectNaverOrders(client, { lastChangedFrom, lastChangedType = 'PAYED' }, {
   recordChannelOrderImpl = recordChannelOrder,
+  mapChannelOrderImpl = mapChannelOrder,
   db,
 } = {}) {
   const changed = await client.listChangedProductOrderIds({ lastChangedFrom, lastChangedType });
@@ -113,7 +118,9 @@ export async function collectNaverOrders(client, { lastChangedFrom, lastChangedT
   const orders = detail.data || detail.productOrders || [];
   const saved = [];
   for (const productOrder of orders) {
-    saved.push(await recordChannelOrderImpl(db, normalizeNaverOrder(productOrder)));
+    const recorded = await recordChannelOrderImpl(db, normalizeNaverOrder(productOrder));
+    const mapped = await mapChannelOrderImpl(db, recorded);
+    saved.push({ ...mapped, isNew: recorded.isNew });
   }
   return saved;
 }

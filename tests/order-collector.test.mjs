@@ -105,10 +105,24 @@ test('collectCoupangOrders pages through nextToken and records one row per flatt
   const results = await collectCoupangOrders(client, { createdAtFrom: 'a', createdAtTo: 'b' }, {
     db: {},
     recordChannelOrderImpl: async (db, order) => { recorded.push(order); return { ...order, isNew: true }; },
+    mapChannelOrderImpl: async (db, order) => order,
   });
   assert.equal(results.length, 2);
   assert.equal(recorded[0].channelOrderItemId, '64253897:3242596358');
   assert.equal(recorded[1].channelOrderId, '111');
+});
+
+test('collectCoupangOrders passes the collection client through to the mapper as coupangClientImpl', async () => {
+  const client = { async listOrderSheets() { return { data: [fakeOrderSheet()] }; } };
+  let mapperArgs;
+  const results = await collectCoupangOrders(client, { createdAtFrom: 'a', createdAtTo: 'b' }, {
+    db: {},
+    recordChannelOrderImpl: async (db, order) => ({ ...order, id: 1, isNew: true }),
+    mapChannelOrderImpl: async (db, order, options) => { mapperArgs = options; return { ...order, supplierMappingStatus: 'mapped' }; },
+  });
+  assert.equal(mapperArgs.coupangClientImpl, client);
+  assert.equal(results[0].supplierMappingStatus, 'mapped');
+  assert.equal(results[0].isNew, true);
 });
 
 test('collectNaverOrders is a no-op (no queryProductOrders call) when last-changed-statuses reports nothing', async () => {
@@ -134,6 +148,7 @@ test('collectNaverOrders fetches full details for every changed productOrderId a
   const results = await collectNaverOrders(client, { lastChangedFrom: 'a' }, {
     db: {},
     recordChannelOrderImpl: async (db, order) => { recorded.push(order); return { ...order, isNew: true }; },
+    mapChannelOrderImpl: async (db, order) => order,
   });
   assert.equal(results.length, 2);
   assert.equal(recorded[0].channelOrderItemId, 'A');

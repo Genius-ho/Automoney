@@ -741,6 +741,12 @@ create table if not exists channel_orders (
 create index if not exists idx_channel_orders_mapping_status on channel_orders(supplier_mapping_status);
 create index if not exists idx_channel_orders_ordered_at on channel_orders(ordered_at desc);
 
+-- 12.4 상품 매핑: breadcrumb back to the draft the mapper resolved, so
+-- Phase 8's multiplier lookup (product_drafts.bundle_quantity) and the
+-- admin UI can both join off one id instead of re-deriving it from
+-- channel_product_id every time.
+alter table channel_orders add column if not exists product_draft_id bigint references product_drafts(id);
+
 -- 마지막 성공 조회시각 저장 (12.1: "동시 실행 금지", "마지막 성공 조회시각 저장").
 -- Single row, mirrors batch_schedule_state's shape for the same reason: one
 -- authoritative "when did this last actually run" value per channel.

@@ -18,6 +18,7 @@ function toChannelOrder(row) {
     cancelledAt: row.cancelled_at,
     supplierMappingStatus: row.supplier_mapping_status,
     supplierProductId: row.supplier_product_id == null ? null : Number(row.supplier_product_id),
+    productDraftId: row.product_draft_id == null ? null : Number(row.product_draft_id),
     createdAt: row.created_at,
     updatedAt: row.updated_at,
   };
@@ -54,6 +55,24 @@ export async function recordChannelOrder(db, order) {
   );
   const row = result.rows[0];
   return { ...toChannelOrder(row), isNew: row.is_new };
+}
+
+// Written by src/order-supplier-mapper.mjs once it resolves (or fails to
+// resolve) channel_product_id against a registered draft -- separate from
+// recordChannelOrder's upsert since mapping happens after collection, on
+// whatever subset of rows are still 'mapping_required', not on every poll.
+export async function updateChannelOrderMapping(db, orderId, { supplierMappingStatus, productDraftId = null, supplierProductId = null }) {
+  const result = await db.query(
+    `update channel_orders set
+       supplier_mapping_status = $2,
+       product_draft_id = $3,
+       supplier_product_id = $4,
+       updated_at = now()
+     where id = $1
+     returning *`,
+    [orderId, supplierMappingStatus, productDraftId, supplierProductId],
+  );
+  return result.rows[0] ? toChannelOrder(result.rows[0]) : null;
 }
 
 export async function listChannelOrders(db, { channel, supplierMappingStatus } = {}) {
