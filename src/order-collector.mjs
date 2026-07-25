@@ -133,7 +133,7 @@ export async function collectNaverOrders(client, { lastChangedFrom, lastChangedT
 const OVERLAP_MINUTES = 5;
 const DEFAULT_LOOKBACK_MINUTES = 30;
 
-function toCoupangTimestamp(date) {
+export function toCoupangTimestamp(date) {
   // Coupang's documented format is minute-precision with an explicit +09:00
   // offset (e.g. "2025-07-29T00:00+09:00") -- this app always runs KST-
   // adjacent to Korean marketplaces, so +09:00 is hardcoded rather than

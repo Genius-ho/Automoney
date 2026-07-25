@@ -187,6 +187,21 @@ export class CoupangClient {
       operation: 'resume_sale',
     });
   }
+
+  // "반품/취소 요청 목록 조회" (automoney_complete_automation_implementation_plan.md
+  // 15.1/15.3) -- confirmed spec, 2026-07-26 (developers.coupang.com).
+  // cancelType defaults to "RETURN" server-side if omitted -- there is no
+  // single call that returns both RETURN and CANCEL records, so
+  // return-request-collector.mjs calls this twice per sweep. nextToken is
+  // documented as unsupported together with searchType=timeFrame (unlike
+  // listOrderSheets, which does page through timeFrame results) -- no
+  // pagination loop here, one call per collection window.
+  async listReturnRequests({ createdAtFrom, createdAtTo, status, cancelType, searchType = 'timeFrame' } = {}) {
+    return this.request('GET', `/v2/providers/openapi/apis/api/v6/vendors/${this.vendorId}/returnRequests`, {
+      query: { searchType, createdAtFrom, createdAtTo, status, cancelType },
+      operation: 'list_return_requests',
+    });
+  }
 }
 
 // Coupang Wing Open API custom HMAC scheme: the signed message is the

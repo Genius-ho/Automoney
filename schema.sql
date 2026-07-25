@@ -766,6 +766,11 @@ create table if not exists order_collection_state (
 );
 insert into order_collection_state (channel) values ('coupang'), ('naver') on conflict (channel) do nothing;
 
+-- Phase 10 (section 15.1/15.3): 'coupang_returns' reuses this same table for
+-- return-request-collector.mjs's lock/overlap bookkeeping -- distinct
+-- channel key, identical concurrency semantics, no reason for a second table.
+insert into order_collection_state (channel) values ('coupang_returns') on conflict (channel) do nothing;
+
 -- Phase 8 (section 13.1/13.3.1): caches the sId a 도매매 setLogin call returns
 -- so every Private API call doesn't have to log in fresh -- sId is valid for
 -- up to ~24h (or 30d with loginKeep=on) per the docs. Single row: this app

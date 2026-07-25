@@ -204,3 +204,19 @@ test('CoupangClient.suspendSale/resumeSale PUT the vendor-items sales stop/resum
   await client.resumeSale(3242596358);
   assert.match(captured.url, /\/sales\/resume$/);
 });
+
+test('CoupangClient.listReturnRequests queries the v6 returnRequests endpoint with searchType/createdAtFrom/createdAtTo/cancelType', async () => {
+  let captured;
+  const fetchImpl = async (url, init) => {
+    captured = { url: String(url), method: init.method };
+    return { ok: true, status: 200, async text() { return JSON.stringify({ code: 200, data: [], nextToken: null }); } };
+  };
+  const client = new CoupangClient({ accessKey: 'ak', secretKey: 'sk', vendorId: 'A00000000', fetchImpl });
+
+  await client.listReturnRequests({ createdAtFrom: '2026-07-25T00:00', createdAtTo: '2026-07-25T23:59', cancelType: 'CANCEL' });
+
+  assert.equal(captured.method, 'GET');
+  assert.match(captured.url, /\/v2\/providers\/openapi\/apis\/api\/v6\/vendors\/A00000000\/returnRequests\?/);
+  assert.match(captured.url, /searchType=timeFrame/);
+  assert.match(captured.url, /cancelType=CANCEL/);
+});
