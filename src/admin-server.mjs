@@ -1172,13 +1172,16 @@ function adminHtml() {
         });
       }
     }
+    const CHANNEL_SHIP_STATUS_LABELS={not_shipped:'미발송',sent:'발송완료',mapping_failed:'택배사 매핑 실패',failed:'발송 실패',cancelled_skip:'취소로 건너뜀',unsupported_channel:'미지원 채널'};
     function purchaseOrdersListHtml(orders){
       if(!orders||!orders.length)return '<p class="muted">발주안이 없습니다.</p>';
-      return '<table><thead><tr><th>채널</th><th>공급처 상품번호</th><th>시장</th><th>옵션코드</th><th>판매수량</th><th>발주수량</th><th>판매금액</th><th>공급가</th><th>예상순이익</th><th>상태</th><th>차단사유</th><th>액션</th></tr></thead><tbody>'
+      return '<table><thead><tr><th>채널</th><th>공급처 상품번호</th><th>시장</th><th>옵션코드</th><th>판매수량</th><th>발주수량</th><th>판매금액</th><th>공급가</th><th>예상순이익</th><th>상태</th><th>차단사유</th><th>택배사</th><th>송장번호</th><th>채널발송</th><th>액션</th></tr></thead><tbody>'
         +orders.map(o=>'<tr><td>'+escapeHtml(o.channel||'-')+'</td><td>'+escapeHtml(o.supplierProductNo||'-')+'</td><td>'+escapeHtml(o.supplierMarket||'-')+'</td><td>'+escapeHtml(o.supplierOptionCode||'-')+'</td>'
           +'<td>'+(o.saleQty??'-')+'</td><td>'+(o.supplierOrderQty??'-')+'</td><td>'+money(o.salePrice)+'</td><td>'+money(o.supplierUnitPrice)+'</td><td>'+money(o.estimatedProfit)+'</td>'
           +'<td>'+(o.status==='awaiting_purchase_approval'?'<span class="badge">':'<span class="badge reasonBlock">')+escapeHtml(SUPPLIER_ORDER_STATUS_LABELS[o.status]||o.status)+'</span></td>'
           +'<td>'+(o.blockReasons&&o.blockReasons.length?o.blockReasons.map(r=>escapeHtml(BLOCK_REASON_LABELS[r]||r)).join(', '):'-')+'</td>'
+          +'<td>'+escapeHtml(o.carrierName||'-')+'</td><td>'+escapeHtml(o.trackingNumber||'-')+'</td>'
+          +'<td>'+(o.channelShipStatus==='sent'?'<span class="badge">':(o.channelShipStatus&&o.channelShipStatus!=='not_shipped'?'<span class="badge reasonBlock">':'<span class="badge">'))+escapeHtml(CHANNEL_SHIP_STATUS_LABELS[o.channelShipStatus]||o.channelShipStatus||'-')+'</span>'+(o.channelShipError?'<br><span class="muted">'+escapeHtml(o.channelShipError)+'</span>':'')+'</td>'
           +'<td>'+(o.status==='awaiting_purchase_approval'?'<button type="button" data-purchase-order-approve-id="'+o.id+'">발주 승인</button>':'-')+'</td></tr>').join('')
         +'</tbody></table>';
     }

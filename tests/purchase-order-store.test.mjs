@@ -11,6 +11,10 @@ import {
   recordSupplierOrderSuccess,
   recordSupplierOrderFailure,
   getDraftOrderingContext,
+  listOrderedWithoutTracking,
+  recordSupplierShipment,
+  recordChannelShipmentResult,
+  listShippedNotDispatched,
 } from '../src/purchase-order-store.mjs';
 
 function fakeRow(overrides = {}) {
@@ -120,4 +124,36 @@ test('getDraftOrderingContext joins product_drafts to supplier_products and maps
 test('getDraftOrderingContext returns null when the draft does not exist', async () => {
   const db = { async query() { return { rows: [] }; } };
   assert.equal(await getDraftOrderingContext(db, 999), null);
+});
+
+test('listOrderedWithoutTracking only selects supplier_ordered rows with no tracking_number yet', async () => {
+  let captured;
+  const db = { async query(sql) { captured = sql; return { rows: [fakeRow({ status: 'supplier_ordered' })] }; } };
+  const rows = await listOrderedWithoutTracking(db);
+  assert.match(captured, /status = 'supplier_ordered' and tracking_number is null/);
+  assert.equal(rows[0].status, 'supplier_ordered');
+});
+
+test('recordSupplierShipment stores carrier/tracking info', async () => {
+  let captured;
+  const db = { async query(sql, params) { captured = { sql, params }; return { rows: [fakeRow({ carrier_code: 'HYUNDAI', carrier_name: '롯데택배', tracking_number: '255593464954' })] }; } };
+  const result = await recordSupplierShipment(db, 1, { carrierCode: 'HYUNDAI', carrierName: '롯데택배', trackingNumber: '255593464954' });
+  assert.deepEqual(captured.params, [1, 'HYUNDAI', '롯데택배', '255593464954', null]);
+  assert.equal(result.carrierName, '롯데택배');
+});
+
+test('listShippedNotDispatched selects shipments with tracking that have not been sent to a channel yet', async () => {
+  let captured;
+  const db = { async query(sql) { captured = sql; return { rows: [fakeRow({ tracking_number: '255593464954', channel_ship_status: 'mapping_failed' })] }; } };
+  const rows = await listShippedNotDispatched(db);
+  assert.match(captured, /tracking_number is not null and channel_ship_status <> 'sent'/);
+  assert.equal(rows[0].channelShipStatus, 'mapping_failed');
+});
+
+test('recordChannelShipmentResult only sets channel_shipped_at when the status is "sent"', async () => {
+  let captured;
+  const db = { async query(sql, params) { captured = { sql, params }; return { rows: [fakeRow({ channel_ship_status: 'mapping_failed' })] }; } };
+  await recordChannelShipmentResult(db, 1, { channelShipStatus: 'mapping_failed', channelShipError: 'unmapped carrier CUSTOM_CODE' });
+  assert.match(captured.sql, /channel_shipped_at = case when \$3 = 'sent' then now\(\) else channel_shipped_at end/);
+  assert.deepEqual(captured.params, [1, null, 'mapping_failed', 'unmapped carrier CUSTOM_CODE']);
 });

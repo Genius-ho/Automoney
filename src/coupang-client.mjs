@@ -147,6 +147,31 @@ export class CoupangClient {
       operation: 'list_order_sheets',
     });
   }
+
+  // "송장업로드 처리" (automoney_complete_automation_implementation_plan.md
+  // 14.4) -- confirmed spec, 2026-07-26 (developers.coupang.com): moves a
+  // shipmentBoxId from 상품준비중 to 배송지시. orderSheetInvoiceApplyDtos is an
+  // array so several shipmentBoxIds could be uploaded in one call, but this
+  // app always does one order at a time, matching every other per-row
+  // processing step (order-collector, purchase-order-builder, ...).
+  async uploadInvoice({ shipmentBoxId, orderId, vendorItemId, deliveryCompanyCode, invoiceNumber, splitShipping = false, preSplitShipped = false, estimatedShippingDate } = {}) {
+    return this.request('POST', `/v2/providers/openapi/apis/api/v4/vendors/${this.vendorId}/orders/invoices`, {
+      body: {
+        vendorId: this.vendorId,
+        orderSheetInvoiceApplyDtos: [{
+          shipmentBoxId,
+          orderId,
+          vendorItemId,
+          deliveryCompanyCode,
+          invoiceNumber,
+          splitShipping,
+          preSplitShipped,
+          ...(estimatedShippingDate ? { estimatedShippingDate } : {}),
+        }],
+      },
+      operation: 'upload_invoice',
+    });
+  }
 }
 
 // Coupang Wing Open API custom HMAC scheme: the signed message is the

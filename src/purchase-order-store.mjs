@@ -20,6 +20,14 @@ function toSupplierOrder(row) {
     approvedAt: row.approved_at,
     orderedAt: row.ordered_at,
     failureMessage: row.failure_message,
+    carrierCode: row.carrier_code,
+    carrierName: row.carrier_name,
+    trackingNumber: row.tracking_number,
+    shippedAt: row.shipped_at,
+    channelCarrierCode: row.channel_carrier_code,
+    channelShipStatus: row.channel_ship_status,
+    channelShipError: row.channel_ship_error,
+    channelShippedAt: row.channel_shipped_at,
     createdAt: row.created_at,
     updatedAt: row.updated_at,
   };
@@ -193,4 +201,51 @@ export async function getDraftOrderingContext(db, productDraftId) {
       additionalPrice: row.additional_price == null ? null : Number(row.additional_price),
     })),
   };
+}
+
+// 14.2 송장 수집: every placed order with no tracking number collected yet.
+// Not filtered by channel_ship_status -- a shipment can be found (carrier
+// known) before it's ever been dispatched to a channel.
+export async function listOrderedWithoutTracking(db) {
+  const result = await db.query(
+    `select * from supplier_orders where status = 'supplier_ordered' and tracking_number is null order by ordered_at asc`,
+  );
+  return result.rows.map(toSupplierOrder);
+}
+
+// 14.4 채널 발송 처리: every shipment with a tracking number that hasn't
+// been successfully sent to its channel yet. Includes rows previously
+// blocked (mapping_failed/failed) so a fixed carrier-code map or a retried
+// API call can pick them back up on the next sweep -- only 'sent' is a
+// dead end.
+export async function listShippedNotDispatched(db) {
+  const result = await db.query(
+    `select * from supplier_orders where tracking_number is not null and channel_ship_status <> 'sent' order by shipped_at asc`,
+  );
+  return result.rows.map(toSupplierOrder);
+}
+
+export async function recordSupplierShipment(db, id, { carrierCode, carrierName, trackingNumber, shippedAt = null }) {
+  const result = await db.query(
+    `update supplier_orders set
+       carrier_code = $2, carrier_name = $3, tracking_number = $4, shipped_at = $5, updated_at = now()
+     where id = $1 returning *`,
+    [id, carrierCode ?? null, carrierName ?? null, trackingNumber ?? null, shippedAt],
+  );
+  return result.rows[0] ? toSupplierOrder(result.rows[0]) : null;
+}
+
+// 14.3/14.4: channelCarrierCode is null when 14.3's mapping failed --
+// channelShipStatus stays 'mapping_failed' in that case (never 'sent'),
+// which is what "매핑 실패 시 자동 발송처리 금지" means at the data level.
+export async function recordChannelShipmentResult(db, id, { channelCarrierCode = null, channelShipStatus, channelShipError = null }) {
+  const result = await db.query(
+    `update supplier_orders set
+       channel_carrier_code = $2, channel_ship_status = $3, channel_ship_error = $4,
+       channel_shipped_at = case when $3 = 'sent' then now() else channel_shipped_at end,
+       updated_at = now()
+     where id = $1 returning *`,
+    [id, channelCarrierCode, channelShipStatus, channelShipError],
+  );
+  return result.rows[0] ? toSupplierOrder(result.rows[0]) : null;
 }

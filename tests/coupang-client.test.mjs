@@ -164,3 +164,26 @@ test('CoupangClient surfaces a non-OK response as CoupangApiError without leakin
     },
   );
 });
+
+test('CoupangClient.uploadInvoice POSTs a single-entry orderSheetInvoiceApplyDtos to the v4 invoices endpoint', async () => {
+  let captured;
+  const fetchImpl = async (url, init) => {
+    captured = { url: String(url), method: init.method, body: JSON.parse(init.body) };
+    return { ok: true, status: 200, async text() { return JSON.stringify({ code: 200, data: { responseCode: 200, responseList: [{ shipmentBoxId: 64253897, succeed: true }] } }); } };
+  };
+  const client = new CoupangClient({ accessKey: 'ak', secretKey: 'sk', vendorId: 'A00000000', fetchImpl });
+
+  const result = await client.uploadInvoice({
+    shipmentBoxId: 64253897, orderId: 22000009546234, vendorItemId: 3242596358,
+    deliveryCompanyCode: 'HYUNDAI', invoiceNumber: '255593464954',
+  });
+
+  assert.equal(captured.method, 'POST');
+  assert.match(captured.url, /\/v2\/providers\/openapi\/apis\/api\/v4\/vendors\/A00000000\/orders\/invoices$/);
+  assert.equal(captured.body.vendorId, 'A00000000');
+  assert.deepEqual(captured.body.orderSheetInvoiceApplyDtos, [{
+    shipmentBoxId: 64253897, orderId: 22000009546234, vendorItemId: 3242596358,
+    deliveryCompanyCode: 'HYUNDAI', invoiceNumber: '255593464954', splitShipping: false, preSplitShipped: false,
+  }]);
+  assert.equal(result.data.responseList[0].succeed, true);
+});
