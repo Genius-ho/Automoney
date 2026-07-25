@@ -60,15 +60,30 @@ test('buildSupplierOrderDraft is a no-op that returns the existing row when a su
   assert.equal(result, existing);
 });
 
-test('buildSupplierOrderDraft blocks ORDER_CANCELLED and ADDRESS_INCOMPLETE without needing a live supplier fetch', async () => {
+// 15.1 (Phase 10) "도매매 미발주 → 발주 차단 → 주문 종료": a cancelled order
+// never placed with the supplier goes straight to terminal 'cancelled',
+// short-circuiting every other check (address, option match, live fetch).
+test('buildSupplierOrderDraft short-circuits to terminal status=cancelled for a cancelled channel order, without any live supplier fetch', async () => {
   let upserted;
   await buildSupplierOrderDraft({}, {}, fakeChannelOrder({ cancelledAt: '2026-07-25T00:00:00Z', address: null }), {
     getSupplierOrderByChannelOrderIdImpl: async () => null,
-    getDraftOrderingContextImpl: async () => fakeContext(),
-    fetchProductDetailImpl: async () => { throw new Error('should not fetch live for a cancelled/bad-address order path -- still fetches, but result should be blocked regardless'); },
+    getDraftOrderingContextImpl: async () => { throw new Error('should not even look up ordering context for a cancelled order'); },
+    fetchProductDetailImpl: async () => { throw new Error('should not fetch live for a cancelled order'); },
     upsertSupplierOrderDraftImpl: async (db, args) => { upserted = args; return { ...args }; },
   });
-  assert.ok(upserted.blockReasons.includes('ORDER_CANCELLED'));
+  assert.deepEqual(upserted.blockReasons, ['ORDER_CANCELLED']);
+  assert.equal(upserted.status, 'cancelled');
+});
+
+test('buildSupplierOrderDraft blocks ADDRESS_INCOMPLETE for a still-active order with a missing address', async () => {
+  let upserted;
+  await buildSupplierOrderDraft({}, {}, fakeChannelOrder({ address: null }), {
+    getSupplierOrderByChannelOrderIdImpl: async () => null,
+    getDraftOrderingContextImpl: async () => fakeContext(),
+    fetchProductDetailImpl: async () => ({ domeggook: { basis: { status: '판매중' } } }),
+    normalizeProductImpl: () => ({ isSoldOut: false, minOrderQty: 1, priceParseStatus: 'ok', unitCostPrice: 9800, shippingParseStatus: 'ok', shippingFee: 3000, rawPriceFieldName: 'price.supply', options: [{ optionCode: '01', stockQuantity: 12 }] }),
+    upsertSupplierOrderDraftImpl: async (db, args) => { upserted = args; return { ...args }; },
+  });
   assert.ok(upserted.blockReasons.includes('ADDRESS_INCOMPLETE'));
   assert.equal(upserted.status, 'validating_supplier');
 });

@@ -10,6 +10,7 @@ import {
   markSupplierOrdering,
   recordSupplierOrderSuccess,
   recordSupplierOrderFailure,
+  recordSupplierOrderCancellation,
   getDraftOrderingContext,
   listOrderedWithoutTracking,
   recordSupplierShipment,
@@ -49,6 +50,15 @@ test('listSupplierOrders filters by status when provided', async () => {
   await listSupplierOrders(db, { status: 'validating_supplier' });
   assert.match(captured.sql, /where status = \$1/);
   assert.deepEqual(captured.params, ['validating_supplier']);
+});
+
+test('recordSupplierOrderCancellation sets a terminal status=cancelled, distinct from recordSupplierOrderFailure', async () => {
+  let captured;
+  const db = { async query(sql, params) { captured = { sql, params }; return { rows: [fakeRow({ status: 'cancelled', failure_message: '채널 취소' })] }; } };
+  const result = await recordSupplierOrderCancellation(db, 1, { note: '채널 취소' });
+  assert.match(captured.sql, /status = 'cancelled'/);
+  assert.deepEqual(captured.params, [1, '채널 취소']);
+  assert.equal(result.status, 'cancelled');
 });
 
 test('listSupplierOrdersForAdmin joins channel_orders and supplier_products for the 13.4 발주안 screen', async () => {

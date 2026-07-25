@@ -30,6 +30,8 @@ import { DomemePrivateApiError, DomemePrivateClient } from './domeme-private-cli
 import { getValidDomemeSId } from './domeme-private-session.mjs';
 import { listSupplierOrdersForAdmin } from './purchase-order-store.mjs';
 import { approveSupplierOrder } from './purchase-order-approval.mjs';
+import { listOrderExceptionsForAdmin, resolveOrderException } from './order-exception-store.mjs';
+import { attemptSupplierCancellation } from './cancellation-handler.mjs';
 import { isAllowedPublicAssetPath } from './public-assets.mjs';
 import { buildMainImagePackage } from './manual-ai/package-builder.mjs';
 import { buildDetailPagePackage } from './manual-ai/detail-package-builder.mjs';
@@ -652,6 +654,49 @@ async function handleRequest({ request, response, db, aiSecrets, rootDir }) {
     return;
   }
 
+  // Phase 10 (section 15) 관리자 예외 큐 -- 취소/반품/교환, none of which this
+  // route ever processes automatically. GET lists it; the two POST actions
+  // below are the only ways an exception's status changes.
+  if (url.pathname === '/api/order-exceptions' && request.method === 'GET') {
+    const status = url.searchParams.get('status') || 'open';
+    const exceptionType = url.searchParams.get('exceptionType') || undefined;
+    const exceptions = await listOrderExceptionsForAdmin(db, { status, exceptionType });
+    sendJson(response, 200, { exceptions: exceptions.map(maskOrderForLog) });
+    return;
+  }
+
+  // 15.1 "공급처 취소 가능 여부 관리자 확인" -- the one automatic action Phase 10
+  // performs, and only for CANCEL_NOT_SHIPPED, only from this explicit click.
+  const exceptionCancelMatch = url.pathname.match(/^\/api\/order-exceptions\/(\d+)\/attempt-supplier-cancel$/);
+  if (exceptionCancelMatch && request.method === 'POST') {
+    const exceptionId = Number(exceptionCancelMatch[1]);
+    try {
+      const config = await loadDomemePrivateConfig(rootDir);
+      const client = new DomemePrivateClient(config);
+      const sId = await getValidDomemeSId(db, client);
+      const result = await attemptSupplierCancellation(db, client, exceptionId, { sId });
+      sendJson(response, 200, { result });
+    } catch (error) {
+      if (error instanceof DomemePrivateApiError) { sendJson(response, 502, { error: error.message, dcode: error.dcode, dmessage: error.dmessage }); return; }
+      const statuses = { NOT_FOUND: 404, NOT_OPEN: 409, WRONG_EXCEPTION_TYPE: 409, NO_ORDER_NUMBER: 409 };
+      sendJson(response, statuses[error.code] || 500, { error: error.message, code: error.code });
+    }
+    return;
+  }
+
+  // Manual close-out for exceptions this app never automates (반품/교환,
+  // CANCEL_ALREADY_SHIPPED) -- the admin handled it outside this app (도매매
+  // 사이트, 고객센터 등) and is just marking it done here.
+  const exceptionResolveMatch = url.pathname.match(/^\/api\/order-exceptions\/(\d+)\/resolve$/);
+  if (exceptionResolveMatch && request.method === 'POST') {
+    const exceptionId = Number(exceptionResolveMatch[1]);
+    const body = await readJson(request);
+    const result = await resolveOrderException(db, exceptionId, { resolutionNote: body.resolutionNote || null });
+    if (!result) { sendJson(response, 404, { error: 'Order exception not found' }); return; }
+    sendJson(response, 200, { result });
+    return;
+  }
+
   if (url.pathname === '/api/auto-batch/queue' && request.method === 'GET') {
     const status = url.searchParams.get('status') || undefined;
     const [queue, activeCount, nextItem] = await Promise.all([
@@ -984,6 +1029,7 @@ function adminHtml() {
         <button id="viewChannelOrdersButton" type="button">주문</button>
         <button id="viewDomemePrecheckButton" type="button">발주(도매매)</button>
         <button id="viewPurchaseOrdersButton" type="button">발주안</button>
+        <button id="viewOrderExceptionsButton" type="button">예외 큐</button>
       </div>
       <div class="toolbar">
         <select id="statusFilter"><option value="">all</option><option value="draft">draft</option><option value="needs_review">needs_review</option><option value="blocked">blocked</option><option value="approved">approved</option></select>
@@ -1005,7 +1051,7 @@ function adminHtml() {
     const statusFilter=document.getElementById('statusFilter');const naverWinnerFilter=document.getElementById('naverWinnerFilter');const finalDecisionFilter=document.getElementById('finalDecisionFilter');const batchFilter=document.getElementById('batchFilter');const collectedOnly=document.getElementById('collectedOnly');
     document.getElementById('reloadButton').addEventListener('click',loadList);document.getElementById('naverCandidateButton').addEventListener('click',()=>{naverWinnerFilter.value='candidate';loadList();});statusFilter.addEventListener('change',loadList);naverWinnerFilter.addEventListener('change',loadList);finalDecisionFilter.addEventListener('change',loadList);batchFilter.addEventListener('change',loadList);collectedOnly.addEventListener('change',loadList);
     let currentView='all';
-    const viewButtons={all:document.getElementById('viewAllButton'),recommend:document.getElementById('viewRecommendButton'),registrations:document.getElementById('viewRegistrationsButton'),autoBatch:document.getElementById('viewAutoBatchButton'),channelOrders:document.getElementById('viewChannelOrdersButton'),domemePrecheck:document.getElementById('viewDomemePrecheckButton'),purchaseOrders:document.getElementById('viewPurchaseOrdersButton')};
+    const viewButtons={all:document.getElementById('viewAllButton'),recommend:document.getElementById('viewRecommendButton'),registrations:document.getElementById('viewRegistrationsButton'),autoBatch:document.getElementById('viewAutoBatchButton'),channelOrders:document.getElementById('viewChannelOrdersButton'),domemePrecheck:document.getElementById('viewDomemePrecheckButton'),purchaseOrders:document.getElementById('viewPurchaseOrdersButton'),orderExceptions:document.getElementById('viewOrderExceptionsButton')};
     for(const [view,button] of Object.entries(viewButtons))button.addEventListener('click',()=>switchView(view));
     function switchView(view){
       currentView=view;
@@ -1019,6 +1065,7 @@ function adminHtml() {
       else if(view==='channelOrders')loadChannelOrdersView();
       else if(view==='domemePrecheck')loadDomemePrecheckView();
       else if(view==='purchaseOrders')loadPurchaseOrdersView();
+      else if(view==='orderExceptions')loadOrderExceptionsView();
     }
     const QUEUE_STATUS_LABELS={queued:'대기 중',analyzing:'분석 중',generating_images:'이미지 생성 중',awaiting_approval:'승인 대기',ready_for_registration:'등록 준비 완료',failed:'실패'};
     async function loadAutoBatchView(){
@@ -1183,6 +1230,60 @@ function adminHtml() {
           +'<td>'+escapeHtml(o.carrierName||'-')+'</td><td>'+escapeHtml(o.trackingNumber||'-')+'</td>'
           +'<td>'+(o.channelShipStatus==='sent'?'<span class="badge">':(o.channelShipStatus&&o.channelShipStatus!=='not_shipped'?'<span class="badge reasonBlock">':'<span class="badge">'))+escapeHtml(CHANNEL_SHIP_STATUS_LABELS[o.channelShipStatus]||o.channelShipStatus||'-')+'</span>'+(o.channelShipError?'<br><span class="muted">'+escapeHtml(o.channelShipError)+'</span>':'')+'</td>'
           +'<td>'+(o.status==='awaiting_purchase_approval'?'<button type="button" data-purchase-order-approve-id="'+o.id+'">발주 승인</button>':'-')+'</td></tr>').join('')
+        +'</tbody></table>';
+    }
+    const EXCEPTION_TYPE_LABELS={CANCEL_NOT_SHIPPED:'취소 - 미출고 (공급처 취소 시도 가능)',CANCEL_ALREADY_SHIPPED:'취소 - 이미 출고 (수동 처리 필요)',RETURN_REQUESTED:'반품 요청',EXCHANGE_REQUESTED:'교환 요청'};
+    let orderExceptionsTypeFilter='';
+    async function loadOrderExceptionsView(){
+      const el=document.getElementById('specialView');
+      el.innerHTML='<p class="muted" style="padding:12px">불러오는 중...</p>';
+      const query=orderExceptionsTypeFilter?('?status=open&exceptionType='+encodeURIComponent(orderExceptionsTypeFilter)):'?status=open';
+      const data=await api('/api/order-exceptions'+query);
+      const exceptions=data.exceptions||[];
+      el.innerHTML='<div style="padding:12px">'
+        +'<div class="section"><h3>관리자 예외 큐 (Phase 10, 15.1/15.3) -- 자동 처리되지 않는 취소/반품/교환</h3>'
+        +'<select id="orderExceptionsTypeFilter"><option value="">전체</option>'
+        +'<option value="CANCEL_NOT_SHIPPED">취소 - 미출고</option>'
+        +'<option value="CANCEL_ALREADY_SHIPPED">취소 - 이미 출고</option>'
+        +'<option value="RETURN_REQUESTED">반품 요청</option>'
+        +'<option value="EXCHANGE_REQUESTED">교환 요청</option></select>'
+        +'<div id="orderExceptionsActionResult" class="muted"></div>'
+        +'<div id="orderExceptionsList">'+orderExceptionsListHtml(exceptions)+'</div>'
+        +'</div></div>';
+      const filterEl=document.getElementById('orderExceptionsTypeFilter');
+      filterEl.value=orderExceptionsTypeFilter;
+      filterEl.addEventListener('change',()=>{orderExceptionsTypeFilter=filterEl.value;loadOrderExceptionsView();});
+      for(const b of document.querySelectorAll('[data-exception-cancel-id]')){
+        b.addEventListener('click',async()=>{
+          const id=b.dataset.exceptionCancelId;
+          if(!confirm('도매매에 실제로 발주 취소를 요청합니다. 계속할까요?'))return;
+          const resultEl=document.getElementById('orderExceptionsActionResult');
+          resultEl.textContent='공급처 취소 요청 중...';
+          try{
+            const data=await api('/api/order-exceptions/'+id+'/attempt-supplier-cancel',{method:'POST',body:'{}'});
+            resultEl.textContent=data.result.status==='resolved'?'공급처 취소 완료':('공급처 취소 미확정: '+JSON.stringify(data.result.domemeResult||data.result));
+          }catch(error){resultEl.textContent='오류: '+error.message+(error.details&&error.details.dmessage?(' ('+error.details.dmessage+')'):'');}
+          await loadOrderExceptionsView();
+        });
+      }
+      for(const b of document.querySelectorAll('[data-exception-resolve-id]')){
+        b.addEventListener('click',async()=>{
+          const id=b.dataset.exceptionResolveId;
+          const note=prompt('처리 메모 (선택)')||'';
+          try{ await api('/api/order-exceptions/'+id+'/resolve',{method:'POST',body:JSON.stringify({resolutionNote:note})}); }
+          catch(error){document.getElementById('orderExceptionsActionResult').textContent='오류: '+error.message;}
+          await loadOrderExceptionsView();
+        });
+      }
+    }
+    function orderExceptionsListHtml(exceptions){
+      if(!exceptions||!exceptions.length)return '<p class="muted">열려 있는 예외가 없습니다.</p>';
+      return '<table><thead><tr><th>채널</th><th>채널 주문번호</th><th>유형</th><th>수령인</th><th>도매매 주문번호</th><th>송장번호</th><th>주문상태</th><th>액션</th></tr></thead><tbody>'
+        +exceptions.map(e=>'<tr><td>'+escapeHtml(e.channel||'-')+'</td><td>'+escapeHtml(e.channelOrderId||'-')+'</td>'
+          +'<td><span class="badge reasonBlock">'+escapeHtml(EXCEPTION_TYPE_LABELS[e.exceptionType]||e.exceptionType)+'</span></td>'
+          +'<td>'+escapeHtml(e.recipientName||'-')+'</td><td>'+escapeHtml(e.domemeOrderNo||'-')+'</td><td>'+escapeHtml(e.trackingNumber||'-')+'</td><td>'+escapeHtml(e.orderStatus||'-')+'</td>'
+          +'<td>'+(e.exceptionType==='CANCEL_NOT_SHIPPED'?'<button type="button" data-exception-cancel-id="'+e.id+'">공급처 취소 시도</button> ':'')
+          +'<button type="button" data-exception-resolve-id="'+e.id+'">수동 처리 완료</button></td></tr>').join('')
         +'</tbody></table>';
     }
     const ORDER_MAPPING_STATUS_LABELS={mapping_required:'매핑 필요',mapped:'매핑 완료'};

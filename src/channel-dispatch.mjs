@@ -1,6 +1,7 @@
 import { getChannelOrder } from './channel-orders-store.mjs';
 import { getSupplierOrder, listShippedNotDispatched, recordChannelShipmentResult } from './purchase-order-store.mjs';
 import { mapCarrierCode } from './carrier-code-map.mjs';
+import { isChannelOrderCancelled } from './channel-order-status.mjs';
 
 // automoney_complete_automation_implementation_plan.md section 14.4 (Phase
 // 9): 채널 발송 처리. 송장 확인(already collected -- see shipment-collector.mjs)
@@ -10,12 +11,6 @@ import { mapCarrierCode } from './carrier-code-map.mjs';
 // confirmed via the same source as the dispatch spec itself
 // (apicenter.commerce.naver.com, pasted directly by the user since the docs
 // site is blocked for WebFetch/browser navigation in this environment).
-
-const CANCELLED_PATTERN = /CANCEL|취소/i;
-
-function isCancelled(channelOrder) {
-  return Boolean(channelOrder.cancelledAt) || CANCELLED_PATTERN.test(channelOrder.orderStatus || '');
-}
 
 // Coupang's own per-line unique key, `${shipmentBoxId}:${vendorItemId}`
 // (order-collector.mjs's normalizeCoupangOrder) -- the invoice-upload API
@@ -93,7 +88,7 @@ export async function dispatchSupplierOrderToChannel(db, supplierOrderId, { coup
 
   // 14.4 "주문 취소 여부 재확인" -- a cancellation that landed after the order
   // was already placed with the supplier still must not be shipped onward.
-  if (isCancelled(channelOrder)) {
+  if (isChannelOrderCancelled(channelOrder)) {
     return recordChannelShipmentResultImpl(db, supplierOrder.id, { channelShipStatus: 'cancelled_skip', channelShipError: '채널 주문이 취소되어 발송 처리를 건너뜀' });
   }
 

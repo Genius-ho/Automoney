@@ -131,6 +131,18 @@ export async function recordSupplierOrderFailure(db, id, { failureMessage }) {
   return result.rows[0] ? toSupplierOrder(result.rows[0]) : null;
 }
 
+// Terminal, distinct from recordSupplierOrderFailure -- Phase 10's 15.1
+// "이미 발주된 건이 채널 취소로 인해 공급처에도 취소 요청됨" case. Never re-picked up by
+// the 13.2 validation sweep the way a 'validating_supplier' row would be.
+export async function recordSupplierOrderCancellation(db, id, { note = null } = {}) {
+  const result = await db.query(
+    `update supplier_orders set status = 'cancelled', failure_message = $2, updated_at = now()
+     where id = $1 returning *`,
+    [id, note],
+  );
+  return result.rows[0] ? toSupplierOrder(result.rows[0]) : null;
+}
+
 // 13.4 발주안 화면: one row combining the supplier_orders draft with the
 // channel-side context (채널, 채널 주문번호, 고객 주문상품/옵션, 수령인) a human
 // needs to actually decide whether to approve -- admin-server.mjs is

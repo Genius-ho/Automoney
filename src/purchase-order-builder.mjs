@@ -1,5 +1,6 @@
 import { normalizeProduct } from './processing.mjs';
 import { listChannelOrders } from './channel-orders-store.mjs';
+import { isChannelOrderCancelled } from './channel-order-status.mjs';
 import {
   getSupplierOrderByChannelOrderId,
   getDraftOrderingContext,
@@ -33,12 +34,6 @@ export function matchSupplierOption(options, optionInfoText) {
   return matches.length === 1 ? matches[0] : null;
 }
 
-const CANCELLED_PATTERN = /CANCEL|취소/i;
-
-function isCancelled(channelOrder) {
-  return Boolean(channelOrder.cancelledAt) || CANCELLED_PATTERN.test(channelOrder.orderStatus || '');
-}
-
 function hasCompleteAddress(channelOrder) {
   return Boolean(channelOrder.recipientName && channelOrder.address && channelOrder.postalCode && channelOrder.phone);
 }
@@ -63,8 +58,21 @@ export async function buildSupplierOrderDraft(db, domemeClient, channelOrder, {
     return existing;
   }
 
+  // 15.1 주문 취소 (Phase 10), "도매매 미발주 → 발주 차단 → 주문 종료": a cancelled
+  // order that was never placed with the supplier is a dead end, not
+  // something to keep re-validating on every sweep -- terminal 'cancelled'
+  // status short-circuits the rest of this function entirely.
+  if (isChannelOrderCancelled(channelOrder)) {
+    return upsertSupplierOrderDraftImpl(db, {
+      channelOrderId: channelOrder.id,
+      productDraftId: channelOrder.productDraftId,
+      supplierProductId: channelOrder.supplierProductId,
+      status: 'cancelled',
+      blockReasons: ['ORDER_CANCELLED'],
+    });
+  }
+
   const blockReasons = [];
-  if (isCancelled(channelOrder)) blockReasons.push('ORDER_CANCELLED');
   if (!hasCompleteAddress(channelOrder)) blockReasons.push('ADDRESS_INCOMPLETE');
 
   const context = await getDraftOrderingContextImpl(db, channelOrder.productDraftId);
