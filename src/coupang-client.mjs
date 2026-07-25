@@ -133,6 +133,20 @@ export class CoupangClient {
       operation: 'request_approval',
     });
   }
+
+  // "발주서 목록 조회(분단위 전체)" -- confirmed live schema (2026-07-25):
+  // response is { code, message, data: [...], nextToken }, each data[] entry
+  // a whole shipment box (shipmentBoxId, orderId, orderer, receiver,
+  // orderItems: [{ vendorItemId, vendorItemName, shippingCount, ... }]), NOT
+  // one row per line item -- order-collector.mjs flattens orderItems out
+  // into one row per line. createdAtFrom/createdAtTo/status are all
+  // required by Coupang; max 24-hour window per call.
+  async listOrderSheets({ createdAtFrom, createdAtTo, status, searchType = 'timeFrame', nextToken } = {}) {
+    return this.request('GET', `/v2/providers/openapi/apis/api/v5/vendors/${this.vendorId}/ordersheets`, {
+      query: { createdAtFrom, createdAtTo, status, searchType, nextToken },
+      operation: 'list_order_sheets',
+    });
+  }
 }
 
 // Coupang Wing Open API custom HMAC scheme: the signed message is the

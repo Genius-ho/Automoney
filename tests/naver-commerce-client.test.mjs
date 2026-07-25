@@ -141,6 +141,42 @@ test('NaverCommerceClient.getOriginAreas queries the origin-area code list', asy
   assert.equal(result.originAreaCodeNames[0].code, '00');
 });
 
+// UNVERIFIED against a real order (see the client's own comment) -- these
+// two tests only lock in the request shape (path, params, POST body), which
+// was confirmed live: valid lastChangedType enum values include
+// PAY_WAITING/PAYED/DISPATCHED (DELIVERING was rejected with a 400).
+test('NaverCommerceClient.listChangedProductOrderIds queries by lastChangedFrom/lastChangedType', async () => {
+  let captured;
+  const fetchImpl = async (url, init) => {
+    if (String(url).includes('/v1/oauth2/token')) return tokenFetchImpl()(url);
+    captured = { url: String(url), method: init.method };
+    return { ok: true, status: 200, async text() { return JSON.stringify({ timestamp: '2026-07-25T00:00:00Z', traceId: 'x' }); } };
+  };
+  const client = new NaverCommerceClient({ clientId: 'client-1', clientSecret: '$2b$10$j7fv77w6f6U3cxYt80fLJ.', fetchImpl });
+
+  const result = await client.listChangedProductOrderIds({ lastChangedFrom: '2026-07-25T00:00:00.000+09:00', lastChangedType: 'PAYED' });
+
+  assert.equal(captured.url, 'https://api.commerce.naver.com/external/v1/pay-order/seller/product-orders/last-changed-statuses?lastChangedFrom=2026-07-25T00%3A00%3A00.000%2B09%3A00&lastChangedType=PAYED');
+  assert.equal(captured.method, 'GET');
+  assert.equal(result.traceId, 'x');
+});
+
+test('NaverCommerceClient.queryProductOrders POSTs the productOrderIds batch', async () => {
+  let captured;
+  const fetchImpl = async (url, init) => {
+    if (String(url).includes('/v1/oauth2/token')) return tokenFetchImpl()(url);
+    captured = { url: String(url), method: init.method, body: JSON.parse(init.body) };
+    return { ok: true, status: 200, async text() { return JSON.stringify({ data: [] }); } };
+  };
+  const client = new NaverCommerceClient({ clientId: 'client-1', clientSecret: '$2b$10$j7fv77w6f6U3cxYt80fLJ.', fetchImpl });
+
+  await client.queryProductOrders(['A', 'B']);
+
+  assert.equal(captured.url, 'https://api.commerce.naver.com/external/v1/pay-order/seller/product-orders/query');
+  assert.equal(captured.method, 'POST');
+  assert.deepEqual(captured.body, { productOrderIds: ['A', 'B'] });
+});
+
 test('NaverCommerceClient surfaces a non-OK response as NaverCommerceApiError without leaking the secret', async () => {
   const fetchImpl = async (url) => {
     if (String(url).includes('/v1/oauth2/token')) return tokenFetchImpl()(url);

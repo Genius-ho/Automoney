@@ -146,6 +146,30 @@ export class NaverCommerceClient {
     }
     return parseJson(text);
   }
+
+  // UNVERIFIED against a real order -- this seller account has no live
+  // orders yet (2026-07-25), so unlike every other method in this file,
+  // these two have only been probed for "does the enum/param shape get
+  // accepted" (confirmed live: lastChangedType admits PAY_WAITING/PAYED/
+  // DISPATCHED, rejects DELIVERING; an empty result omits its data array
+  // entirely rather than returning `data: []`), not for the actual response
+  // field names inside a real order. Treat every field name
+  // order-collector.mjs reads off these responses as a best-effort guess
+  // until the first real order round-trip confirms or corrects it, the same
+  // way naver-payload-builder.mjs's fields started out.
+  async listChangedProductOrderIds({ lastChangedFrom, lastChangedType }) {
+    return this.request('GET', '/v1/pay-order/seller/product-orders/last-changed-statuses', {
+      query: { lastChangedFrom, lastChangedType },
+      operation: 'list_changed_product_order_ids',
+    });
+  }
+
+  async queryProductOrders(productOrderIds) {
+    return this.request('POST', '/v1/pay-order/seller/product-orders/query', {
+      body: { productOrderIds },
+      operation: 'query_product_orders',
+    });
+  }
 }
 
 function parseJson(text) {

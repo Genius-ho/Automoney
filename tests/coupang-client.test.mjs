@@ -127,6 +127,23 @@ test('CoupangClient.getProduct queries the seller-products endpoint by id', asyn
   assert.equal(result.data.statusName, '저장');
 });
 
+test('CoupangClient.listOrderSheets queries the v5 ordersheets endpoint with the required params', async () => {
+  let captured;
+  const fetchImpl = async (url, init) => {
+    captured = { url: String(url), method: init.method };
+    return { ok: true, status: 200, async text() { return JSON.stringify({ code: 200, data: [], nextToken: null }); } };
+  };
+  const client = new CoupangClient({ accessKey: 'ak', secretKey: 'sk', vendorId: 'A00000000', fetchImpl });
+
+  const result = await client.listOrderSheets({ createdAtFrom: '2026-07-25T00:00+09:00', createdAtTo: '2026-07-25T23:59+09:00', status: 'ACCEPT' });
+
+  assert.equal(captured.method, 'GET');
+  assert.match(captured.url, /\/v2\/providers\/openapi\/apis\/api\/v5\/vendors\/A00000000\/ordersheets\?/);
+  assert.match(captured.url, /status=ACCEPT/);
+  assert.match(captured.url, /searchType=timeFrame/);
+  assert.deepEqual(result.data, []);
+});
+
 test('CoupangClient surfaces a non-OK response as CoupangApiError without leaking the secret', async () => {
   const fetchImpl = async () => ({
     ok: false,
