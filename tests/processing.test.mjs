@@ -139,6 +139,43 @@ test('normalizeProduct supports official domeggook getItemView response structur
   ]);
 });
 
+test('normalizeProduct reads the domeme order-option-code from selectOpt.data (confirmed live shape, 2026-07-25), not just set[].opts[]', () => {
+  const normalized = normalizeProduct('40170547', {
+    domeggook: {
+      basis: { title: '옵션 상품' },
+      price: { supply: '9800' },
+      thumb: { original: 'https://example.test/original.jpg' },
+      selectOpt: JSON.stringify({
+        type: 'combination',
+        set: [{ name: '색상', opts: ['화이트+고정클립', '블랙+고정클립'], domPrice: ['0', '0'] }],
+        data: {
+          '00': { name: '화이트+고정클립', domPrice: '0', qty: '30' },
+          '01': { name: '블랙+고정클립', domPrice: '0', qty: '12' },
+        },
+      }),
+    },
+  });
+
+  assert.deepEqual(normalized.options, [
+    {
+      name: '색상',
+      value: '화이트+고정클립',
+      additionalPrice: 0,
+      optionCode: '00',
+      stockQuantity: 30,
+      raw: { name: '색상', value: '화이트+고정클립', additionalPrice: '0', optionCode: '00', stockQuantity: '30' },
+    },
+    {
+      name: '색상',
+      value: '블랙+고정클립',
+      additionalPrice: 0,
+      optionCode: '01',
+      stockQuantity: 12,
+      raw: { name: '색상', value: '블랙+고정클립', additionalPrice: '0', optionCode: '01', stockQuantity: '12' },
+    },
+  ]);
+});
+
 test('normalizeProduct deduplicates thumbnail variants and includes detail images', () => {
   const normalized = normalizeProduct('49168396', {
     domeggook: {

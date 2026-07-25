@@ -671,7 +671,7 @@ function normalizeOptions(value) {
       return [];
     }
   }
-  if (value.set && Array.isArray(value.set)) return normalizeDomeggookOptions(value.set);
+  if (value.set && Array.isArray(value.set)) return normalizeDomeggookOptions(value);
   if (Array.isArray(value)) return value.map(normalizeOption);
   if (typeof value === 'object') {
     return Object.entries(value).map(([name, values]) => ({
@@ -684,7 +684,31 @@ function normalizeOptions(value) {
   return [];
 }
 
-function normalizeDomeggookOptions(sets) {
+// selectOpt.data (keyed by 도매매's own order-option-code, e.g. "00" for a
+// single-dimension option or "01_03" for a combination) is the authoritative
+// per-SKU view -- its key IS the exact code Phase 8's setOrder call needs,
+// and its qty is the real per-option supplier stock. Prior to this, only
+// selectOpt.set[].opts[] (display name/price by array position) was read,
+// which has no code at all. Falls back to the set-only reconstruction when
+// `data` is absent (defensive -- not observed live, but set is still the
+// only field the plan's original normalizeOptions ever guaranteed).
+function normalizeDomeggookOptions(value) {
+  const sets = Array.isArray(value.set) ? value.set : [];
+  const data = value.data && typeof value.data === 'object' && !Array.isArray(value.data) ? value.data : null;
+
+  if (data) {
+    const combinedName = sets.map((set) => compactText(set.name ?? '')).filter(Boolean).join('/');
+    return Object.entries(data).map(([code, entry]) =>
+      normalizeOption({
+        name: combinedName,
+        value: entry?.name,
+        additionalPrice: entry?.domPrice ?? 0,
+        optionCode: code,
+        stockQuantity: entry?.qty,
+      }),
+    );
+  }
+
   return sets.flatMap((set) => {
     const name = compactText(set.name ?? '');
     const values = Array.isArray(set.opts) ? set.opts : [];
@@ -703,7 +727,7 @@ function normalizeOption(option) {
   if (!option || typeof option !== 'object') {
     return { name: String(option ?? ''), value: '', additionalPrice: 0, raw: option };
   }
-  return {
+  const normalized = {
     name: compactText(firstValue(option, ['name', 'optionName', 'label']) ?? ''),
     value: compactText(firstValue(option, ['value', 'optionValue', 'text']) ?? ''),
     additionalPrice: toNumber(
@@ -711,6 +735,9 @@ function normalizeOption(option) {
     ),
     raw: option,
   };
+  if (option.optionCode != null) normalized.optionCode = String(option.optionCode);
+  if (option.stockQuantity != null) normalized.stockQuantity = toNumber(option.stockQuantity);
+  return normalized;
 }
 
 export function normalizeImages(value) {

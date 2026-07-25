@@ -182,7 +182,7 @@ export async function getProductDraft(db, id) {
     ),
     db.query(
       `
-        select id, option_index, name, value, additional_price, stock_quantity, raw_json
+        select id, option_index, name, value, additional_price, stock_quantity, option_code, raw_json
         from product_options
         where product_draft_id = $1
         order by option_index
@@ -1049,6 +1049,7 @@ function toDraftDetail(row, images, options) {
       value: option.value,
       additionalPrice: option.additional_price,
       stockQuantity: option.stock_quantity == null ? null : Number(option.stock_quantity),
+      optionCode: option.option_code,
       raw: option.raw_json,
     })),
   };

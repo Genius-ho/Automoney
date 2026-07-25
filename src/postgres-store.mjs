@@ -280,9 +280,11 @@ async function replaceOptions(client, draftId, productNo, options) {
           name,
           value,
           additional_price,
+          stock_quantity,
+          option_code,
           raw_json
         )
-        values ($1, $2, $3, $4, $5, $6, $7::jsonb)
+        values ($1, $2, $3, $4, $5, $6, $7, $8, $9::jsonb)
       `,
       [
         draftId,
@@ -291,6 +293,8 @@ async function replaceOptions(client, draftId, productNo, options) {
         option.name || null,
         option.value || null,
         option.additionalPrice || 0,
+        option.stockQuantity ?? null,
+        option.optionCode ?? null,
         JSON.stringify(option.raw ?? option),
       ],
     );
