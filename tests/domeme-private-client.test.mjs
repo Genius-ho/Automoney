@@ -173,31 +173,38 @@ test('createOrder requires at least one item', async () => {
   await assert.rejects(client.createOrder({ sId: 'x', items: [], deliInfo: {} }), /item/);
 });
 
+// Response shape confirmed live 2026-07-25 against a real account's order
+// history: domeggook.header.{numberOfItems,numberOfPages} + domeggook.items
+// as a plain array (not items.item).
 test('listOrders GETs getOrderList with for=buy and status/day filters as query params', async () => {
   let captured;
   const client = makeClient(async (url) => {
     captured = String(url);
-    return jsonResponse({ domeggook: { numberOfItems: '1', numberOfPages: '1', list: { orderNo: 1, status: '결제완료' } } });
+    return jsonResponse({ domeggook: { header: { numberOfItems: '1', numberOfPages: '1' }, items: [{ orderNo: 'OR1', status: '구매종료' }] } });
   });
-  const result = await client.listOrders({ sId: 'sess-123', day: 7, status: '결제완료' });
+  const result = await client.listOrders({ sId: 'sess-123', day: 7, status: '구매종료' });
   const url = new URL(captured);
   assert.equal(url.searchParams.get('mode'), 'getOrderList');
   assert.equal(url.searchParams.get('for'), 'buy');
   assert.equal(url.searchParams.get('day'), '7');
-  assert.equal(url.searchParams.get('st'), '결제완료');
-  assert.deepEqual(result.orders, [{ orderNo: 1, status: '결제완료' }]);
+  assert.equal(url.searchParams.get('st'), '구매종료');
+  assert.equal(result.numberOfItems, 1);
+  assert.deepEqual(result.orders, [{ orderNo: 'OR1', status: '구매종료' }]);
 });
 
-test('getOrder GETs getOrderView with the order number and requires either orderNo or orderUid', async () => {
+// Response shape confirmed live 2026-07-25: domeggook.items is an array
+// even for a single orderNo lookup -- getOrder() unwraps it to items[0].
+test('getOrder GETs getOrderView with the order number, unwraps the single-element items array, and requires either orderNo or orderUid', async () => {
   let captured;
   const client = makeClient(async (url) => {
     captured = String(url);
-    return jsonResponse({ domeggook: { orderNo: 14207678, status: '배송중', statusMode: 'WAITDELI' } });
+    return jsonResponse({ domeggook: { items: [{ orderNo: 'OR14207678', status: '배송중', statusMode: 'WAITDELI' }] } });
   });
-  await client.getOrder({ sId: 'sess-123', orderNo: 14207678 });
+  const order = await client.getOrder({ sId: 'sess-123', orderNo: 14207678 });
   const url = new URL(captured);
   assert.equal(url.searchParams.get('mode'), 'getOrderView');
   assert.equal(url.searchParams.get('no'), '14207678');
+  assert.deepEqual(order, { orderNo: 'OR14207678', status: '배송중', statusMode: 'WAITDELI' });
 
   const client2 = makeClient(async () => jsonResponse({}));
   await assert.rejects(client2.getOrder({ sId: 'sess-123' }), /orderNo or orderUid/);
@@ -221,16 +228,20 @@ test('cancelOrder POSTs setOrdDeny and requires a cancellation memo', async () =
   await assert.rejects(client2.cancelOrder({ sId: 'sess-123', orderNo: 1 }), /memo/);
 });
 
+// Response shape confirmed live 2026-07-25: domeggook.header.numberOfItems +
+// domeggook.items.item as the array -- one level deeper than listOrders'
+// domeggook.items, despite the near-identical header shape.
 test('checkSoldOut GETs getAllSupplyChk without requiring a session (aid-only per docs)', async () => {
   let captured;
   const client = makeClient(async (url) => {
     captured = String(url);
-    return jsonResponse({ domeggook: { numberOfItems: '1', list: { no: 40170547, status: 'SOLDOUT' } } });
+    return jsonResponse({ domeggook: { header: { numberOfItems: '1' }, items: { item: [{ no: 40170547, status: 'SOLDOUT' }] } } });
   });
   const result = await client.checkSoldOut({ status: 'SOLDOUT' });
   const url = new URL(captured);
   assert.equal(url.searchParams.get('mode'), 'getAllSupplyChk');
   assert.equal(url.searchParams.has('sId'), false);
+  assert.equal(result.numberOfItems, 1);
   assert.deepEqual(result.items, [{ no: 40170547, status: 'SOLDOUT' }]);
 });
 

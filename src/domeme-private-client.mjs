@@ -145,6 +145,10 @@ export class DomemePrivateClient {
     };
   }
 
+  // Confirmed live 2026-07-25: envelope is domeggook.header.{numberOfItems,
+  // numberOfPages,...} + domeggook.items as a plain array (NOT items.item --
+  // that nesting is specific to getAllSupplyChk below, the two do not share
+  // an envelope shape despite looking similar).
   async listOrders({ sId, day, itemNo, status, page, itemsPerPage } = {}) {
     if (!sId) throw new Error('sId is required');
     const raw = await this.callGet('list_orders', {
@@ -160,12 +164,18 @@ export class DomemePrivateClient {
     });
     const data = raw.domeggook || raw;
     return {
-      numberOfItems: toNumber(data.numberOfItems),
-      numberOfPages: toNumber(data.numberOfPages),
-      orders: normalizeList(data.list ?? data.item ?? data.order),
+      numberOfItems: toNumber(data.header?.numberOfItems),
+      numberOfPages: toNumber(data.header?.numberOfPages),
+      orders: normalizeList(data.items),
     };
   }
 
+  // Confirmed live 2026-07-25: domeggook.items is an array even for a
+  // single orderNo lookup (never a bare object) -- returns items[0] so
+  // callers get one order, not a one-element array. Each order carries
+  // selectOpt.opt[].code (the same order-option-code item[] uses), pay/
+  // delivery/consumer/sellerInfo/buyerInfo, and a human-readable log string
+  // -- all useful for Phase 8's 13.2 재검증.
   async getOrder({ sId, orderNo, orderUid } = {}) {
     if (!sId) throw new Error('sId is required');
     if (!orderNo && !orderUid) throw new Error('orderNo or orderUid is required');
@@ -177,7 +187,8 @@ export class DomemePrivateClient {
       no: orderNo,
       uid: orderUid,
     });
-    return raw.domeggook || raw;
+    const data = raw.domeggook || raw;
+    return normalizeList(data.items)[0] ?? null;
   }
 
   // 13.3 발주 차단 조건("주문 취소") 이후 처리, 아니면 Phase 10 취소 대응 -- 배송준비중
@@ -200,6 +211,10 @@ export class DomemePrivateClient {
 
   // 13.2 발주 직전 재검증("공급처 판매상태", "공급처 재고") -- no sId/login required
   // per the docs (aid-only), so this can run as a cheap standalone check.
+  // Confirmed live 2026-07-25: envelope is domeggook.header.{numberOfItems,
+  // ...} + domeggook.items.item as the array -- one nesting level deeper
+  // than listOrders' domeggook.items, despite the superficially similar
+  // header shape.
   async checkSoldOut({ status, cate, date, itemNo, page, itemsPerPage } = {}) {
     const raw = await this.callGet('check_sold_out', {
       ver: '1.0',
@@ -215,8 +230,8 @@ export class DomemePrivateClient {
     });
     const data = raw.domeggook || raw;
     return {
-      numberOfItems: toNumber(data.numberOfItems),
-      items: normalizeList(data.list ?? data.item),
+      numberOfItems: toNumber(data.header?.numberOfItems),
+      items: normalizeList(data.items?.item),
     };
   }
 
