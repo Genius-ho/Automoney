@@ -40,40 +40,45 @@ export function normalizeCoupangOrder(orderSheet) {
   }));
 }
 
-// UNVERIFIED field names -- see naver-commerce-client.mjs's
-// listChangedProductOrderIds/queryProductOrders comment. Every field is
-// looked up under a few plausible candidate names rather than one hardcoded
-// guess, the same defensive style processing.mjs's own normalizeProduct
-// already uses for uncertain upstream shapes, so a wrong guess on any one
-// field doesn't silently produce nulls across the board.
-function pick(source, names) {
-  for (const name of names) {
-    const value = source?.[name];
-    if (value !== undefined && value !== null && value !== '') return value;
-  }
-  return null;
-}
+// Confirmed 2026-07-26 against Naver Commerce API's own published "상품 주문
+// 정보 구조체" schema (apicenter.commerce.naver.com, pasted directly by the
+// user since the docs site is blocked for WebFetch/browser navigation in
+// this environment) -- replaces the earlier UNVERIFIED field-guessing pass.
+// Each queryProductOrders() result is `{ order, productOrder, cancel,
+// return, exchange, currentClaim, completedClaims, delivery }`, NOT a flat
+// object -- the previous version read every field straight off the outer
+// wrapper (e.g. `productOrderId`, `productOrderStatus`, `baseAddress`)
+// instead of `.productOrder.*`/`.productOrder.shippingAddress.*`, so it was
+// silently reading nulls for nearly everything except `orderId` (order.*
+// was, by luck, already being unwrapped correctly).
+export function normalizeNaverOrder(record) {
+  const order = record.order || {};
+  const po = record.productOrder || {};
+  const shipping = po.shippingAddress || {};
+  const address = [shipping.baseAddress, shipping.detailedAddress].filter(Boolean).join(' ') || null;
+  // 15.1 (Phase 10): the current claim (if any) on this line is right here
+  // on the same object Phase 7 already fetches -- no separate collection
+  // sweep needed the way Coupang required (see return-request-collector.mjs's
+  // header comment for why Coupang's own order status can't carry this).
+  const cancelInfo = record.cancel || record.currentClaim?.cancel || null;
 
-export function normalizeNaverOrder(productOrder) {
-  const order = productOrder.order || productOrder;
-  const productOrderId = pick(productOrder, ['productOrderId', 'id']);
   return {
     channel: 'naver',
-    channelOrderId: String(pick(order, ['orderId']) ?? productOrderId ?? ''),
-    channelOrderItemId: String(productOrderId ?? ''),
-    channelProductId: pick(productOrder, ['productId', 'channelProductNo', 'originProductNo']),
-    optionInfo: pick(productOrder, ['productOption', 'optionInfo', 'productName']),
-    quantity: pick(productOrder, ['quantity']),
-    salePrice: pick(productOrder, ['totalPaymentAmount', 'unitPrice', 'productOrderAmount']),
-    orderStatus: pick(productOrder, ['productOrderStatus', 'orderStatus']),
-    recipientName: pick(productOrder, ['receiverName']),
-    address: pick(productOrder, ['baseAddress', 'address']),
-    postalCode: pick(productOrder, ['zipCode', 'postalCode']),
-    phone: pick(productOrder, ['receiverTel1', 'receiverTel', 'phone']),
-    deliveryMemo: pick(productOrder, ['deliveryMemo']),
-    orderedAt: pick(order, ['orderDate']) ?? pick(productOrder, ['orderDate', 'paymentDate']),
-    cancelledAt: pick(productOrder, ['cancelDate']),
-    rawJson: productOrder,
+    channelOrderId: String(order.orderId ?? po.productOrderId ?? ''),
+    channelOrderItemId: String(po.productOrderId ?? ''),
+    channelProductId: po.productId != null ? String(po.productId) : (po.originalProductId != null ? String(po.originalProductId) : null),
+    optionInfo: po.productOption || po.productName || null,
+    quantity: po.quantity ?? null,
+    salePrice: po.totalPaymentAmount ?? po.unitPrice ?? null,
+    orderStatus: po.productOrderStatus || null,
+    recipientName: shipping.name || null,
+    address,
+    postalCode: shipping.zipCode || null,
+    phone: shipping.tel1 || shipping.tel2 || null,
+    deliveryMemo: po.shippingMemo || null,
+    orderedAt: order.orderDate || order.paymentDate || null,
+    cancelledAt: cancelInfo?.cancelCompletedDate || null,
+    rawJson: record,
   };
 }
 

@@ -73,25 +73,53 @@ test('normalizeCoupangOrder produces one record per orderItem when a shipment bo
   assert.equal(orders[1].quantity, 2);
 });
 
-test('normalizeNaverOrder reads its (unverified) candidate field names defensively', () => {
-  const order = normalizeNaverOrder({
-    productOrderId: '2026072512345671',
-    productOrderStatus: 'PAYED',
-    productId: '13620845243',
-    quantity: 1,
-    totalPaymentAmount: 31790,
-    receiverName: '김철수',
-    baseAddress: '서울시 강남구',
-    zipCode: '06000',
-    receiverTel1: '010-1234-5678',
-    paymentDate: '2026-07-25T14:00:00.000+09:00',
-  });
+// Confirmed 2026-07-26 against Naver Commerce API's own published "상품 주문
+// 정보 구조체" schema -- the real per-line shape is
+// { order, productOrder, cancel, return, exchange, currentClaim,
+// completedClaims, delivery }, not a flat object.
+function fakeNaverProductOrderRecord(overrides = {}) {
+  return {
+    order: { orderId: '2026072500001234', orderDate: '2026-07-25T14:00:00.000+09:00', paymentDate: '2026-07-25T14:00:05.000+09:00' },
+    productOrder: {
+      productOrderId: '2026072512345671', productOrderStatus: 'PAYED', productId: '13620845243',
+      productOption: '블랙', quantity: 1, totalPaymentAmount: 31790, unitPrice: 31790,
+      shippingAddress: { name: '김철수', baseAddress: '서울시 강남구', detailedAddress: '101동 202호', zipCode: '06000', tel1: '010-1234-5678' },
+    },
+    cancel: null,
+    ...overrides,
+  };
+}
+
+test('normalizeNaverOrder reads every field from its confirmed nested position (order/productOrder/shippingAddress)', () => {
+  const order = normalizeNaverOrder(fakeNaverProductOrderRecord());
   assert.equal(order.channel, 'naver');
+  assert.equal(order.channelOrderId, '2026072500001234');
   assert.equal(order.channelOrderItemId, '2026072512345671');
   assert.equal(order.channelProductId, '13620845243');
+  assert.equal(order.optionInfo, '블랙');
   assert.equal(order.orderStatus, 'PAYED');
   assert.equal(order.recipientName, '김철수');
+  assert.equal(order.address, '서울시 강남구 101동 202호');
+  assert.equal(order.postalCode, '06000');
+  assert.equal(order.phone, '010-1234-5678');
   assert.equal(order.salePrice, 31790);
+  assert.equal(order.orderedAt, '2026-07-25T14:00:00.000+09:00');
+  assert.equal(order.cancelledAt, null);
+});
+
+test('normalizeNaverOrder reads cancelledAt from the cancel sub-object\'s cancelCompletedDate', () => {
+  const order = normalizeNaverOrder(fakeNaverProductOrderRecord({
+    cancel: { claimId: 'C1', claimStatus: 'CANCEL_DONE', cancelCompletedDate: '2026-07-26T09:00:00.000+09:00' },
+  }));
+  assert.equal(order.cancelledAt, '2026-07-26T09:00:00.000+09:00');
+});
+
+test('normalizeNaverOrder falls back to originalProductId when productId is absent', () => {
+  const record = fakeNaverProductOrderRecord();
+  delete record.productOrder.productId;
+  record.productOrder.originalProductId = '13620845243';
+  const order = normalizeNaverOrder(record);
+  assert.equal(order.channelProductId, '13620845243');
 });
 
 test('collectCoupangOrders pages through nextToken and records one row per flattened order line', async () => {
@@ -142,7 +170,12 @@ test('collectNaverOrders fetches full details for every changed productOrderId a
     async listChangedProductOrderIds() { return { data: [{ productOrderId: 'A' }, { productOrderId: 'B' }] }; },
     async queryProductOrders(ids) {
       assert.deepEqual(ids, ['A', 'B']);
-      return { data: [{ productOrderId: 'A', productOrderStatus: 'PAYED' }, { productOrderId: 'B', productOrderStatus: 'PAYED' }] };
+      return {
+        data: [
+          { productOrder: { productOrderId: 'A', productOrderStatus: 'PAYED' } },
+          { productOrder: { productOrderId: 'B', productOrderStatus: 'PAYED' } },
+        ],
+      };
     },
   };
   const results = await collectNaverOrders(client, { lastChangedFrom: 'a' }, {
