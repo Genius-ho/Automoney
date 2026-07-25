@@ -97,6 +97,19 @@ export async function buildSupplierOrderDraft(db, domemeClient, channelOrder, {
     blockReasons.push('SUPPLIER_FETCH_FAILED');
   }
 
+  // Which of the two dome-domain markets (도매꾹 "dome" vs 도매매 "supply") to
+  // order through -- every collected product is listed on both (confirmed
+  // live, 2026-07-25: raw_json.domeggook.channel.{dome,supply} are both
+  // true on every sampled row), so this can't be inferred from
+  // product_drafts.sourceMarket or a static per-product fact. It has to
+  // match whichever price tier this specific draft was actually priced and
+  // margin-checked against -- and product_drafts.raw_price_field_name isn't
+  // trustworthy for that either (confirmed stale for some already-collected
+  // drafts, priced under an older candidate-priority order than
+  // processing.mjs's current one). live.rawPriceFieldName (from the fresh
+  // re-fetch+normalize just above) is the one value guaranteed to reflect
+  // what this exact run actually used.
+  let supplierMarket = null;
   if (live) {
     if (live.isSoldOut) blockReasons.push('SUPPLIER_SOLD_OUT');
     const saleStatus = liveRaw?.domeggook?.basis?.status ?? liveRaw?.basis?.status;
@@ -109,6 +122,8 @@ export async function buildSupplierOrderDraft(db, domemeClient, channelOrder, {
     if (Number.isFinite(live.minOrderQty) && Number.isFinite(context.minOrderQty) && live.minOrderQty !== context.minOrderQty) {
       blockReasons.push('MOQ_CHANGED');
     }
+    supplierMarket = live.rawPriceFieldName === 'price.dome' ? 'dome' : live.rawPriceFieldName === 'price.supply' ? 'supply' : null;
+    if (!supplierMarket) blockReasons.push('MARKET_UNRESOLVED');
   }
 
   // 12.4 MOQ 예시: 판매채널 주문수량 × 공급처 발주 multiplier(bundle_quantity) =
@@ -138,6 +153,7 @@ export async function buildSupplierOrderDraft(db, domemeClient, channelOrder, {
     supplierProductId: channelOrder.supplierProductId,
     status,
     blockReasons,
+    supplierMarket,
     supplierOptionCode: match?.optionCode ?? null,
     supplierOrderQty,
     saleQty,

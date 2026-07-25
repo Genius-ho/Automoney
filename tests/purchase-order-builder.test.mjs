@@ -79,7 +79,7 @@ test('buildSupplierOrderDraft blocks OPTION_MISMATCH when the free-text option c
     getSupplierOrderByChannelOrderIdImpl: async () => null,
     getDraftOrderingContextImpl: async () => fakeContext(),
     fetchProductDetailImpl: async () => ({ domeggook: { basis: { status: '판매중' } } }),
-    normalizeProductImpl: () => ({ isSoldOut: false, minOrderQty: 1, priceParseStatus: 'ok', unitCostPrice: 9800, shippingParseStatus: 'ok', shippingFee: 3000, options: [] }),
+    normalizeProductImpl: () => ({ isSoldOut: false, minOrderQty: 1, priceParseStatus: 'ok', unitCostPrice: 9800, shippingParseStatus: 'ok', shippingFee: 3000, rawPriceFieldName: 'price.supply', options: [] }),
     upsertSupplierOrderDraftImpl: async (db, args) => { upserted = args; return { ...args }; },
   });
   assert.ok(upserted.blockReasons.includes('OPTION_MISMATCH'));
@@ -92,7 +92,7 @@ test('buildSupplierOrderDraft blocks SUPPLIER_SOLD_OUT when the live product its
     getSupplierOrderByChannelOrderIdImpl: async () => null,
     getDraftOrderingContextImpl: async () => fakeContext(),
     fetchProductDetailImpl: async () => ({ domeggook: { basis: { status: '판매중' } } }),
-    normalizeProductImpl: () => ({ isSoldOut: true, minOrderQty: 1, priceParseStatus: 'ok', unitCostPrice: 9800, shippingParseStatus: 'ok', shippingFee: 3000, options: [{ optionCode: '01', stockQuantity: 12 }] }),
+    normalizeProductImpl: () => ({ isSoldOut: true, minOrderQty: 1, priceParseStatus: 'ok', unitCostPrice: 9800, shippingParseStatus: 'ok', shippingFee: 3000, rawPriceFieldName: 'price.supply', options: [{ optionCode: '01', stockQuantity: 12 }] }),
     upsertSupplierOrderDraftImpl: async (db, args) => { upserted = args; return { ...args }; },
   });
   assert.ok(upserted.blockReasons.includes('SUPPLIER_SOLD_OUT'));
@@ -104,7 +104,7 @@ test('buildSupplierOrderDraft blocks SUPPLIER_SALE_STOPPED when the live basis.s
     getSupplierOrderByChannelOrderIdImpl: async () => null,
     getDraftOrderingContextImpl: async () => fakeContext(),
     fetchProductDetailImpl: async () => ({ domeggook: { basis: { status: '판매중지' } } }),
-    normalizeProductImpl: () => ({ isSoldOut: false, minOrderQty: 1, priceParseStatus: 'ok', unitCostPrice: 9800, shippingParseStatus: 'ok', shippingFee: 3000, options: [{ optionCode: '01', stockQuantity: 12 }] }),
+    normalizeProductImpl: () => ({ isSoldOut: false, minOrderQty: 1, priceParseStatus: 'ok', unitCostPrice: 9800, shippingParseStatus: 'ok', shippingFee: 3000, rawPriceFieldName: 'price.supply', options: [{ optionCode: '01', stockQuantity: 12 }] }),
     upsertSupplierOrderDraftImpl: async (db, args) => { upserted = args; return { ...args }; },
   });
   assert.ok(upserted.blockReasons.includes('SUPPLIER_SALE_STOPPED'));
@@ -116,7 +116,7 @@ test('buildSupplierOrderDraft blocks LOSS_AT_CURRENT_PRICE when the live supplie
     getSupplierOrderByChannelOrderIdImpl: async () => null,
     getDraftOrderingContextImpl: async () => fakeContext(),
     fetchProductDetailImpl: async () => ({ domeggook: { basis: { status: '판매중' } } }),
-    normalizeProductImpl: () => ({ isSoldOut: false, minOrderQty: 1, priceParseStatus: 'ok', unitCostPrice: 15000, shippingParseStatus: 'ok', shippingFee: 3000, options: [{ optionCode: '01', stockQuantity: 12 }] }),
+    normalizeProductImpl: () => ({ isSoldOut: false, minOrderQty: 1, priceParseStatus: 'ok', unitCostPrice: 15000, shippingParseStatus: 'ok', shippingFee: 3000, rawPriceFieldName: 'price.supply', options: [{ optionCode: '01', stockQuantity: 12 }] }),
     upsertSupplierOrderDraftImpl: async (db, args) => { upserted = args; return { ...args }; },
   });
   assert.ok(upserted.blockReasons.includes('LOSS_AT_CURRENT_PRICE'));
@@ -129,7 +129,7 @@ test('buildSupplierOrderDraft computes supplierOrderQty as saleQty x bundleQuant
     getSupplierOrderByChannelOrderIdImpl: async () => null,
     getDraftOrderingContextImpl: async () => fakeContext({ bundleQuantity: 2 }),
     fetchProductDetailImpl: async () => ({ domeggook: { basis: { status: '판매중' } } }),
-    normalizeProductImpl: () => ({ isSoldOut: false, minOrderQty: 1, priceParseStatus: 'ok', unitCostPrice: 9800, shippingParseStatus: 'ok', shippingFee: 3000, options: [{ optionCode: '01', stockQuantity: 12 }] }),
+    normalizeProductImpl: () => ({ isSoldOut: false, minOrderQty: 1, priceParseStatus: 'ok', unitCostPrice: 9800, shippingParseStatus: 'ok', shippingFee: 3000, rawPriceFieldName: 'price.supply', options: [{ optionCode: '01', stockQuantity: 12 }] }),
     upsertSupplierOrderDraftImpl: async (db, args) => { upserted = args; return { ...args }; },
   });
   assert.deepEqual(upserted.blockReasons, []);
@@ -137,6 +137,37 @@ test('buildSupplierOrderDraft computes supplierOrderQty as saleQty x bundleQuant
   assert.equal(upserted.saleQty, 2);
   assert.equal(upserted.supplierOrderQty, 4);
   assert.equal(upserted.supplierOptionCode, '01');
+  assert.equal(upserted.supplierMarket, 'supply');
+});
+
+// Every collected product is listed on both 도매꾹(dome) and 도매매(supply) --
+// confirmed live, 2026-07-25 -- so the market can only be resolved from
+// which price field the fresh live re-fetch actually matched, never
+// guessed from a static per-product label.
+test('buildSupplierOrderDraft resolves supplierMarket to "dome" when the live re-fetch priced off price.dome', async () => {
+  let upserted;
+  await buildSupplierOrderDraft({}, {}, fakeChannelOrder(), {
+    getSupplierOrderByChannelOrderIdImpl: async () => null,
+    getDraftOrderingContextImpl: async () => fakeContext(),
+    fetchProductDetailImpl: async () => ({ domeggook: { basis: { status: '판매중' } } }),
+    normalizeProductImpl: () => ({ isSoldOut: false, minOrderQty: 1, priceParseStatus: 'ok', unitCostPrice: 11800, shippingParseStatus: 'ok', shippingFee: 3000, rawPriceFieldName: 'price.dome', options: [{ optionCode: '01', stockQuantity: 12 }] }),
+    upsertSupplierOrderDraftImpl: async (db, args) => { upserted = args; return { ...args }; },
+  });
+  assert.equal(upserted.supplierMarket, 'dome');
+  assert.equal(upserted.blockReasons.includes('MARKET_UNRESOLVED'), false);
+});
+
+test('buildSupplierOrderDraft blocks MARKET_UNRESOLVED when the live re-fetch priced off neither price.dome nor price.supply', async () => {
+  let upserted;
+  await buildSupplierOrderDraft({}, {}, fakeChannelOrder(), {
+    getSupplierOrderByChannelOrderIdImpl: async () => null,
+    getDraftOrderingContextImpl: async () => fakeContext(),
+    fetchProductDetailImpl: async () => ({ domeggook: { basis: { status: '판매중' } } }),
+    normalizeProductImpl: () => ({ isSoldOut: false, minOrderQty: 1, priceParseStatus: 'ok', unitCostPrice: 9800, shippingParseStatus: 'ok', shippingFee: 3000, rawPriceFieldName: 'cost', options: [{ optionCode: '01', stockQuantity: 12 }] }),
+    upsertSupplierOrderDraftImpl: async (db, args) => { upserted = args; return { ...args }; },
+  });
+  assert.ok(upserted.blockReasons.includes('MARKET_UNRESOLVED'));
+  assert.equal(upserted.supplierMarket, null);
 });
 
 test('buildSupplierOrderDraft blocks SUPPLIER_FETCH_FAILED but still upserts a draft when the live re-check itself fails', async () => {

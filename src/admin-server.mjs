@@ -29,6 +29,7 @@ import { maskOrderForLog } from './order-collector.mjs';
 import { DomemePrivateApiError, DomemePrivateClient } from './domeme-private-client.mjs';
 import { getValidDomemeSId } from './domeme-private-session.mjs';
 import { listSupplierOrdersForAdmin } from './purchase-order-store.mjs';
+import { approveSupplierOrder } from './purchase-order-approval.mjs';
 import { isAllowedPublicAssetPath } from './public-assets.mjs';
 import { buildMainImagePackage } from './manual-ai/package-builder.mjs';
 import { buildDetailPagePackage } from './manual-ai/detail-package-builder.mjs';
@@ -618,16 +619,36 @@ async function handleRequest({ request, response, db, aiSecrets, rootDir }) {
     return;
   }
 
-  // Phase 8 (section 13.4 발주안 화면) -- read-only listing of supplier_orders
-  // drafts joined with their channel-order context. No approve/order action
-  // exists on this route yet: real order placement needs the domeme
-  // dome/supply market value resolved correctly per supplier product first
-  // (see purchase-order-builder.mjs), so this stays a review-only screen
-  // until that's wired up.
+  // Phase 8 (section 13.4 발주안 화면) -- listing of supplier_orders drafts
+  // joined with their channel-order context. The actual order-placement
+  // action is the separate POST .../approve route below.
   if (url.pathname === '/api/purchase-orders' && request.method === 'GET') {
     const status = url.searchParams.get('status') || undefined;
     const orders = await listSupplierOrdersForAdmin(db, { status });
     sendJson(response, 200, { orders: orders.map(maskOrderForLog) });
+    return;
+  }
+
+  // The one action in this whole app that spends real money without any
+  // further confirmation step below it -- requires body.confirm === true
+  // (the admin UI gets there via a native window.confirm prompt) and
+  // re-validates immediately before ordering (see approveSupplierOrder's
+  // own re-check). 3.4 금전 단계 승인 게이트: this route is the gate.
+  const purchaseOrderApproveMatch = url.pathname.match(/^\/api\/purchase-orders\/(\d+)\/approve$/);
+  if (purchaseOrderApproveMatch && request.method === 'POST') {
+    const supplierOrderId = Number(purchaseOrderApproveMatch[1]);
+    const body = await readJson(request);
+    if (body.confirm !== true) { sendJson(response, 400, { error: 'confirm: true is required to place a real order', code: 'CONFIRM_REQUIRED' }); return; }
+    try {
+      const config = await loadDomemePrivateConfig(rootDir);
+      const client = new DomemePrivateClient(config);
+      const result = await approveSupplierOrder(db, client, supplierOrderId);
+      sendJson(response, 200, { order: result });
+    } catch (error) {
+      if (error instanceof DomemePrivateApiError) { sendJson(response, 502, { error: error.message, dcode: error.dcode, dmessage: error.dmessage }); return; }
+      const statuses = { NOT_FOUND: 404, NOT_APPROVABLE: 409, CHANNEL_ORDER_NOT_FOUND: 404, ALREADY_IN_PROGRESS: 409 };
+      sendJson(response, statuses[error.code] || 500, { error: error.message, code: error.code });
+    }
     return;
   }
 
@@ -1117,7 +1138,7 @@ function adminHtml() {
         +(r.errorMessage?' / <span class="badge reasonBlock">'+escapeHtml(r.errorMessage)+'</span>':'')+'</div>').join('');
     }
     const SUPPLIER_ORDER_STATUS_LABELS={detected:'감지됨',mapping_required:'매핑 필요',validating_supplier:'검증/차단됨',order_draft_ready:'발주안 준비됨',awaiting_purchase_approval:'승인 대기',supplier_ordering:'발주 중',supplier_ordered:'발주 완료',supplier_order_failed:'발주 실패',cancelled:'취소됨'};
-    const BLOCK_REASON_LABELS={ORDER_CANCELLED:'채널 주문 취소됨',ADDRESS_INCOMPLETE:'배송지 정보 불완전',OPTION_MISMATCH:'옵션 매칭 실패',DRAFT_NOT_FOUND:'draft를 찾을 수 없음',SUPPLIER_FETCH_FAILED:'공급처 조회 실패',SUPPLIER_SOLD_OUT:'공급처 품절',SUPPLIER_SALE_STOPPED:'공급처 판매중지',MOQ_CHANGED:'최소주문수량 변경됨',LOSS_AT_CURRENT_PRICE:'현재가 기준 손실'};
+    const BLOCK_REASON_LABELS={ORDER_CANCELLED:'채널 주문 취소됨',ADDRESS_INCOMPLETE:'배송지 정보 불완전',OPTION_MISMATCH:'옵션 매칭 실패',DRAFT_NOT_FOUND:'draft를 찾을 수 없음',SUPPLIER_FETCH_FAILED:'공급처 조회 실패',SUPPLIER_SOLD_OUT:'공급처 품절',SUPPLIER_SALE_STOPPED:'공급처 판매중지',MOQ_CHANGED:'최소주문수량 변경됨',LOSS_AT_CURRENT_PRICE:'현재가 기준 손실',MARKET_UNRESOLVED:'도매꾹/도매매 구분 확인 불가'};
     let purchaseOrdersStatusFilter='awaiting_purchase_approval';
     async function loadPurchaseOrdersView(){
       const el=document.getElementById('specialView');
@@ -1126,24 +1147,39 @@ function adminHtml() {
       const data=await api('/api/purchase-orders'+query);
       const orders=data.orders||[];
       el.innerHTML='<div style="padding:12px">'
-        +'<div class="section"><h3>발주안 (Phase 8, 13.4) -- 검토 전용, 실제 발주 기능은 아직 연결되지 않음</h3>'
+        +'<div class="section"><h3>발주안 (Phase 8, 13.4) -- 승인 시 도매매에 실제 발주됩니다 (되돌릴 수 없음)</h3>'
         +'<select id="purchaseOrdersStatusFilter"><option value="">전체</option>'
         +'<option value="awaiting_purchase_approval">승인 대기</option>'
         +'<option value="validating_supplier">검증/차단됨</option>'
         +'<option value="supplier_ordered">발주 완료</option></select>'
+        +'<div id="purchaseOrdersActionResult" class="muted"></div>'
         +'<div id="purchaseOrdersList">'+purchaseOrdersListHtml(orders)+'</div>'
         +'</div></div>';
       const filterEl=document.getElementById('purchaseOrdersStatusFilter');
       filterEl.value=purchaseOrdersStatusFilter;
       filterEl.addEventListener('change',()=>{purchaseOrdersStatusFilter=filterEl.value;loadPurchaseOrdersView();});
+      for(const b of document.querySelectorAll('[data-purchase-order-approve-id]')){
+        b.addEventListener('click',async()=>{
+          const id=b.dataset.purchaseOrderApproveId;
+          if(!confirm('실제로 도매매에 발주합니다 (공급가 x 발주수량만큼 e-money가 즉시 차감되며 되돌릴 수 없습니다). 계속할까요?'))return;
+          const resultEl=document.getElementById('purchaseOrdersActionResult');
+          resultEl.textContent='발주 처리 중...';
+          try{
+            const data=await api('/api/purchase-orders/'+id+'/approve',{method:'POST',body:JSON.stringify({confirm:true})});
+            resultEl.textContent=data.order.status==='supplier_ordered'?('발주 완료 (도매매 주문번호 '+data.order.domemeOrderNo+')'):('발주 실패/차단: '+(data.order.failureMessage||JSON.stringify(data.order.blockReasons||[])));
+          }catch(error){resultEl.textContent='오류: '+error.message+(error.details&&error.details.dmessage?(' ('+error.details.dmessage+')'):'');}
+          await loadPurchaseOrdersView();
+        });
+      }
     }
     function purchaseOrdersListHtml(orders){
       if(!orders||!orders.length)return '<p class="muted">발주안이 없습니다.</p>';
-      return '<table><thead><tr><th>채널</th><th>공급처 상품번호</th><th>옵션코드</th><th>판매수량</th><th>발주수량</th><th>판매금액</th><th>공급가</th><th>예상순이익</th><th>상태</th><th>차단사유</th></tr></thead><tbody>'
-        +orders.map(o=>'<tr><td>'+escapeHtml(o.channel||'-')+'</td><td>'+escapeHtml(o.supplierProductNo||'-')+'</td><td>'+escapeHtml(o.supplierOptionCode||'-')+'</td>'
+      return '<table><thead><tr><th>채널</th><th>공급처 상품번호</th><th>시장</th><th>옵션코드</th><th>판매수량</th><th>발주수량</th><th>판매금액</th><th>공급가</th><th>예상순이익</th><th>상태</th><th>차단사유</th><th>액션</th></tr></thead><tbody>'
+        +orders.map(o=>'<tr><td>'+escapeHtml(o.channel||'-')+'</td><td>'+escapeHtml(o.supplierProductNo||'-')+'</td><td>'+escapeHtml(o.supplierMarket||'-')+'</td><td>'+escapeHtml(o.supplierOptionCode||'-')+'</td>'
           +'<td>'+(o.saleQty??'-')+'</td><td>'+(o.supplierOrderQty??'-')+'</td><td>'+money(o.salePrice)+'</td><td>'+money(o.supplierUnitPrice)+'</td><td>'+money(o.estimatedProfit)+'</td>'
           +'<td>'+(o.status==='awaiting_purchase_approval'?'<span class="badge">':'<span class="badge reasonBlock">')+escapeHtml(SUPPLIER_ORDER_STATUS_LABELS[o.status]||o.status)+'</span></td>'
-          +'<td>'+(o.blockReasons&&o.blockReasons.length?o.blockReasons.map(r=>escapeHtml(BLOCK_REASON_LABELS[r]||r)).join(', '):'-')+'</td></tr>').join('')
+          +'<td>'+(o.blockReasons&&o.blockReasons.length?o.blockReasons.map(r=>escapeHtml(BLOCK_REASON_LABELS[r]||r)).join(', '):'-')+'</td>'
+          +'<td>'+(o.status==='awaiting_purchase_approval'?'<button type="button" data-purchase-order-approve-id="'+o.id+'">발주 승인</button>':'-')+'</td></tr>').join('')
         +'</tbody></table>';
     }
     const ORDER_MAPPING_STATUS_LABELS={mapping_required:'매핑 필요',mapped:'매핑 완료'};

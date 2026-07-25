@@ -6,6 +6,7 @@ function toSupplierOrder(row) {
     supplierProductId: Number(row.supplier_product_id),
     status: row.status,
     blockReasons: row.block_reasons || [],
+    supplierMarket: row.supplier_market,
     supplierOptionCode: row.supplier_option_code,
     supplierOrderQty: row.supplier_order_qty == null ? null : Number(row.supplier_order_qty),
     saleQty: row.sale_qty == null ? null : Number(row.sale_qty),
@@ -33,21 +34,22 @@ function toSupplierOrder(row) {
 // can never regress one of those back to a validation status either.
 export async function upsertSupplierOrderDraft(db, {
   channelOrderId, productDraftId, supplierProductId, status, blockReasons = [],
-  supplierOptionCode = null, supplierOrderQty = null, saleQty = null, salePrice = null,
+  supplierMarket = null, supplierOptionCode = null, supplierOrderQty = null, saleQty = null, salePrice = null,
   supplierUnitPrice = null, supplierShippingFee = null, estimatedProfit = null,
 }) {
   const result = await db.query(
     `insert into supplier_orders (
        channel_order_id, product_draft_id, supplier_product_id, status, block_reasons,
-       supplier_option_code, supplier_order_qty, sale_qty, sale_price,
+       supplier_market, supplier_option_code, supplier_order_qty, sale_qty, sale_price,
        supplier_unit_price, supplier_shipping_fee, estimated_profit, supplier_checked_at
-     ) values ($1,$2,$3,$4,$5::jsonb,$6,$7,$8,$9,$10,$11,$12, now())
+     ) values ($1,$2,$3,$4,$5::jsonb,$6,$7,$8,$9,$10,$11,$12,$13, now())
      on conflict (channel_order_id) do update set
        status = case
          when supplier_orders.status in ('supplier_ordering', 'supplier_ordered') then supplier_orders.status
          else excluded.status
        end,
        block_reasons = excluded.block_reasons,
+       supplier_market = excluded.supplier_market,
        supplier_option_code = excluded.supplier_option_code,
        supplier_order_qty = excluded.supplier_order_qty,
        sale_qty = excluded.sale_qty,
@@ -60,7 +62,7 @@ export async function upsertSupplierOrderDraft(db, {
      returning *`,
     [
       channelOrderId, productDraftId, supplierProductId, status, JSON.stringify(blockReasons),
-      supplierOptionCode, supplierOrderQty, saleQty, salePrice, supplierUnitPrice, supplierShippingFee, estimatedProfit,
+      supplierMarket, supplierOptionCode, supplierOrderQty, saleQty, salePrice, supplierUnitPrice, supplierShippingFee, estimatedProfit,
     ],
   );
   return toSupplierOrder(result.rows[0]);
