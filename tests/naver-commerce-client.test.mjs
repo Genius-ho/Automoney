@@ -177,6 +177,43 @@ test('NaverCommerceClient.queryProductOrders POSTs the productOrderIds batch', a
   assert.deepEqual(captured.body, { productOrderIds: ['A', 'B'] });
 });
 
+// Confirmed spec, 2026-07-26 -- pasted directly from apicenter.commerce.naver.com
+// by the user (the docs site itself is blocked for WebFetch/browser
+// navigation in this environment).
+test('NaverCommerceClient.confirmProductOrders POSTs the productOrderIds batch to the confirm endpoint', async () => {
+  let captured;
+  const fetchImpl = async (url, init) => {
+    if (String(url).includes('/v1/oauth2/token')) return tokenFetchImpl()(url);
+    captured = { url: String(url), method: init.method, body: JSON.parse(init.body) };
+    return { ok: true, status: 200, async text() { return JSON.stringify({ timestamp: '2026-07-26T00:00:00Z', traceId: 'x', data: { successProductOrderIds: ['A'], failProductOrderInfos: [] } }); } };
+  };
+  const client = new NaverCommerceClient({ clientId: 'client-1', clientSecret: '$2b$10$j7fv77w6f6U3cxYt80fLJ.', fetchImpl });
+
+  const result = await client.confirmProductOrders(['A']);
+
+  assert.equal(captured.url, 'https://api.commerce.naver.com/external/v1/pay-order/seller/product-orders/confirm');
+  assert.equal(captured.method, 'POST');
+  assert.deepEqual(captured.body, { productOrderIds: ['A'] });
+  assert.deepEqual(result.data.successProductOrderIds, ['A']);
+});
+
+test('NaverCommerceClient.dispatchProductOrders POSTs the dispatchProductOrders array to the dispatch endpoint', async () => {
+  let captured;
+  const fetchImpl = async (url, init) => {
+    if (String(url).includes('/v1/oauth2/token')) return tokenFetchImpl()(url);
+    captured = { url: String(url), method: init.method, body: JSON.parse(init.body) };
+    return { ok: true, status: 200, async text() { return JSON.stringify({ timestamp: '2026-07-26T00:00:00Z', traceId: 'x', data: { successProductOrderIds: ['A'], failProductOrderInfos: [] } }); } };
+  };
+  const client = new NaverCommerceClient({ clientId: 'client-1', clientSecret: '$2b$10$j7fv77w6f6U3cxYt80fLJ.', fetchImpl });
+
+  const dispatchProductOrders = [{ productOrderId: 'A', deliveryMethod: 'DELIVERY', deliveryCompanyCode: 'HYUNDAI', trackingNumber: '255593464954', dispatchDate: '2026-07-26T00:00:00.000+09:00' }];
+  await client.dispatchProductOrders(dispatchProductOrders);
+
+  assert.equal(captured.url, 'https://api.commerce.naver.com/external/v1/pay-order/seller/product-orders/dispatch');
+  assert.equal(captured.method, 'POST');
+  assert.deepEqual(captured.body, { dispatchProductOrders });
+});
+
 test('NaverCommerceClient surfaces a non-OK response as NaverCommerceApiError without leaking the secret', async () => {
   const fetchImpl = async (url) => {
     if (String(url).includes('/v1/oauth2/token')) return tokenFetchImpl()(url);

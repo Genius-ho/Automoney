@@ -90,6 +90,69 @@ test('dispatchSupplierOrderToChannel records a failed upload as channelShipStatu
   assert.match(recorded.channelShipError, /INVOICE_ALREADY_EXISTS/);
 });
 
+test('dispatchSupplierOrderToChannel confirms then dispatches a Naver order, and records success', async () => {
+  let confirmArgs;
+  let dispatchArgs;
+  let recorded;
+  const client = {
+    async confirmProductOrders(ids) { confirmArgs = ids; return { data: { successProductOrderIds: ids, failProductOrderInfos: [] } }; },
+    async dispatchProductOrders(items) { dispatchArgs = items; return { data: { successProductOrderIds: [items[0].productOrderId], failProductOrderInfos: [] } }; },
+  };
+  await dispatchSupplierOrderToChannel({}, 5, { naverClient: client }, {
+    getSupplierOrderImpl: async () => fakeSupplierOrder(),
+    getChannelOrderImpl: async () => fakeChannelOrder({ channel: 'naver', channelOrderItemId: '2026072512345671' }),
+    recordChannelShipmentResultImpl: async (db, id, args) => { recorded = args; return { ...fakeSupplierOrder(), ...args }; },
+  });
+  assert.deepEqual(confirmArgs, ['2026072512345671']);
+  assert.equal(dispatchArgs[0].productOrderId, '2026072512345671');
+  assert.equal(dispatchArgs[0].deliveryMethod, 'DELIVERY');
+  assert.equal(dispatchArgs[0].deliveryCompanyCode, 'HYUNDAI');
+  assert.equal(dispatchArgs[0].trackingNumber, '255593464954');
+  assert.equal(recorded.channelShipStatus, 'sent');
+});
+
+test('dispatchSupplierOrderToChannel records a Naver 발주확인 failure without attempting dispatchProductOrders', async () => {
+  let dispatchCalled = false;
+  let recorded;
+  const client = {
+    async confirmProductOrders(ids) { return { data: { successProductOrderIds: [], failProductOrderInfos: [{ productOrderId: ids[0], code: 'INVALID_STATUS', message: '이미 발주확인된 주문' }] } }; },
+    async dispatchProductOrders() { dispatchCalled = true; return {}; },
+  };
+  await dispatchSupplierOrderToChannel({}, 5, { naverClient: client }, {
+    getSupplierOrderImpl: async () => fakeSupplierOrder(),
+    getChannelOrderImpl: async () => fakeChannelOrder({ channel: 'naver', channelOrderItemId: '2026072512345671' }),
+    recordChannelShipmentResultImpl: async (db, id, args) => { recorded = args; return { ...fakeSupplierOrder(), ...args }; },
+  });
+  assert.equal(dispatchCalled, false);
+  assert.equal(recorded.channelShipStatus, 'failed');
+  assert.match(recorded.channelShipError, /발주확인 실패/);
+});
+
+test('dispatchSupplierOrderToChannel records a Naver 발송처리 failure', async () => {
+  let recorded;
+  const client = {
+    async confirmProductOrders(ids) { return { data: { successProductOrderIds: ids, failProductOrderInfos: [] } }; },
+    async dispatchProductOrders(items) { return { data: { successProductOrderIds: [], failProductOrderInfos: [{ productOrderId: items[0].productOrderId, code: 'INVALID_DELIVERY_COMPANY', message: '잘못된 택배사' }] } }; },
+  };
+  await dispatchSupplierOrderToChannel({}, 5, { naverClient: client }, {
+    getSupplierOrderImpl: async () => fakeSupplierOrder(),
+    getChannelOrderImpl: async () => fakeChannelOrder({ channel: 'naver', channelOrderItemId: '2026072512345671' }),
+    recordChannelShipmentResultImpl: async (db, id, args) => { recorded = args; return { ...fakeSupplierOrder(), ...args }; },
+  });
+  assert.equal(recorded.channelShipStatus, 'failed');
+  assert.match(recorded.channelShipError, /발송처리 실패/);
+});
+
+test('dispatchSupplierOrderToChannel records unsupported_channel for an unknown channel', async () => {
+  let recorded;
+  await dispatchSupplierOrderToChannel({}, 5, {}, {
+    getSupplierOrderImpl: async () => fakeSupplierOrder(),
+    getChannelOrderImpl: async () => fakeChannelOrder({ channel: 'gmarket' }),
+    recordChannelShipmentResultImpl: async (db, id, args) => { recorded = args; return { ...fakeSupplierOrder(), ...args }; },
+  });
+  assert.equal(recorded.channelShipStatus, 'unsupported_channel');
+});
+
 test('runChannelDispatchSweep continues past a single dispatch failure', async () => {
   const attempted = [];
   const results = await runChannelDispatchSweep({}, {}, {

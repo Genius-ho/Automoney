@@ -170,6 +170,32 @@ export class NaverCommerceClient {
       operation: 'query_product_orders',
     });
   }
+
+  // [주문] 발주 확인 처리 -- confirmed spec, 2026-07-26 (apicenter.commerce.naver.com,
+  // pasted directly by the user since the docs site itself is blocked for
+  // both WebFetch and browser navigation in this environment). Required
+  // before dispatchProductOrders -- a product order's placeOrderStatus only
+  // advances once this succeeds. Max 30 productOrderIds per call.
+  async confirmProductOrders(productOrderIds) {
+    return this.request('POST', '/v1/pay-order/seller/product-orders/confirm', {
+      body: { productOrderIds },
+      operation: 'confirm_product_orders',
+    });
+  }
+
+  // [주문] 발송 처리 -- confirmed spec, 2026-07-26 (same source as above).
+  // deliveryCompanyCode uses the exact same code set as Coupang's own
+  // deliveryCompanyCode (CJGLS/HYUNDAI/HANJIN/KGB/EPOST/... all identical),
+  // confirmed by comparing both published tables side by side -- see
+  // carrier-code-map.mjs. Max 30 items per call. Response shares the same
+  // { timestamp, traceId, data: { successProductOrderIds, failProductOrderInfos } }
+  // shape as confirmProductOrders.
+  async dispatchProductOrders(dispatchProductOrders) {
+    return this.request('POST', '/v1/pay-order/seller/product-orders/dispatch', {
+      body: { dispatchProductOrders },
+      operation: 'dispatch_product_orders',
+    });
+  }
 }
 
 function parseJson(text) {
