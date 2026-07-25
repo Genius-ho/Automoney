@@ -3,7 +3,7 @@ import { mkdir, readFile, rename, rm, writeFile } from 'node:fs/promises';
 import { extname, join, resolve } from 'node:path';
 import { createHash } from 'node:crypto';
 
-import { loadAiSecrets, loadCodexConfig, loadCoupangConfig, loadDatabaseUrl, loadEnvConfig, loadJobPathsConfig, loadNaverCommerceConfig, loadNaverConfig, loadPricingRules, loadPythonConfig } from './config.mjs';
+import { loadAiSecrets, loadCodexConfig, loadCoupangConfig, loadDatabaseUrl, loadDomemePrivateConfig, loadEnvConfig, loadJobPathsConfig, loadNaverCommerceConfig, loadNaverConfig, loadPricingRules, loadPythonConfig } from './config.mjs';
 import { DomemeClient } from './domeme-client.mjs';
 import { runCandidateDiscoveryBatch, runDailyProcessingBatch } from './auto-discovery-batch.mjs';
 import { getBatchScheduleState, updateBatchScheduleState } from './batch-schedule-store.mjs';
@@ -26,6 +26,8 @@ import { createNaverDirectRegistration } from './naver-registration-flow.mjs';
 import { createPgPool, runSchema } from './postgres-store.mjs';
 import { listChannelOrders } from './channel-orders-store.mjs';
 import { maskOrderForLog } from './order-collector.mjs';
+import { DomemePrivateApiError, DomemePrivateClient } from './domeme-private-client.mjs';
+import { getValidDomemeSId } from './domeme-private-session.mjs';
 import { isAllowedPublicAssetPath } from './public-assets.mjs';
 import { buildMainImagePackage } from './manual-ai/package-builder.mjs';
 import { buildDetailPagePackage } from './manual-ai/detail-package-builder.mjs';
@@ -586,6 +588,35 @@ async function handleRequest({ request, response, db, aiSecrets, rootDir }) {
     return;
   }
 
+  // Phase 8 (section 13.1 사전 확인) -- read-only: logs in (reusing a cached
+  // session when still valid) and checks the e-money balance. Never creates,
+  // cancels, or otherwise touches an order. "주문 생성 API 사용 가능 여부" and
+  // "배송대행 주문 지원 여부" can't be verified without placing a real order, so
+  // those stay manual checklist items in the UI rather than fields this
+  // route can honestly report on.
+  if (url.pathname === '/api/domeme/precheck' && request.method === 'GET') {
+    try {
+      const config = await loadDomemePrivateConfig(rootDir);
+      const client = new DomemePrivateClient(config);
+      const sId = await getValidDomemeSId(db, client);
+      const asset = await client.getMyAsset({ sId });
+      sendJson(response, 200, {
+        ok: true,
+        loginId: config.loginId,
+        emoneyCash: asset.emoneyCash,
+        emoneyTotal: asset.emoneyTotal,
+        checkedAt: new Date().toISOString(),
+      });
+    } catch (error) {
+      if (error instanceof DomemePrivateApiError) {
+        sendJson(response, 502, { ok: false, error: error.message, dcode: error.dcode, dmessage: error.dmessage });
+        return;
+      }
+      sendJson(response, 500, { ok: false, error: error.message });
+    }
+    return;
+  }
+
   if (url.pathname === '/api/auto-batch/queue' && request.method === 'GET') {
     const status = url.searchParams.get('status') || undefined;
     const [queue, activeCount, nextItem] = await Promise.all([
@@ -916,6 +947,7 @@ function adminHtml() {
         <button id="viewRegistrationsButton" type="button">등록·재고관리</button>
         <button id="viewAutoBatchButton" type="button">자동배치</button>
         <button id="viewChannelOrdersButton" type="button">주문</button>
+        <button id="viewDomemePrecheckButton" type="button">발주(도매매)</button>
       </div>
       <div class="toolbar">
         <select id="statusFilter"><option value="">all</option><option value="draft">draft</option><option value="needs_review">needs_review</option><option value="blocked">blocked</option><option value="approved">approved</option></select>
@@ -937,7 +969,7 @@ function adminHtml() {
     const statusFilter=document.getElementById('statusFilter');const naverWinnerFilter=document.getElementById('naverWinnerFilter');const finalDecisionFilter=document.getElementById('finalDecisionFilter');const batchFilter=document.getElementById('batchFilter');const collectedOnly=document.getElementById('collectedOnly');
     document.getElementById('reloadButton').addEventListener('click',loadList);document.getElementById('naverCandidateButton').addEventListener('click',()=>{naverWinnerFilter.value='candidate';loadList();});statusFilter.addEventListener('change',loadList);naverWinnerFilter.addEventListener('change',loadList);finalDecisionFilter.addEventListener('change',loadList);batchFilter.addEventListener('change',loadList);collectedOnly.addEventListener('change',loadList);
     let currentView='all';
-    const viewButtons={all:document.getElementById('viewAllButton'),recommend:document.getElementById('viewRecommendButton'),registrations:document.getElementById('viewRegistrationsButton'),autoBatch:document.getElementById('viewAutoBatchButton'),channelOrders:document.getElementById('viewChannelOrdersButton')};
+    const viewButtons={all:document.getElementById('viewAllButton'),recommend:document.getElementById('viewRecommendButton'),registrations:document.getElementById('viewRegistrationsButton'),autoBatch:document.getElementById('viewAutoBatchButton'),channelOrders:document.getElementById('viewChannelOrdersButton'),domemePrecheck:document.getElementById('viewDomemePrecheckButton')};
     for(const [view,button] of Object.entries(viewButtons))button.addEventListener('click',()=>switchView(view));
     function switchView(view){
       currentView=view;
@@ -949,6 +981,7 @@ function adminHtml() {
       else if(view==='registrations')loadRegistrationsView();
       else if(view==='autoBatch')loadAutoBatchView();
       else if(view==='channelOrders')loadChannelOrdersView();
+      else if(view==='domemePrecheck')loadDomemePrecheckView();
     }
     const QUEUE_STATUS_LABELS={queued:'대기 중',analyzing:'분석 중',generating_images:'이미지 생성 중',awaiting_approval:'승인 대기',ready_for_registration:'등록 준비 완료',failed:'실패'};
     async function loadAutoBatchView(){
@@ -1096,6 +1129,33 @@ function adminHtml() {
           +'<td>'+(o.supplierMappingStatus==='mapping_required'?'<span class="badge reasonBlock">':'<span class="badge">')+escapeHtml(ORDER_MAPPING_STATUS_LABELS[o.supplierMappingStatus]||o.supplierMappingStatus)+'</span></td>'
           +'<td>'+(o.productDraftId?'<a href="/admin?draftId='+o.productDraftId+'">#'+o.productDraftId+'</a>':'-')+'</td></tr>').join('')
         +'</tbody></table>';
+    }
+    async function loadDomemePrecheckView(){
+      const el=document.getElementById('specialView');
+      el.innerHTML='<p class="muted" style="padding:12px">확인 중...</p>';
+      let data;
+      try{ data=await api('/api/domeme/precheck'); }
+      catch(error){ data={ok:false,error:error.message,dcode:error.details&&error.details.dcode,dmessage:error.details&&error.details.dmessage}; }
+      el.innerHTML='<div style="padding:12px">'
+        +'<div class="section"><h3>도매매 발주 사전 확인 (Phase 8, 13.1)</h3>'
+        +(data.ok
+          ?('<div>로그인/세션: <span class="badge">정상</span> (id: '+escapeHtml(data.loginId)+')</div>'
+            +'<div>e-money 잔액 조회: <span class="badge">정상</span></div>'
+            +'<div>현금성 이머니 잔액: '+money(data.emoneyCash)+'</div>'
+            +'<div>총 이머니 잔액: '+money(data.emoneyTotal)+'</div>'
+            +'<div class="muted">마지막 확인: '+escapeHtml(data.checkedAt)+'</div>')
+          :('<div>로그인/세션: <span class="badge reasonBlock">실패</span></div>'
+            +'<div class="muted">'+escapeHtml(data.dmessage||data.error||'알 수 없는 오류')+(data.dcode?(' ('+escapeHtml(data.dcode)+')'):'')+'</div>'))
+        +'<p><button id="domemePrecheckRefreshButton" type="button">다시 확인</button></p>'
+        +'<h4>수동 확인 필요 항목 (API로 검증 불가)</h4>'
+        +'<ul>'
+        +'<li>주문 생성 API 사용 가능 여부 -- 실제 발주 전에는 확인할 방법이 없음 (테스트 발주 자체가 실제 주문/실제 결제)</li>'
+        +'<li>배송대행 주문 지원 여부 -- 도매매 관리자센터에서 직접 확인 필요</li>'
+        +'<li>테스트 주문 취소 가능 여부 -- 실제 주문 발생 후에만 setOrdDeny로 확인 가능</li>'
+        +'</ul>'
+        +'</div></div>';
+      const refreshButton=document.getElementById('domemePrecheckRefreshButton');
+      if(refreshButton)refreshButton.addEventListener('click',loadDomemePrecheckView);
     }
     const AUTO_BATCH_STATUS_LABELS={selected:'선정됨',draft_created:'draft 생성됨',analysis_running:'분석 중',analysis_completed:'분석 완료',image_generation_running:'이미지 생성 중',awaiting_image_approval:'이미지 승인 대기',failed:'실패'};
     async function loadAutoBatchRunDetail(runId){
