@@ -295,7 +295,7 @@ test('filterProduct blocks parsing errors and low cost, reviews risk keywords an
 test('normalizeProduct and filterProduct classify supplier market and order quantities', () => {
   const domeme = normalizeProduct(
     '49168396',
-    { productName: 'sample', supplyPrice: '10000', images: ['https://example.test/a.jpg'], minOrderQty: 1 },
+    { productName: 'sample', supplyPrice: '20000', images: ['https://example.test/a.jpg'], minOrderQty: 1 },
     { requestedMarket: 'dome' },
   );
   const domemeMoq = normalizeProduct(
@@ -306,13 +306,13 @@ test('normalizeProduct and filterProduct classify supplier market and order quan
   const domeggook = normalizeProduct('49168398', {
     productName: 'sample',
     market: 'domeggook',
-    supplyPrice: '10000',
+    supplyPrice: '20000',
     images: ['https://example.test/a.jpg'],
     minOrderQty: 1,
   });
   const unknown = normalizeProduct('49168399', {
     productName: 'sample',
-    supplyPrice: '10000',
+    supplyPrice: '20000',
     images: ['https://example.test/a.jpg'],
   });
 
@@ -362,6 +362,53 @@ test('low cost min order products become bundle candidates', () => {
   assert.equal(prices.coupang, 11240);
   assert.equal(filterProduct(largeBundle).filterStatus, 'blocked');
   assert.ok(filterProduct(largeBundle).blockReasons.includes('blocked_large_bundle'));
+});
+
+// automoney_complete_automation_implementation_plan.md 8.3: "MOQ 3 이상은
+// 원칙적으로 자동등록 후보에서 제외한다" -- this used to only block at >=5,
+// silently letting MOQ 3/4 bundles through as a mere review flag instead.
+test('MOQ 3 and MOQ 4 are blocked as large bundles, not just flagged for review', () => {
+  const moq3 = normalizeProduct(
+    '49168402',
+    { productName: 'hook', supplyPrice: '2500', images: ['https://example.test/a.jpg'], minOrderQty: 3 },
+    { requestedMarket: 'dome' },
+  );
+  const moq4 = normalizeProduct(
+    '49168403',
+    { productName: 'hook', supplyPrice: '2500', images: ['https://example.test/a.jpg'], minOrderQty: 4 },
+    { requestedMarket: 'dome' },
+  );
+  assert.equal(filterProduct(moq3).filterStatus, 'blocked');
+  assert.ok(filterProduct(moq3).blockReasons.includes('blocked_large_bundle'));
+  assert.equal(filterProduct(moq4).filterStatus, 'blocked');
+  assert.ok(filterProduct(moq4).blockReasons.includes('blocked_large_bundle'));
+});
+
+// Plan 8.2's 2-set conditions (총 공급원가 15,000원 이하, 예상 판매가 35,000원
+// 이하 권장) were never checked at all before -- a bundle only had to clear
+// the generic profit floor, so an expensive 2-set (like the real draft 24 in
+// this project's DB: bundleCostPrice 29,260) passed with no signal.
+test('an MOQ 2 bundle over the 15,000 cost / 35,000 sale-price ceilings is flagged for review, not silently passed', () => {
+  const cheapBundle = normalizeProduct(
+    '49168404',
+    { productName: 'hook', supplyPrice: '3000', images: ['https://example.test/a.jpg'], minOrderQty: 2 },
+    { requestedMarket: 'dome' },
+  );
+  const expensiveBundle = normalizeProduct(
+    '49168405',
+    { productName: 'shelf', supplyPrice: '14000', images: ['https://example.test/a.jpg'], minOrderQty: 2 },
+    { requestedMarket: 'dome' },
+  );
+  assert.equal(cheapBundle.bundleCostPrice, 6000);
+  const cheapFilter = filterProduct(cheapBundle);
+  assert.ok(!cheapFilter.reviewReasons.includes('needs_review_bundle_cost_over_15000'));
+  assert.ok(!cheapFilter.reviewReasons.includes('needs_review_bundle_sale_over_35000'));
+
+  assert.equal(expensiveBundle.bundleCostPrice, 28000);
+  const expensiveFilter = filterProduct(expensiveBundle);
+  assert.equal(expensiveFilter.filterStatus, 'needs_review'); // still review, not a hard block -- the plan phrases both ceilings as "권장" (recommended), not "금지"
+  assert.ok(expensiveFilter.reviewReasons.includes('needs_review_bundle_cost_over_15000'));
+  assert.ok(expensiveFilter.reviewReasons.includes('needs_review_bundle_sale_over_35000'));
 });
 
 test('calculatePrices uses rules for each marketplace', () => {

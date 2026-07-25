@@ -18,7 +18,16 @@ function toQueueItem(row) {
 
 // "동일 상품 중복 적재 금지" -- true if this supplier_product_no is either
 // already sitting in the queue in a non-terminal state, or already has a
-// draft (created by this or any earlier run/manual import).
+// draft (created by this or any earlier run/manual import). A queue row only
+// ever reaches 'failed' after already clearing the scoring/eligibility
+// filter (enqueueCandidate is called for winners only -- see
+// runCandidateDiscoveryBatch), so every 'failed' row here is a downstream
+// technical failure (draft creation, analysis, image generation) on an
+// already-vetted good candidate, not a business-rule rejection. Permanently
+// excluding those would contradict the plan's own resumability principle
+// ("실패 처리하지 않음... 재개 가능한 대기 상태로 관리") by blacklisting a
+// perfectly good product forever over one bad network blip -- so 'failed'
+// stays excludable from "active", letting a future discovery cycle retry it.
 export async function isCandidateActiveOrQueued(db, supplierProductNo) {
   const queued = await db.query(
     `select 1 from processing_queue where supplier_product_no = $1 and status <> 'failed' limit 1`,

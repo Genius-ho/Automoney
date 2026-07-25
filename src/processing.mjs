@@ -75,10 +75,27 @@ export function filterProduct(product) {
   if (product.sourceMarket === 'domeggook') reviewReasons.push('needs_review_source_market');
   if (product.sourceMarket === 'unknown') reviewReasons.push('needs_review_source_market_unknown');
   const minOrderQty = Number(product.minOrderQty || 1);
-  if (minOrderQty >= 5) {
+  if (minOrderQty >= 3) {
+    // automoney_complete_automation_implementation_plan.md 8.3: "MOQ 3 이상은
+    // 원칙적으로 자동등록 후보에서 제외한다" -- this used to only block at >=5,
+    // silently letting MOQ 3/4 bundles through as a mere review flag.
     blockReasons.push('blocked_large_bundle');
   } else if (product.sellUnitType === 'bundle') {
+    // Only ever MOQ === 2 reaches here now that >=3 is blocked above. Plan
+    // 8.2's 2개 세트 조건: 총 공급원가 15,000원 이하, 예상 판매가 35,000원 이하
+    // 권장 -- these were never checked at all before; only a generic
+    // profit-floor check applied (see minProfit below), so a bundle could
+    // clear that while still being an expensive, poor-fit 2-set (e.g. draft
+    // 24's real bundleCostPrice of 29,260 -- almost double the recommended
+    // ceiling -- currently passes with no signal at all).
     reviewReasons.push('bundle_candidate');
+    if (Number.isFinite(product.bundleCostPrice) && product.bundleCostPrice > 15000) {
+      reviewReasons.push('needs_review_bundle_cost_over_15000');
+    }
+    const estimatedSale = estimateSalePrice(product);
+    if (estimatedSale !== null && estimatedSale > 35000) {
+      reviewReasons.push('needs_review_bundle_sale_over_35000');
+    }
   } else if (minOrderQty > 1) {
     reviewReasons.push('needs_review_min_order_qty');
   }
@@ -94,7 +111,10 @@ export function filterProduct(product) {
   }
 
   const minProfit = estimateMinimumProfit(product);
-  if (minProfit !== null && minProfit < 3000) {
+  // "예상 순이익 5,000원 이상" is the documented pass bar (both the retired
+  // roadmap's 7.1 and the current plan's 7.3) -- this used a different,
+  // undocumented 3,000 threshold.
+  if (minProfit !== null && minProfit < 5000) {
     if (product.sellUnitType === 'bundle') reviewReasons.push('needs_review_low_margin');
     else blockReasons.push('blocked_low_margin');
   }
@@ -453,11 +473,22 @@ function filterResult(filterStatus, blockReasons, reviewReasons, accepted) {
   };
 }
 
+// Rough go/no-go estimate at the filter stage, before calculatePrices' real
+// per-platform fee rates are available (filterProduct only ever sees the
+// product, never pricingRules) -- a flat 25% margin / 6% fee heuristic,
+// same numbers estimateMinimumProfit already used.
+function estimateSalePrice(product) {
+  const cost = product.bundleCostPrice ?? product.cost;
+  if (!Number.isFinite(cost) || cost <= 0) return null;
+  const shippingFee = Number.isFinite(product.shippingFee) ? product.shippingFee : 0;
+  return Math.ceil(((cost + shippingFee) * 1.25) / 0.94);
+}
+
 function estimateMinimumProfit(product) {
   const cost = product.bundleCostPrice ?? product.cost;
   if (!Number.isFinite(cost) || cost <= 0) return null;
   const shippingFee = Number.isFinite(product.shippingFee) ? product.shippingFee : 0;
-  const estimatedSale = Math.ceil(((cost + shippingFee) * 1.25) / 0.94);
+  const estimatedSale = estimateSalePrice(product);
   return estimatedSale - cost - shippingFee;
 }
 
