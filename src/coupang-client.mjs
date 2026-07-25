@@ -202,6 +202,18 @@ export class CoupangClient {
       operation: 'list_return_requests',
     });
   }
+
+  // "상품 아이템별 가격 변경" -- confirmed spec, 2026-07-26 (developers.coupang.com).
+  // Price is a PATH segment, not a body field; no request body at all. 10원
+  // increments only. forceSalePriceUpdate bypasses Coupang's normal
+  // percentage-change guardrail -- default false (let Coupang reject an
+  // unusually large jump rather than silently forcing it through).
+  async updateItemPrice(vendorItemId, price, { forceSalePriceUpdate = false, apMinSalePrice, apActive } = {}) {
+    return this.request('PUT', `/v2/providers/seller_api/apis/api/v1/marketplace/vendor-items/${vendorItemId}/prices/${price}`, {
+      query: { forceSalePriceUpdate: forceSalePriceUpdate || undefined, apMinSalePrice, apActive },
+      operation: 'update_item_price',
+    });
+  }
 }
 
 // Coupang Wing Open API custom HMAC scheme: the signed message is the

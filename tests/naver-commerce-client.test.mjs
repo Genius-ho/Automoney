@@ -253,6 +253,23 @@ test('NaverCommerceClient.changeProductStatus PUTs statusType to the v1 change-s
   assert.equal(result.originProduct.statusType, 'SUSPENSION');
 });
 
+test('NaverCommerceClient.updateOptionStock PUTs the body verbatim to the option-stock endpoint', async () => {
+  let captured;
+  const fetchImpl = async (url, init) => {
+    if (String(url).includes('/v1/oauth2/token')) return tokenFetchImpl()(url);
+    captured = { url: String(url), method: init.method, body: JSON.parse(init.body) };
+    return { ok: true, status: 200, async text() { return JSON.stringify({ originProductNo: 13620845243 }); } };
+  };
+  const client = new NaverCommerceClient({ clientId: 'client-1', clientSecret: '$2b$10$j7fv77w6f6U3cxYt80fLJ.', fetchImpl });
+
+  const body = { productSalePrice: { salePrice: 29900 }, optionInfo: { optionCombinations: [], optionStandards: [], useStockManagement: true } };
+  await client.updateOptionStock(13620845243, body);
+
+  assert.equal(captured.url, 'https://api.commerce.naver.com/external/v1/products/origin-products/13620845243/option-stock');
+  assert.equal(captured.method, 'PUT');
+  assert.deepEqual(captured.body, body);
+});
+
 test('NaverCommerceClient surfaces a failed token request as NaverCommerceApiError', async () => {
   const fetchImpl = async () => ({ ok: false, status: 400, async text() { return JSON.stringify({ error: 'invalid_client' }); } });
   const client = new NaverCommerceClient({ clientId: 'client-1', clientSecret: '$2b$10$j7fv77w6f6U3cxYt80fLJ.', fetchImpl });

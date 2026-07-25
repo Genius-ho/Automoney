@@ -4,6 +4,7 @@ function toRegistrationRow(row) {
     originProductNo: row.origin_product_no,
     channelProductNo: row.channel_product_no,
     status: row.status,
+    linkedVia: row.linked_via,
     createdAt: row.created_at,
     updatedAt: row.updated_at,
   };
@@ -24,11 +25,36 @@ export async function recordNaverDirectRegistration(db, productDraftId, { origin
   if (!originProductNo) throw new Error('originProductNo is required');
   if (!requestHash) throw new Error('requestHash is required');
   const result = await db.query(
-    `insert into naver_product_registrations (product_draft_id, origin_product_no, channel_product_no, request_hash, status)
-     values ($1, $2, $3, $4, 'created')
+    `insert into naver_product_registrations (product_draft_id, origin_product_no, channel_product_no, request_hash, status, linked_via)
+     values ($1, $2, $3, $4, 'created', 'direct_api')
      on conflict (product_draft_id) do nothing
      returning *`,
     [productDraftId, String(originProductNo), channelProductNo ? String(channelProductNo) : null, requestHash],
   );
   return result.rows[0] ? toRegistrationRow({ ...result.rows[0], product_draft_id: productDraftId }) : null;
+}
+
+// Explicit, user-confirmed link between a locally-tracked draft and an
+// originProductNo the user found on Naver's own seller center (i.e. a
+// listing registered externally through 스피드등록, not through this app's
+// own createOriginProduct() pipeline) -- never called automatically. There's
+// no confirmed "search products by name" endpoint for Naver Commerce in this
+// codebase (unlike Coupang's listSellerProducts), so unlike
+// linkCoupangRegistration this takes the originProductNo directly rather
+// than a search-result pick.
+export async function linkNaverRegistration(db, productDraftId, { originProductNo }) {
+  if (!originProductNo) throw new Error('originProductNo is required');
+  const requestHash = `speedgo:${originProductNo}`;
+  const result = await db.query(
+    `insert into naver_product_registrations (product_draft_id, origin_product_no, request_hash, status, linked_via)
+     values ($1, $2, $3, 'linked', 'speedgo_link')
+     on conflict (product_draft_id) do update set
+       origin_product_no = excluded.origin_product_no,
+       linked_via = 'speedgo_link',
+       status = 'linked',
+       updated_at = now()
+     returning *`,
+    [productDraftId, String(originProductNo), requestHash],
+  );
+  return toRegistrationRow({ ...result.rows[0], product_draft_id: productDraftId });
 }

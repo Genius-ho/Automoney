@@ -220,3 +220,21 @@ test('CoupangClient.listReturnRequests queries the v6 returnRequests endpoint wi
   assert.match(captured.url, /searchType=timeFrame/);
   assert.match(captured.url, /cancelType=CANCEL/);
 });
+
+test('CoupangClient.updateItemPrice PUTs price as a path segment with no body, omitting forceSalePriceUpdate by default', async () => {
+  let captured;
+  const fetchImpl = async (url, init) => {
+    captured = { url: String(url), method: init.method, body: init.body };
+    return { ok: true, status: 200, async text() { return JSON.stringify({ code: 'SUCCESS', message: 'Completed price change.', data: null }); } };
+  };
+  const client = new CoupangClient({ accessKey: 'ak', secretKey: 'sk', vendorId: 'A00000000', fetchImpl });
+
+  await client.updateItemPrice(3572784698, 49000);
+  assert.equal(captured.method, 'PUT');
+  assert.match(captured.url, /\/v2\/providers\/seller_api\/apis\/api\/v1\/marketplace\/vendor-items\/3572784698\/prices\/49000$/);
+  assert.equal(captured.body, undefined);
+
+  await client.updateItemPrice(3572784698, 49000, { forceSalePriceUpdate: true });
+  assert.match(captured.url, /forceSalePriceUpdate=true/);
+});
+

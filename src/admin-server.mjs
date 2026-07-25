@@ -21,8 +21,9 @@ import { getCoupangRegistration, linkCoupangRegistration, listCoupangRegistratio
 import { applyProductAnalysis, buildApplyPreview, getAppliedAnalysis, getAnalysisRun, getLatestAnalysisRun, listAnalysisRuns, runProductAnalysis } from './product-analysis-orchestrator.mjs';
 import { buildRegistrationPreview, createDirectRegistration, extractList, previewCategoryAndShipping, requestCoupangSaleApproval, selectRegistrationTarget, validateSellerShippingSettings } from './coupang-registration-flow.mjs';
 import { getSellerShippingSettings, saveSellerShippingSettings } from './coupang-seller-settings-store.mjs';
-import { NaverCommerceClient } from './naver-commerce-client.mjs';
+import { NaverCommerceClient, NaverCommerceApiError } from './naver-commerce-client.mjs';
 import { createNaverDirectRegistration } from './naver-registration-flow.mjs';
+import { getNaverRegistration, linkNaverRegistration } from './naver-registration-store.mjs';
 import { createPgPool, runSchema } from './postgres-store.mjs';
 import { listChannelOrders } from './channel-orders-store.mjs';
 import { maskOrderForLog } from './order-collector.mjs';
@@ -81,6 +82,21 @@ export function renderManualMainImageWorkflowSection({request={},sourceMainImage
 }
 
 function escapeHtmlForSection(value) { return String(value).replaceAll('&', '&amp;').replaceAll('<', '&lt;').replaceAll('>', '&gt;'); }
+
+// Passes the live product's own optionInfo straight through, changing only
+// productSalePrice -- see the /naver-registration/update-price route's own
+// comment for why this doesn't try to reconstruct optionInfo from scratch.
+function buildNaverPriceUpdatePayload(liveProduct, salePrice) {
+  const optionInfo = liveProduct?.originProduct?.detailAttribute?.optionInfo || {};
+  return {
+    productSalePrice: { salePrice },
+    optionInfo: {
+      optionCombinations: optionInfo.optionCombinations || [],
+      optionStandards: optionInfo.optionStandards || [],
+      useStockManagement: optionInfo.useStockManagement ?? false,
+    },
+  };
+}
 
 const AUTO_BATCH_TICK_INTERVAL_MS = 5 * 60 * 1000;
 
@@ -465,6 +481,95 @@ async function handleRequest({ request, response, db, aiSecrets, rootDir }) {
       sendJson(response, 200, { dryRun: false, before: live.data, after: after.data });
     } catch (error) {
       if (error instanceof CoupangApiError) { sendJson(response, 502, { error: error.message, code: 'COUPANG_API_ERROR', bodyPreview: error.bodyPreview }); return; }
+      throw error;
+    }
+    return;
+  }
+
+  // 가격 조정 (스피드고로 등록한 뒤 Claude가 이미지 교체와 함께 가격도 조정할 수 있게).
+  // Coupang prices per vendorItemId, not per product -- since no vendorItemId
+  // is stored anywhere (same gap order-supplier-mapper.mjs/channel-suspension.mjs
+  // hit), this always fetches the live item list first so the admin can see
+  // current prices and pick one. Two-step dry-run: no vendorItemId/price yet
+  // -> just return the live items; vendorItemId+price without confirm ->
+  // preview the planned change; confirm:true -> the real PUT.
+  const coupangPriceMatch = url.pathname.match(/^\/api\/product-drafts\/(\d+)\/coupang-registration\/update-price$/);
+  if (coupangPriceMatch && request.method === 'POST') {
+    const draftId = Number(coupangPriceMatch[1]);
+    try {
+      const registration = await getCoupangRegistration(db, draftId);
+      if (!registration?.sellerProductId) { sendJson(response, 409, { error: 'This draft is not linked to a Coupang sellerProductId yet', code: 'NOT_LINKED' }); return; }
+      const body = await readJson(request);
+      const config = await loadCoupangConfig(rootDir);
+      const client = new CoupangClient(config);
+      const live = await client.getProduct(registration.sellerProductId);
+      const items = (live?.data?.items || []).map((item) => ({ vendorItemId: item.vendorItemId, vendorItemName: item.vendorItemName, salePrice: item.salePrice }));
+
+      const price = Number(body.price);
+      if (!body.vendorItemId || !Number.isFinite(price)) { sendJson(response, 200, { dryRun: true, items }); return; }
+      if (price % 10 !== 0) { sendJson(response, 400, { error: 'price must be in increments of 10 won', code: 'INVALID_PRICE' }); return; }
+      if (body.confirm !== true) { sendJson(response, 200, { dryRun: true, items, plannedChange: { vendorItemId: body.vendorItemId, price } }); return; }
+
+      const result = await client.updateItemPrice(body.vendorItemId, price, { forceSalePriceUpdate: body.forceSalePriceUpdate === true });
+      sendJson(response, 200, { dryRun: false, result });
+    } catch (error) {
+      if (error instanceof CoupangApiError) { sendJson(response, 502, { error: error.message, code: 'COUPANG_API_ERROR', bodyPreview: error.bodyPreview }); return; }
+      throw error;
+    }
+    return;
+  }
+
+  const naverRegistrationSingleMatch = url.pathname.match(/^\/api\/product-drafts\/(\d+)\/naver-registration$/);
+  if (naverRegistrationSingleMatch && request.method === 'GET') {
+    const registration = await getNaverRegistration(db, Number(naverRegistrationSingleMatch[1]));
+    sendJson(response, 200, { registration });
+    return;
+  }
+
+  // 네이버 상품 링크 -- 스피드등록으로 이미 등록된 상품의 originProductNo를 이 draft에 연결.
+  // Naver has no confirmed name-search endpoint (unlike Coupang's
+  // listSellerProducts, see registrationLookupMatch above), so this takes
+  // originProductNo directly rather than a search-and-pick flow.
+  const naverRegistrationLinkMatch = url.pathname.match(/^\/api\/product-drafts\/(\d+)\/naver-registration\/link$/);
+  if (naverRegistrationLinkMatch && request.method === 'POST') {
+    const draftId = Number(naverRegistrationLinkMatch[1]);
+    const body = await readJson(request);
+    if (!body.originProductNo) { sendJson(response, 400, { error: 'originProductNo is required' }); return; }
+    const registration = await linkNaverRegistration(db, draftId, { originProductNo: body.originProductNo });
+    sendJson(response, 200, { registration });
+    return;
+  }
+
+  // 네이버 쪽 가격 조정 -- Naver's option-stock endpoint requires optionInfo
+  // even for a no-option product (confirmed live, 2026-07-26: draft 46's
+  // real originProduct.detailAttribute.optionInfo is
+  // { optionCombinations: [], optionStandards: [], useStockManagement: true }
+  // for a plain product with no options at all) -- so this always reads the
+  // live product first and passes its own optionInfo straight through
+  // rather than reconstructing one, to avoid guessing at a shape for a
+  // multi-option product that's never been exercised live.
+  const naverPriceMatch = url.pathname.match(/^\/api\/product-drafts\/(\d+)\/naver-registration\/update-price$/);
+  if (naverPriceMatch && request.method === 'POST') {
+    const draftId = Number(naverPriceMatch[1]);
+    try {
+      const registration = await getNaverRegistration(db, draftId);
+      if (!registration?.originProductNo) { sendJson(response, 409, { error: 'This draft is not linked to a Naver originProductNo yet', code: 'NOT_LINKED' }); return; }
+      const body = await readJson(request);
+      const config = await loadNaverCommerceConfig(rootDir);
+      const client = new NaverCommerceClient(config);
+      const live = await client.getProduct(registration.originProductNo);
+      const currentSalePrice = live?.originProduct?.salePrice ?? null;
+
+      const salePrice = Number(body.salePrice);
+      if (!Number.isFinite(salePrice)) { sendJson(response, 200, { dryRun: true, currentSalePrice }); return; }
+      const payload = buildNaverPriceUpdatePayload(live, salePrice);
+      if (body.confirm !== true) { sendJson(response, 200, { dryRun: true, currentSalePrice, payload }); return; }
+
+      await client.updateOptionStock(registration.originProductNo, payload);
+      const after = await client.getProduct(registration.originProductNo);
+      sendJson(response, 200, { dryRun: false, before: { salePrice: currentSalePrice }, after: { salePrice: after?.originProduct?.salePrice ?? null } });
+    } catch (error) {
+      if (error instanceof NaverCommerceApiError) { sendJson(response, 502, { error: error.message, code: 'NAVER_API_ERROR', bodyPreview: error.bodyPreview }); return; }
       throw error;
     }
     return;
@@ -1617,8 +1722,8 @@ function adminHtml() {
     function saveColumnWidth(key,width){const saved=getColumnWidths();saved[key]=width;localStorage.setItem('automoney.admin.columnWidths',JSON.stringify(saved));}
     function bindCellSelection(){[...rows.querySelectorAll('tr')].forEach((tr,rowIndex)=>{tr.addEventListener('click',e=>{if(e.target.closest('button,a,input,select,textarea'))return;selectedRowIndex=rowIndex;selectedColIndex=e.target.closest('td')?.cellIndex??selectedColIndex;applySelection();});});}
     function applySelection(){const table=document.getElementById('draftTable');for(const cell of table.querySelectorAll('.selectedCol,.selectedCell'))cell.classList.remove('selectedCol','selectedCell');for(const row of table.querySelectorAll('tr.selectedRow'))row.classList.remove('selectedRow');if(selectedColIndex!=null){for(const row of table.rows){row.cells[selectedColIndex]?.classList.add('selectedCol');}}if(selectedRowIndex!=null){rows.rows[selectedRowIndex]?.classList.add('selectedRow');if(selectedColIndex!=null)rows.rows[selectedRowIndex]?.cells[selectedColIndex]?.classList.add('selectedCell');}}
-    async function loadDetail(id,push=true){selectedId=id;if(push)history.replaceState(null,'','/admin?draftId='+encodeURIComponent(id));const data=await api('/api/product-drafts/'+id);const d=data.draft;detail.innerHTML=detailHtml(d);enhanceDetailImageSections(d);bindTabs();document.getElementById('saveButton').addEventListener('click',()=>saveDraft(id));for(const b of detail.querySelectorAll('[data-status-action]'))b.addEventListener('click',()=>setStatus(id,b.dataset.statusAction));const forceApprove=document.getElementById('forceApproveButton');if(forceApprove)forceApprove.addEventListener('click',()=>forceApproveDraft(id));document.getElementById('exportCoupangButton').addEventListener('click',()=>loadExport(id,'coupang'));document.getElementById('exportNaverButton').addEventListener('click',()=>loadExport(id,'naver'));document.getElementById('copyJsonButton').addEventListener('click',copyExportJson);document.getElementById('refreshNaverButton').addEventListener('click',()=>refreshNaver(id));document.getElementById('runSeoAnalysisButton').addEventListener('click',()=>runSeoAnalysis(id));const regenerateTitleButton=document.getElementById('regenerateTitleButton');if(regenerateTitleButton)regenerateTitleButton.addEventListener('click',()=>regenerateOptimizedTitles(id));const saveTitlesButton=document.getElementById('saveTitlesButton');if(saveTitlesButton)saveTitlesButton.addEventListener('click',()=>saveOptimizedTitles(id));const copyCoupangTitleButton=document.getElementById('copyCoupangTitleButton');if(copyCoupangTitleButton)copyCoupangTitleButton.addEventListener('click',()=>copyTitle('optimizedCoupangTitle'));const copyNaverTitleButton=document.getElementById('copyNaverTitleButton');if(copyNaverTitleButton)copyNaverTitleButton.addEventListener('click',()=>copyTitle('optimizedNaverTitle'));const regenerateDetailButton=document.getElementById('regenerateDetailButton');if(regenerateDetailButton)regenerateDetailButton.addEventListener('click',()=>regenerateGeneratedDetail(id));const toggleOriginalButton=document.getElementById('toggleOriginalDetailButton');if(toggleOriginalButton)toggleOriginalButton.addEventListener('click',toggleOriginalDetailImages);const refreshPreviewButton=document.getElementById('refreshPreviewButton');if(refreshPreviewButton)refreshPreviewButton.addEventListener('click',refreshDetailPreview);document.getElementById('saveChecklistButton').addEventListener('click',()=>saveChecklist(id));document.getElementById('preview').srcdoc=d.generatedDetailHtml||'';const naver=await api('/api/product-drafts/'+id+'/market-research/naver');fillNaverResearch(naver.research);const opt=await api('/api/product-drafts/'+id+'/registration-optimization');renderOptimization(opt.optimization);const checklist=await api('/api/product-drafts/'+id+'/registration-checklist');fillChecklist(checklist.checklist);loadCoupangLiveSection(id,d);loadAnalysisSection(id,d);loadList();}
-    function detailHtml(d){const hasBlockReasons=(d.blockReasons||[]).length>0;const approvalButton=hasBlockReasons?'<button id="forceApproveButton">Force approve</button><span class="badge reasonBlock">overrideReason required</span>':'<button data-status-action="approved">Approved</button>';const warnings=(d.warnings||[]).map(x=>'<span class="badge reasonBlock">'+escapeHtml(x)+'</span>').join('');return '<div class="tabs"><button class="active" data-tab="source">원본/공급처</button><button data-tab="naver">네이버 경쟁분석</button><button data-tab="seo">SEO 키워드</button><button data-tab="title">상품명</button><button data-tab="detail">상세페이지</button><button data-tab="image">이미지 프롬프트</button><button data-tab="analysis">상품정보 분석</button><button data-tab="category">카테고리</button><button data-tab="notice">고시정보</button><button data-tab="shipping">배송정책</button><button data-tab="approval">승인조건</button><button data-tab="coupangLive">쿠팡 라이브 관리</button><button data-tab="export">Export JSON</button></div><div class="tabPanel active" data-panel="source"><div class="section"><h2>#'+d.id+' '+escapeHtml(d.supplierProductNo)+'</h2><div class="grid"><div><div class="muted">Original name</div><strong>'+escapeHtml(d.originalProductName||'')+'</strong></div><div><div class="muted">Status</div>'+escapeHtml(labelStatus(d.status))+' / '+escapeHtml(labelStatus(d.filterStatus))+' '+warnings+'</div><div>Final: <span class="badge status">'+escapeHtml(d.finalDecision||'-')+'</span></div><div>Raw price: '+escapeHtml(d.rawPriceFieldName||'-')+' = '+escapeHtml(d.rawPriceValue||'-')+'</div><div>Shipping: '+escapeHtml(d.shippingRawFieldName||'-')+' = '+escapeHtml(d.shippingRawValue||'-')+'</div><div>Coupang: '+money(d.coupangSalePrice)+' / profit '+money(d.coupangExpectedProfit)+'</div><div>Naver: '+money(d.naverSalePrice)+' / profit '+money(d.naverExpectedProfit)+'</div></div></div>'+sourceInfoHtml(d)+'<div class="section"><h2>Reasons</h2>'+reasonBadges(d.blockReasons).join('')+reasonBadges(d.reviewReasons).join('')+'</div><div class="section"><h2>Images</h2>'+imageGalleryHtml(d)+'</div><div class="section"><h2>Options</h2><table><tbody>'+d.options.map(o=>'<tr><td>'+o.index+'</td><td>'+escapeHtml(o.name||'')+'</td><td>'+escapeHtml(o.value||'')+'</td><td>'+money(o.additionalPrice)+'</td></tr>').join('')+'</tbody></table></div></div><div class="tabPanel" data-panel="naver">'+naverResearchHtml()+'</div><div class="tabPanel" data-panel="seo">'+optimizationHtml()+'</div><div class="tabPanel" data-panel="title"><div class="section"><h2>상품명</h2><div id="optimizedTitleResult" class="muted"></div></div></div><div class="tabPanel" data-panel="detail"><div class="section"><h2>수정</h2><label>sellingTitle</label><input id="sellingTitle" value="'+attr(d.sellingTitle||'')+'"><div class="grid"><div><label>coupangSalePrice</label><input id="coupangSalePrice" type="number" value="'+attr(d.coupangSalePrice??'')+'"></div><div><label>naverSalePrice</label><input id="naverSalePrice" type="number" value="'+attr(d.naverSalePrice??'')+'"></div></div><label>status</label><select id="status"><option>draft</option><option>needs_review</option><option>blocked</option><option>approved</option></select><label>상세페이지 HTML 수정</label><textarea id="generatedDetailHtml">'+escapeHtml(d.generatedDetailHtml||'')+'</textarea><label>reviewMemo</label><textarea id="reviewMemo">'+escapeHtml(d.reviewMemo||'')+'</textarea><p><button class="primary" id="saveButton">Save</button> <button data-status-action="draft">Draft</button> <button data-status-action="needs_review">Needs review</button> <button data-status-action="blocked">Blocked</button> '+approvalButton+' <button id="exportCoupangButton">쿠팡 JSON 보기</button> <button id="exportNaverButton">네이버 JSON 보기</button> <button id="copyJsonButton">JSON 복사</button></p></div><div class="section"><h2>상세페이지 미리보기</h2><iframe id="preview"></iframe></div></div><div class="tabPanel" data-panel="image"><div class="section"><h2>이미지 프롬프트</h2><pre id="imagePromptResult"></pre></div></div><div class="tabPanel" data-panel="analysis"><div class="section"><h2>상품정보 분석 (Python OCR + Codex)</h2><div id="analysisContent" class="muted">불러오는 중...</div></div></div><div class="tabPanel" data-panel="category"><div class="section"><h2>카테고리</h2><div id="categoryResult" class="muted"></div></div></div><div class="tabPanel" data-panel="notice"><div class="section"><h2>고시정보</h2><div id="noticeResult" class="muted"></div></div></div><div class="tabPanel" data-panel="shipping"><div class="section"><h2>배송정책</h2><div id="shippingResult" class="muted"></div></div></div><div class="tabPanel" data-panel="approval">'+approvalChecklistHtml()+'</div><div class="tabPanel" data-panel="coupangLive"><div class="section"><h2>쿠팡 라이브 관리</h2><div id="coupangLiveContent" class="muted">불러오는 중...</div></div></div><div class="tabPanel" data-panel="export"><div class="section"><h2>Export JSON preview</h2><pre id="exportPreview"></pre></div></div><script>document.getElementById("status").value='+JSON.stringify(d.status)+';<\\/script>';}
+    async function loadDetail(id,push=true){selectedId=id;if(push)history.replaceState(null,'','/admin?draftId='+encodeURIComponent(id));const data=await api('/api/product-drafts/'+id);const d=data.draft;detail.innerHTML=detailHtml(d);enhanceDetailImageSections(d);bindTabs();document.getElementById('saveButton').addEventListener('click',()=>saveDraft(id));for(const b of detail.querySelectorAll('[data-status-action]'))b.addEventListener('click',()=>setStatus(id,b.dataset.statusAction));const forceApprove=document.getElementById('forceApproveButton');if(forceApprove)forceApprove.addEventListener('click',()=>forceApproveDraft(id));document.getElementById('exportCoupangButton').addEventListener('click',()=>loadExport(id,'coupang'));document.getElementById('exportNaverButton').addEventListener('click',()=>loadExport(id,'naver'));document.getElementById('copyJsonButton').addEventListener('click',copyExportJson);document.getElementById('refreshNaverButton').addEventListener('click',()=>refreshNaver(id));document.getElementById('runSeoAnalysisButton').addEventListener('click',()=>runSeoAnalysis(id));const regenerateTitleButton=document.getElementById('regenerateTitleButton');if(regenerateTitleButton)regenerateTitleButton.addEventListener('click',()=>regenerateOptimizedTitles(id));const saveTitlesButton=document.getElementById('saveTitlesButton');if(saveTitlesButton)saveTitlesButton.addEventListener('click',()=>saveOptimizedTitles(id));const copyCoupangTitleButton=document.getElementById('copyCoupangTitleButton');if(copyCoupangTitleButton)copyCoupangTitleButton.addEventListener('click',()=>copyTitle('optimizedCoupangTitle'));const copyNaverTitleButton=document.getElementById('copyNaverTitleButton');if(copyNaverTitleButton)copyNaverTitleButton.addEventListener('click',()=>copyTitle('optimizedNaverTitle'));const regenerateDetailButton=document.getElementById('regenerateDetailButton');if(regenerateDetailButton)regenerateDetailButton.addEventListener('click',()=>regenerateGeneratedDetail(id));const toggleOriginalButton=document.getElementById('toggleOriginalDetailButton');if(toggleOriginalButton)toggleOriginalButton.addEventListener('click',toggleOriginalDetailImages);const refreshPreviewButton=document.getElementById('refreshPreviewButton');if(refreshPreviewButton)refreshPreviewButton.addEventListener('click',refreshDetailPreview);document.getElementById('saveChecklistButton').addEventListener('click',()=>saveChecklist(id));document.getElementById('preview').srcdoc=d.generatedDetailHtml||'';const naver=await api('/api/product-drafts/'+id+'/market-research/naver');fillNaverResearch(naver.research);const opt=await api('/api/product-drafts/'+id+'/registration-optimization');renderOptimization(opt.optimization);const checklist=await api('/api/product-drafts/'+id+'/registration-checklist');fillChecklist(checklist.checklist);loadCoupangLiveSection(id,d);loadNaverLiveSection(id,d);loadAnalysisSection(id,d);loadList();}
+    function detailHtml(d){const hasBlockReasons=(d.blockReasons||[]).length>0;const approvalButton=hasBlockReasons?'<button id="forceApproveButton">Force approve</button><span class="badge reasonBlock">overrideReason required</span>':'<button data-status-action="approved">Approved</button>';const warnings=(d.warnings||[]).map(x=>'<span class="badge reasonBlock">'+escapeHtml(x)+'</span>').join('');return '<div class="tabs"><button class="active" data-tab="source">원본/공급처</button><button data-tab="naver">네이버 경쟁분석</button><button data-tab="seo">SEO 키워드</button><button data-tab="title">상품명</button><button data-tab="detail">상세페이지</button><button data-tab="image">이미지 프롬프트</button><button data-tab="analysis">상품정보 분석</button><button data-tab="category">카테고리</button><button data-tab="notice">고시정보</button><button data-tab="shipping">배송정책</button><button data-tab="approval">승인조건</button><button data-tab="coupangLive">쿠팡 라이브 관리</button><button data-tab="naverLive">네이버 라이브 관리</button><button data-tab="export">Export JSON</button></div><div class="tabPanel active" data-panel="source"><div class="section"><h2>#'+d.id+' '+escapeHtml(d.supplierProductNo)+'</h2><div class="grid"><div><div class="muted">Original name</div><strong>'+escapeHtml(d.originalProductName||'')+'</strong></div><div><div class="muted">Status</div>'+escapeHtml(labelStatus(d.status))+' / '+escapeHtml(labelStatus(d.filterStatus))+' '+warnings+'</div><div>Final: <span class="badge status">'+escapeHtml(d.finalDecision||'-')+'</span></div><div>Raw price: '+escapeHtml(d.rawPriceFieldName||'-')+' = '+escapeHtml(d.rawPriceValue||'-')+'</div><div>Shipping: '+escapeHtml(d.shippingRawFieldName||'-')+' = '+escapeHtml(d.shippingRawValue||'-')+'</div><div>Coupang: '+money(d.coupangSalePrice)+' / profit '+money(d.coupangExpectedProfit)+'</div><div>Naver: '+money(d.naverSalePrice)+' / profit '+money(d.naverExpectedProfit)+'</div></div></div>'+sourceInfoHtml(d)+'<div class="section"><h2>Reasons</h2>'+reasonBadges(d.blockReasons).join('')+reasonBadges(d.reviewReasons).join('')+'</div><div class="section"><h2>Images</h2>'+imageGalleryHtml(d)+'</div><div class="section"><h2>Options</h2><table><tbody>'+d.options.map(o=>'<tr><td>'+o.index+'</td><td>'+escapeHtml(o.name||'')+'</td><td>'+escapeHtml(o.value||'')+'</td><td>'+money(o.additionalPrice)+'</td></tr>').join('')+'</tbody></table></div></div><div class="tabPanel" data-panel="naver">'+naverResearchHtml()+'</div><div class="tabPanel" data-panel="seo">'+optimizationHtml()+'</div><div class="tabPanel" data-panel="title"><div class="section"><h2>상품명</h2><div id="optimizedTitleResult" class="muted"></div></div></div><div class="tabPanel" data-panel="detail"><div class="section"><h2>수정</h2><label>sellingTitle</label><input id="sellingTitle" value="'+attr(d.sellingTitle||'')+'"><div class="grid"><div><label>coupangSalePrice</label><input id="coupangSalePrice" type="number" value="'+attr(d.coupangSalePrice??'')+'"></div><div><label>naverSalePrice</label><input id="naverSalePrice" type="number" value="'+attr(d.naverSalePrice??'')+'"></div></div><label>status</label><select id="status"><option>draft</option><option>needs_review</option><option>blocked</option><option>approved</option></select><label>상세페이지 HTML 수정</label><textarea id="generatedDetailHtml">'+escapeHtml(d.generatedDetailHtml||'')+'</textarea><label>reviewMemo</label><textarea id="reviewMemo">'+escapeHtml(d.reviewMemo||'')+'</textarea><p><button class="primary" id="saveButton">Save</button> <button data-status-action="draft">Draft</button> <button data-status-action="needs_review">Needs review</button> <button data-status-action="blocked">Blocked</button> '+approvalButton+' <button id="exportCoupangButton">쿠팡 JSON 보기</button> <button id="exportNaverButton">네이버 JSON 보기</button> <button id="copyJsonButton">JSON 복사</button></p></div><div class="section"><h2>상세페이지 미리보기</h2><iframe id="preview"></iframe></div></div><div class="tabPanel" data-panel="image"><div class="section"><h2>이미지 프롬프트</h2><pre id="imagePromptResult"></pre></div></div><div class="tabPanel" data-panel="analysis"><div class="section"><h2>상품정보 분석 (Python OCR + Codex)</h2><div id="analysisContent" class="muted">불러오는 중...</div></div></div><div class="tabPanel" data-panel="category"><div class="section"><h2>카테고리</h2><div id="categoryResult" class="muted"></div></div></div><div class="tabPanel" data-panel="notice"><div class="section"><h2>고시정보</h2><div id="noticeResult" class="muted"></div></div></div><div class="tabPanel" data-panel="shipping"><div class="section"><h2>배송정책</h2><div id="shippingResult" class="muted"></div></div></div><div class="tabPanel" data-panel="approval">'+approvalChecklistHtml()+'</div><div class="tabPanel" data-panel="coupangLive"><div class="section"><h2>쿠팡 라이브 관리</h2><div id="coupangLiveContent" class="muted">불러오는 중...</div></div></div><div class="tabPanel" data-panel="naverLive"><div class="section"><h2>네이버 라이브 관리</h2><div id="naverLiveContent" class="muted">불러오는 중...</div></div></div><div class="tabPanel" data-panel="export"><div class="section"><h2>Export JSON preview</h2><pre id="exportPreview"></pre></div></div><script>document.getElementById("status").value='+JSON.stringify(d.status)+';<\\/script>';}
     function enhanceDetailImageSections(d){const panel=detail.querySelector('[data-panel="detail"]');if(!panel)return;const preview=panel.querySelector('#preview')?.closest('.section');if(preview){preview.querySelector('h2').textContent='재구성 상세페이지 미리보기';const note=document.createElement('p');note.className='muted';note.textContent='긴 원본 이미지는 참고 자료로 보관하고, 아래 HTML은 상품명/스펙/추천대상/핵심장점/배송안내 구조로 재구성한 내용입니다.';preview.insertBefore(note,preview.querySelector('iframe'));}const edit=panel.querySelector('.section');const save=document.getElementById('saveButton');if(save)save.textContent='HTML 저장';if(edit&&!document.getElementById('regenerateDetailButton')){const controls=document.createElement('p');controls.innerHTML='<button id="regenerateDetailButton" type="button">상세페이지 재생성</button> <button id="toggleOriginalDetailButton" type="button" data-include-original="true">원본 상세 이미지 포함</button> <button id="refreshPreviewButton" type="button">미리보기 새로고침</button>';edit.append(controls);}const source=document.createElement('div');source.className='section';source.innerHTML='<h2>원본 상세 이미지 보기</h2>'+imageGalleryHtml(d);panel.insertBefore(source,preview||null);const usage=document.createElement('div');usage.className='section';usage.innerHTML='<h2>원본 이미지 사용 여부</h2><div class="muted">detail_source_full은 기본적으로 원본 참고 영역에서만 사용합니다. 상세 본문 자동 삽입은 selected_for_detail 또는 regenerated_detail_asset을 우선합니다.</div>';if(preview)panel.insertBefore(usage,preview.nextSibling);const imagePanel=detail.querySelector('[data-panel="image"] h2');if(imagePanel)imagePanel.textContent='AI 이미지 생성 프롬프트';}
     function imageGalleryHtml(d){const images=d.images||[];const main=images.filter(i=>i.imageType==='main');const detailImages=images.filter(i=>i.sourceSection==='detail'&&['detail','regenerated_detail_asset'].includes(i.imageType));const sourceFull=images.filter(i=>['detail_source_full','detail_full'].includes(i.imageType));const slices=images.filter(i=>['detail_source_slice','detail_slice'].includes(i.imageType));const rejected=images.filter(i=>i.qualityStatus==='rejected'||i.rejectReason||['ad','recommendation','header','footer'].includes(i.sourceSection));const warnings=[];if(detailImages.length===0&&sourceFull.length===0&&slices.length===0)warnings.push('detail_images_missing');if(detailImages.length===0&&sourceFull.length>0)warnings.push('using_original_detail_source_only');const warn=warnings.map(x=>'<span class="badge reasonBlock">'+escapeHtml(x)+'</span>').join(' ');function meta(i){const size=(i.width||i.naturalWidth||i.renderedWidth||'-')+'x'+(i.height||i.naturalHeight||i.renderedHeight||'-');const pos=i.renderedX==null?'-':Math.round(i.renderedX)+','+Math.round(i.renderedY);const archived=String(i.storedUrl||'').startsWith('/original-images/')?'로컬 보관됨':'로컬 미보관';return '<div class="muted">'+escapeHtml(i.sourceMethod||'-')+' / '+escapeHtml(i.sourceSection||'-')+' / '+size+' / pos '+pos+' / '+archived+(i.crawlStatus?(' / '+escapeHtml(i.crawlStatus)):'')+(i.crawlError?(' / '+escapeHtml(i.crawlError)):'')+(i.sliceIndex?(' / slice '+i.sliceIndex):'')+(i.rejectReason?(' / reject '+escapeHtml(i.rejectReason)):'')+'</div><div class="muted">original: '+escapeHtml(i.originalUrl||i.url||'-')+'</div><div class="muted">stored: '+escapeHtml(i.storedUrl||'-')+'</div>';}function card(i){const url=i.storedUrl||i.url;const original=i.originalUrl||i.url;const local=i.storedUrl&&i.storedUrl!==original?'<a href="'+attr(i.storedUrl)+'" target="_blank" rel="noopener noreferrer"><button>로컬 이미지 열기</button></a>':'';return '<div style="display:inline-block;vertical-align:top;max-width:170px;margin:4px"><span class="badge">'+escapeHtml(i.imageType||'unknown')+'</span>'+meta(i)+'<a href="'+attr(url)+'" target="_blank" rel="noopener noreferrer"><img src="'+attr(url)+'" alt=""></a><br><a href="'+attr(original)+'" target="_blank" rel="noopener noreferrer"><button>원본 열기</button></a> '+local+'</div>';}function group(title,items){return '<h3>'+escapeHtml(title)+' ('+items.length+')</h3><div>'+items.map(card).join('')+'</div>';}return (warn?'<p>'+warn+'</p>':'')+group('대표 이미지',main)+group('상세페이지 이미지',detailImages)+group('원본 상세 이미지',sourceFull)+group('긴 이미지 분할 이미지',slices)+group('제외된 이미지/debug 이미지',rejected);}    function sourceInfoHtml(d){const link=d.supplierProductUrl?'<a href="'+attr(d.supplierProductUrl)+'" target="_blank" rel="noopener noreferrer"><button>공급처</button></a>':'-';return '<div class="section"><h2>공급처 정보</h2><div class="grid"><div>공급처명: '+escapeHtml(d.supplierName||'-')+'</div><div>공급마켓: '+escapeHtml(labelMarket(d.supplierMarket))+'</div><div>상품번호: '+escapeHtml(d.supplierProductNo||'-')+'</div><div>최소구매수량: '+money(d.minOrderQty)+'</div><div>주문단위: '+money(d.orderUnit)+'</div><div>판매단위: '+escapeHtml(labelSellUnit(d.sellUnitType))+'</div><div>묶음수량: '+money(d.bundleQuantity)+'</div><div>단품원가: '+money(d.unitCostPrice)+'</div><div>묶음원가: '+money(d.bundleCostPrice)+'</div><div>묶음사유: '+escapeHtml(d.bundleReason||'-')+'</div><div>공급처 원본 링크: '+link+'</div></div></div>';}
     function naverResearchHtml(){return '<div class="section"><h2>Naver shopping research</h2><label>Naver search keyword</label><input id="naverKeyword"><p><button id="refreshNaverButton">Refresh Naver research</button></p><div id="naverResearchResult" class="muted"></div><div id="naverBestItem"></div></div>';}
@@ -1655,8 +1760,13 @@ function adminHtml() {
           ?'<div>상태: '+escapeHtml(reg.liveStatusName||'-')+' / 재고: '+money(reg.liveTotalStockQuantity)+' / 가격: '+money(reg.liveSalePrice)+'</div><div class="muted">마지막 확인: '+escapeHtml(reg.lastSyncedAt)+'</div>'
           :'<div class="muted">아직 조회한 적 없습니다.</div>')
         +'<p><button id="coupangRefreshButton" type="button" '+(linked?'':'disabled')+'>새로고침</button></p></div>';
+      const priceSection='<div class="section"><h3>가격 조정</h3>'
+        +(linked
+          ?'<p><button id="coupangPriceLoadButton" type="button">현재 옵션별 가격 불러오기</button></p><div id="coupangPriceResult"></div>'
+          :'<div class="muted">먼저 쿠팡 상품과 연결해야 합니다.</div>')
+        +'</div>';
       const directRegisterSection=linked?'':directRegisterHtml(imagesReady);
-      return '<div class="section">'+linkSection+'</div>'+directRegisterSection+swapSection+snapshotSection;
+      return '<div class="section">'+linkSection+'</div>'+directRegisterSection+swapSection+snapshotSection+priceSection;
     }
     function directRegisterHtml(imagesReady){
       if(!imagesReady)return '<div class="section"><h3>신규 등록 (관리자 화면에서 직접 등록)</h3><div class="muted">승인된 대표이미지/상세이미지 세트가 있어야 진행할 수 있습니다.</div></div>';
@@ -1706,6 +1816,45 @@ function adminHtml() {
       if(refreshButton)refreshButton.onclick=async()=>{
         await api('/api/product-drafts/'+id+'/coupang-registration/refresh',{method:'POST',body:'{}'});
         await loadCoupangLiveSection(id,draft);
+      };
+      const priceLoadButton=container.querySelector('#coupangPriceLoadButton');
+      if(priceLoadButton)priceLoadButton.onclick=async()=>{
+        const resultEl=container.querySelector('#coupangPriceResult');
+        resultEl.innerHTML='<p class="muted">불러오는 중...</p>';
+        try{
+          const data=await api('/api/product-drafts/'+id+'/coupang-registration/update-price',{method:'POST',body:JSON.stringify({})});
+          if(!data.items.length){resultEl.innerHTML='<p class="muted">옵션이 없습니다.</p>';return;}
+          resultEl.innerHTML='<table><tr><th>옵션</th><th>현재가</th><th>새 가격</th></tr>'
+            +data.items.map(it=>'<tr><td>'+escapeHtml(it.vendorItemName||String(it.vendorItemId))+'</td><td>'+money(it.salePrice)+'</td><td><input type="number" step="10" data-vendor-item-id="'+attr(it.vendorItemId)+'" value="'+attr(it.salePrice)+'" style="width:8em"></td></tr>').join('')
+            +'</table><p><button id="coupangPricePreviewButton" type="button">가격 변경 미리보기</button></p><div id="coupangPricePreviewResult"></div>';
+          resultEl.querySelector('#coupangPricePreviewButton').onclick=async()=>{
+            const previewEl=resultEl.querySelector('#coupangPricePreviewResult');
+            const changed=[...resultEl.querySelectorAll('input[data-vendor-item-id]')].filter(inp=>{
+              const original=data.items.find(it=>String(it.vendorItemId)===inp.dataset.vendorItemId);
+              return original&&Number(inp.value)!==Number(original.salePrice);
+            });
+            if(!changed.length){previewEl.innerHTML='<p class="muted">변경된 가격이 없습니다.</p>';return;}
+            previewEl.innerHTML='<p class="muted">미리보기 생성 중...</p>';
+            const previews=[];
+            for(const inp of changed){
+              const vendorItemId=Number(inp.dataset.vendorItemId);
+              const price=Number(inp.value);
+              const preview=await api('/api/product-drafts/'+id+'/coupang-registration/update-price',{method:'POST',body:JSON.stringify({vendorItemId,price})});
+              previews.push({vendorItemId,price,inp});
+            }
+            previewEl.innerHTML='<pre>'+escapeHtml(JSON.stringify(previews.map(p=>({vendorItemId:p.vendorItemId,price:p.price})),null,2))+'</pre><p><button id="coupangPriceConfirmButton" type="button">위 내용으로 실제 반영</button></p>';
+            previewEl.querySelector('#coupangPriceConfirmButton').onclick=async()=>{
+              if(!confirm('실제 쿠팡 가격을 변경합니다. 되돌릴 수 없습니다. 계속할까요?'))return;
+              for(const p of previews){
+                await api('/api/product-drafts/'+id+'/coupang-registration/update-price',{method:'POST',body:JSON.stringify({vendorItemId:p.vendorItemId,price:p.price,confirm:true})});
+              }
+              previewEl.innerHTML='<p>반영 완료.</p>';
+              await loadCoupangLiveSection(id,draft);
+            };
+          };
+        }catch(error){
+          resultEl.innerHTML='<p class="muted">'+escapeHtml(error.message)+'</p>';
+        }
       };
       wireDirectRegisterSection(id,draft,container);
     }
@@ -1781,6 +1930,61 @@ function adminHtml() {
             }catch(error){
               registerResultEl.innerHTML='<p class="muted">'+escapeHtml(error.message)+'</p>';
             }
+          };
+        }catch(error){
+          resultEl.innerHTML='<p class="muted">'+escapeHtml(error.message)+'</p>';
+        }
+      };
+    }
+    async function loadNaverLiveSection(id,draft){
+      const panel=document.querySelector('#detail [data-panel="naverLive"]');
+      if(!panel)return;
+      const container=panel.querySelector('#naverLiveContent');
+      const regData=await api('/api/product-drafts/'+id+'/naver-registration');
+      const reg=regData.registration;
+      container.innerHTML=naverLiveHtml(draft,reg);
+      wireNaverLiveSection(id,draft,container);
+    }
+    function naverLiveHtml(draft,reg){
+      const linked=reg&&reg.originProductNo;
+      const linkSection=linked
+        ?'<div><strong>연결됨</strong>: originProductNo '+escapeHtml(reg.originProductNo)+' <span class="badge status">'+escapeHtml(reg.linkedVia||'')+'</span> / status '+escapeHtml(reg.status||'')+'</div>'
+        :'<div class="muted">아직 네이버 상품과 연결되지 않았습니다. 스피드등록으로 등록한 뒤 네이버 커머스센터에서 originProductNo를 확인해 입력하세요.</div><label>originProductNo</label><input id="naverLinkOriginProductNo"><p><button id="naverLinkButton" type="button">연결하기</button></p>';
+      const priceSection='<div class="section"><h3>가격 조정</h3>'
+        +(linked
+          ?'<p><button id="naverPriceLoadButton" type="button">현재 가격 불러오기</button></p><div id="naverPriceResult"></div>'
+          :'<div class="muted">먼저 네이버 상품과 연결해야 합니다.</div>')
+        +'</div>';
+      return '<div class="section">'+linkSection+'</div>'+priceSection;
+    }
+    function wireNaverLiveSection(id,draft,container){
+      const linkButton=container.querySelector('#naverLinkButton');
+      if(linkButton)linkButton.onclick=async()=>{
+        const originProductNo=container.querySelector('#naverLinkOriginProductNo').value.trim();
+        if(!originProductNo){alert('originProductNo를 입력하세요');return;}
+        await api('/api/product-drafts/'+id+'/naver-registration/link',{method:'POST',body:JSON.stringify({originProductNo})});
+        await loadNaverLiveSection(id,draft);
+      };
+      const priceLoadButton=container.querySelector('#naverPriceLoadButton');
+      if(priceLoadButton)priceLoadButton.onclick=async()=>{
+        const resultEl=container.querySelector('#naverPriceResult');
+        resultEl.innerHTML='<p class="muted">불러오는 중...</p>';
+        try{
+          const data=await api('/api/product-drafts/'+id+'/naver-registration/update-price',{method:'POST',body:JSON.stringify({})});
+          resultEl.innerHTML='<div>현재 가격: '+money(data.currentSalePrice)+'</div><label>새 가격</label><input id="naverNewPrice" type="number" value="'+attr(data.currentSalePrice??'')+'"><p><button id="naverPricePreviewButton" type="button">가격 변경 미리보기</button></p><div id="naverPricePreviewResult"></div>';
+          resultEl.querySelector('#naverPricePreviewButton').onclick=async()=>{
+            const previewEl=resultEl.querySelector('#naverPricePreviewResult');
+            const salePrice=Number(resultEl.querySelector('#naverNewPrice').value);
+            if(!Number.isFinite(salePrice)){previewEl.innerHTML='<p class="muted">유효한 가격을 입력하세요.</p>';return;}
+            previewEl.innerHTML='<p class="muted">미리보기 생성 중...</p>';
+            const preview=await api('/api/product-drafts/'+id+'/naver-registration/update-price',{method:'POST',body:JSON.stringify({salePrice})});
+            previewEl.innerHTML='<pre>'+escapeHtml(JSON.stringify(preview.payload,null,2))+'</pre><p><button id="naverPriceConfirmButton" type="button">위 내용으로 실제 반영</button></p>';
+            previewEl.querySelector('#naverPriceConfirmButton').onclick=async()=>{
+              if(!confirm('실제 네이버 가격을 변경합니다. 되돌릴 수 없습니다. 계속할까요?'))return;
+              const confirmed=await api('/api/product-drafts/'+id+'/naver-registration/update-price',{method:'POST',body:JSON.stringify({salePrice,confirm:true})});
+              previewEl.innerHTML='<p>반영 완료. 새 가격='+money(confirmed.after?.salePrice)+'</p>';
+              await loadNaverLiveSection(id,draft);
+            };
           };
         }catch(error){
           resultEl.innerHTML='<p class="muted">'+escapeHtml(error.message)+'</p>';

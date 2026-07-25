@@ -209,6 +209,23 @@ export class NaverCommerceClient {
   // carrier-code-map.mjs. Max 30 items per call. Response shares the same
   // { timestamp, traceId, data: { successProductOrderIds, failProductOrderInfos } }
   // shape as confirmProductOrders.
+  // "옵션 재고(및 가격) 수정" -- confirmed spec, 2026-07-26 (apicenter.commerce.naver.com,
+  // pasted directly by the user since the docs site is blocked for WebFetch/
+  // browser navigation in this environment). optionInfo is required by
+  // Naver's own spec even for a no-option product -- callers should pass
+  // through whatever getProduct(originProductNo)'s own
+  // originProduct.detailAttribute.optionInfo already contains (confirmed
+  // live, 2026-07-26: a real no-option product returns
+  // { optionCombinations: [], optionStandards: [], useStockManagement: true }),
+  // not reconstruct it from scratch -- this client method itself doesn't
+  // guess at that shape, see admin-server.mjs's buildNaverPriceUpdatePayload.
+  async updateOptionStock(originProductNo, body) {
+    return this.request('PUT', `/v1/products/origin-products/${originProductNo}/option-stock`, {
+      body,
+      operation: 'update_option_stock',
+    });
+  }
+
   async dispatchProductOrders(dispatchProductOrders) {
     return this.request('POST', '/v1/pay-order/seller/product-orders/dispatch', {
       body: { dispatchProductOrders },

@@ -688,6 +688,7 @@ create table if not exists naver_product_registrations (
   channel_product_no text,
   request_hash text not null,
   status text not null default 'pending',
+  linked_via text not null default 'direct_api',
   created_at timestamptz not null default now(),
   updated_at timestamptz not null default now(),
   unique (product_draft_id)
