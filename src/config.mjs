@@ -15,6 +15,24 @@ export async function loadEnvConfig(rootDir = process.cwd()) {
   };
 }
 
+// Phase 8 (section 13): separate from the public DOMEME_API_KEY lookup
+// endpoint credential above -- the Private API's aid must be issued to the
+// same id used to log in (2.3.2 of the order-creation guide), so this reads
+// the same DOMEME_API_KEY but additionally requires the real 도매꾹 member
+// id/password used for setLogin. Password is never logged (see
+// domeme-private-client.mjs's maskSensitive).
+export async function loadDomemePrivateConfig(rootDir = process.cwd()) {
+  const values = await loadEnvValues(rootDir);
+  const pick = (name) => values[name] || process.env[name];
+  const apiKey = pick('DOMEME_API_KEY');
+  const loginId = pick('DOMEME_LOGIN_ID');
+  const loginPassword = pick('DOMEME_LOGIN_PASSWORD');
+  if (!apiKey) throw new Error('DOMEME_API_KEY is missing in .env');
+  if (!loginId) throw new Error('DOMEME_LOGIN_ID is missing in .env');
+  if (!loginPassword) throw new Error('DOMEME_LOGIN_PASSWORD is missing in .env');
+  return { apiKey, loginId, loginPassword };
+}
+
 export async function loadDatabaseUrl(rootDir = process.cwd()) {
   if (process.env.DATABASE_URL?.trim()) return process.env.DATABASE_URL.trim();
   const values = await loadEnvValues(rootDir);
