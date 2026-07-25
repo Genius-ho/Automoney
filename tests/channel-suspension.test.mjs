@@ -62,6 +62,29 @@ test('suspendNaverListing reports a failure without throwing', async () => {
   assert.match(result.error, /boom/);
 });
 
+test('runSupplierMonitorAndSuspendSweep persists every alert (not just SUPPLIER_OUT_OF_STOCK) into supplier_alerts', async () => {
+  const persisted = [];
+  await runSupplierMonitorAndSuspendSweep({}, {}, {}, {
+    runSupplierMonitorSweepImpl: async () => ([
+      { supplierProductId: 1, alerts: [{ code: 'SUPPLIER_PRICE_INCREASED', message: '공급가 상승', previousValue: 1700, currentValue: 2200 }] },
+      { supplierProductId: 2, alerts: [{ code: 'SUPPLIER_OUT_OF_STOCK', message: '품절' }] },
+    ]),
+    createSupplierAlertImpl: async (db, args) => { persisted.push(args); return args; },
+  });
+  assert.equal(persisted.length, 2);
+  assert.equal(persisted[0].code, 'SUPPLIER_PRICE_INCREASED');
+  assert.deepEqual(persisted[0].detail, { previousValue: 1700, currentValue: 2200 });
+  assert.equal(persisted[1].code, 'SUPPLIER_OUT_OF_STOCK');
+});
+
+test('runSupplierMonitorAndSuspendSweep continues even when persisting an alert fails', async () => {
+  const results = await runSupplierMonitorAndSuspendSweep({}, {}, {}, {
+    runSupplierMonitorSweepImpl: async () => ([{ supplierProductId: 1, alerts: [{ code: 'SUPPLIER_PRICE_INCREASED', message: 'x' }] }]),
+    createSupplierAlertImpl: async () => { throw new Error('db down'); },
+  });
+  assert.equal(results[0].alerts[0].persistError, 'db down');
+});
+
 test('runSupplierMonitorAndSuspendSweep only attempts suspension for SUPPLIER_OUT_OF_STOCK results with a linked draft, on both channels', async () => {
   const coupangSuspended = [];
   const naverSuspended = [];

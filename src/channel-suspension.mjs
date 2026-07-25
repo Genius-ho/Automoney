@@ -1,6 +1,7 @@
 import { runSupplierMonitorSweep } from './supplier-monitor.mjs';
 import { getCoupangRegistration } from './coupang-registration-store.mjs';
 import { getNaverRegistration } from './naver-registration-store.mjs';
+import { createSupplierAlert } from './supplier-alert-store.mjs';
 
 // automoney_complete_automation_implementation_plan.md section 15.2 (Phase
 // 10), first case: "주문 전 품절 → 발주 차단 → 채널 판매중지 → 관리자 알림". 발주 차단
@@ -76,18 +77,38 @@ async function findLinkedNaverProductDraftIds(db, supplierProductId) {
 }
 
 // Wraps runSupplierMonitorSweep -- same continue-past-failure shape as
-// every other sweep in this codebase, plus coupangSuspensions/
-// naverSuspensions fields appended onto any result that fired a
-// SUPPLIER_OUT_OF_STOCK alert AND has a linked live listing on that channel.
+// every other sweep in this codebase, plus:
+// - persisting every alert into supplier_alerts (section 16.1/16.5 -- these
+//   were purely ephemeral before, console.logged and discarded, so the
+//   admin dashboard had nothing to count).
+// - coupangSuspensions/naverSuspensions fields appended onto any result
+//   that fired a SUPPLIER_OUT_OF_STOCK alert AND has a linked live listing
+//   on that channel.
 export async function runSupplierMonitorAndSuspendSweep(db, domemeClient, { coupangClient, naverClient } = {}, {
   runSupplierMonitorSweepImpl = runSupplierMonitorSweep,
   findLinkedCoupangProductDraftIdsImpl = findLinkedCoupangProductDraftIds,
   findLinkedNaverProductDraftIdsImpl = findLinkedNaverProductDraftIds,
   suspendCoupangListingImpl = suspendCoupangListing,
   suspendNaverListingImpl = suspendNaverListing,
+  createSupplierAlertImpl = createSupplierAlert,
 } = {}) {
   const results = await runSupplierMonitorSweepImpl(db, domemeClient);
   for (const result of results) {
+    if (result.supplierProductId) {
+      for (const alert of result.alerts || []) {
+        try {
+          await createSupplierAlertImpl(db, {
+            supplierProductId: result.supplierProductId,
+            code: alert.code,
+            message: alert.message,
+            detail: { previousValue: alert.previousValue, currentValue: alert.currentValue },
+          });
+        } catch (error) {
+          alert.persistError = error.message;
+        }
+      }
+    }
+
     const outOfStock = (result.alerts || []).some((alert) => alert.code === 'SUPPLIER_OUT_OF_STOCK');
     if (!outOfStock || !result.supplierProductId) continue;
 

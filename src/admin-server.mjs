@@ -31,6 +31,8 @@ import { getValidDomemeSId } from './domeme-private-session.mjs';
 import { listSupplierOrdersForAdmin } from './purchase-order-store.mjs';
 import { approveSupplierOrder } from './purchase-order-approval.mjs';
 import { listOrderExceptionsForAdmin, resolveOrderException } from './order-exception-store.mjs';
+import { getDashboardSummary } from './dashboard-store.mjs';
+import { listSupplierAlerts, acknowledgeSupplierAlert } from './supplier-alert-store.mjs';
 import { attemptSupplierCancellation } from './cancellation-handler.mjs';
 import { isAllowedPublicAssetPath } from './public-assets.mjs';
 import { buildMainImagePackage } from './manual-ai/package-builder.mjs';
@@ -654,6 +656,32 @@ async function handleRequest({ request, response, db, aiSecrets, rootDir }) {
     return;
   }
 
+  // 대시보드 (section 16.1) -- read-only aggregate counts.
+  if (url.pathname === '/api/dashboard' && request.method === 'GET') {
+    const summary = await getDashboardSummary(db);
+    sendJson(response, 200, { summary });
+    return;
+  }
+
+  // 공급처 감시 알림 (section 16.5) -- Phase 6's runSupplierMonitorSweep
+  // alerts, persisted since channel-suspension.mjs's sweep wrapper. GET
+  // lists open ones; POST acknowledge is the only status change (this app
+  // never auto-resolves a price/MOQ/stock alert).
+  if (url.pathname === '/api/supplier-alerts' && request.method === 'GET') {
+    const status = url.searchParams.get('status') || 'open';
+    const alerts = await listSupplierAlerts(db, { status });
+    sendJson(response, 200, { alerts });
+    return;
+  }
+  const supplierAlertAckMatch = url.pathname.match(/^\/api\/supplier-alerts\/(\d+)\/acknowledge$/);
+  if (supplierAlertAckMatch && request.method === 'POST') {
+    const alertId = Number(supplierAlertAckMatch[1]);
+    const result = await acknowledgeSupplierAlert(db, alertId);
+    if (!result) { sendJson(response, 404, { error: 'Supplier alert not found' }); return; }
+    sendJson(response, 200, { result });
+    return;
+  }
+
   // Phase 10 (section 15) 관리자 예외 큐 -- 취소/반품/교환, none of which this
   // route ever processes automatically. GET lists it; the two POST actions
   // below are the only ways an exception's status changes.
@@ -1022,6 +1050,7 @@ function adminHtml() {
   <main>
     <section class="list">
       <div class="viewNav">
+        <button id="viewDashboardButton" type="button">대시보드</button>
         <button id="viewAllButton" class="primary" type="button">전체</button>
         <button id="viewRecommendButton" type="button">추천</button>
         <button id="viewRegistrationsButton" type="button">등록·재고관리</button>
@@ -1051,14 +1080,15 @@ function adminHtml() {
     const statusFilter=document.getElementById('statusFilter');const naverWinnerFilter=document.getElementById('naverWinnerFilter');const finalDecisionFilter=document.getElementById('finalDecisionFilter');const batchFilter=document.getElementById('batchFilter');const collectedOnly=document.getElementById('collectedOnly');
     document.getElementById('reloadButton').addEventListener('click',loadList);document.getElementById('naverCandidateButton').addEventListener('click',()=>{naverWinnerFilter.value='candidate';loadList();});statusFilter.addEventListener('change',loadList);naverWinnerFilter.addEventListener('change',loadList);finalDecisionFilter.addEventListener('change',loadList);batchFilter.addEventListener('change',loadList);collectedOnly.addEventListener('change',loadList);
     let currentView='all';
-    const viewButtons={all:document.getElementById('viewAllButton'),recommend:document.getElementById('viewRecommendButton'),registrations:document.getElementById('viewRegistrationsButton'),autoBatch:document.getElementById('viewAutoBatchButton'),channelOrders:document.getElementById('viewChannelOrdersButton'),domemePrecheck:document.getElementById('viewDomemePrecheckButton'),purchaseOrders:document.getElementById('viewPurchaseOrdersButton'),orderExceptions:document.getElementById('viewOrderExceptionsButton')};
+    const viewButtons={dashboard:document.getElementById('viewDashboardButton'),all:document.getElementById('viewAllButton'),recommend:document.getElementById('viewRecommendButton'),registrations:document.getElementById('viewRegistrationsButton'),autoBatch:document.getElementById('viewAutoBatchButton'),channelOrders:document.getElementById('viewChannelOrdersButton'),domemePrecheck:document.getElementById('viewDomemePrecheckButton'),purchaseOrders:document.getElementById('viewPurchaseOrdersButton'),orderExceptions:document.getElementById('viewOrderExceptionsButton')};
     for(const [view,button] of Object.entries(viewButtons))button.addEventListener('click',()=>switchView(view));
     function switchView(view){
       currentView=view;
       for(const [key,button] of Object.entries(viewButtons))button.classList.toggle('primary',key===view);
       document.querySelector('#draftTable').closest('.tableWrap').hidden=view!=='all';
       document.getElementById('specialView').hidden=view==='all';
-      if(view==='all')loadList();
+      if(view==='dashboard')loadDashboardView();
+      else if(view==='all')loadList();
       else if(view==='recommend')loadRecommendView();
       else if(view==='registrations')loadRegistrationsView();
       else if(view==='autoBatch')loadAutoBatchView();
@@ -1066,6 +1096,41 @@ function adminHtml() {
       else if(view==='domemePrecheck')loadDomemePrecheckView();
       else if(view==='purchaseOrders')loadPurchaseOrdersView();
       else if(view==='orderExceptions')loadOrderExceptionsView();
+    }
+    const DASHBOARD_METRIC_LABELS={todayRegistrations:'오늘 등록 수',todayImprovements:'오늘 개선 수',newOrders:'신규 주문 수',awaitingApproval:'발주 승인 대기 수',awaitingInvoice:'송장 대기 수',supplierAlerts:'품절/가격변동 수',automationErrors:'자동화 오류 수'};
+    const ALERT_CODE_LABELS={SUPPLIER_OUT_OF_STOCK:'공급처 품절',SUPPLIER_BACK_IN_STOCK:'공급처 재입고',SUPPLIER_PRICE_INCREASED:'공급가 상승',SUPPLIER_PRICE_DECREASED:'공급가 하락',SUPPLIER_MOQ_CHANGED:'최소주문수량 변경',SUPPLIER_DATA_ERROR:'공급처 데이터 오류'};
+    async function loadDashboardView(){
+      const el=document.getElementById('specialView');
+      el.innerHTML='<p class="muted" style="padding:12px">불러오는 중...</p>';
+      const [dashboardData,alertsData]=await Promise.all([api('/api/dashboard'),api('/api/supplier-alerts?status=open')]);
+      const summary=dashboardData.summary||{};
+      const alerts=alertsData.alerts||[];
+      el.innerHTML='<div style="padding:12px">'
+        +'<div class="section"><h3>대시보드 (16.1)</h3>'
+        +'<div class="grid" style="display:grid;grid-template-columns:repeat(auto-fit,minmax(160px,1fr));gap:12px;">'
+        +Object.entries(DASHBOARD_METRIC_LABELS).map(([key,label])=>'<div class="section" style="text-align:center;padding:16px;"><div style="font-size:28px;font-weight:bold;">'+(summary[key]??'-')+'</div><div class="muted">'+label+'</div></div>').join('')
+        +'</div></div>'
+        +'<div class="section"><h3>공급처 감시 알림 (16.5, Phase 6)</h3>'
+        +'<div id="dashboardAlertsActionResult" class="muted"></div>'
+        +'<div id="dashboardAlertsList">'+dashboardSupplierAlertsListHtml(alerts)+'</div>'
+        +'</div></div>';
+      for(const b of document.querySelectorAll('[data-alert-acknowledge-id]')){
+        b.addEventListener('click',async()=>{
+          const id=b.dataset.alertAcknowledgeId;
+          try{ await api('/api/supplier-alerts/'+id+'/acknowledge',{method:'POST',body:'{}'}); }
+          catch(error){document.getElementById('dashboardAlertsActionResult').textContent='오류: '+error.message;}
+          await loadDashboardView();
+        });
+      }
+    }
+    function dashboardSupplierAlertsListHtml(alerts){
+      if(!alerts||!alerts.length)return '<p class="muted">열려 있는 알림이 없습니다.</p>';
+      return '<table><thead><tr><th>공급처 상품번호</th><th>유형</th><th>내용</th><th>발생시각</th><th>액션</th></tr></thead><tbody>'
+        +alerts.map(a=>'<tr><td>'+escapeHtml(a.supplierProductNo||'-')+'</td>'
+          +'<td><span class="badge reasonBlock">'+escapeHtml(ALERT_CODE_LABELS[a.code]||a.code)+'</span></td>'
+          +'<td>'+escapeHtml(a.message||'-')+'</td><td>'+escapeHtml(a.createdAt||'-')+'</td>'
+          +'<td><button type="button" data-alert-acknowledge-id="'+a.id+'">확인 처리</button></td></tr>').join('')
+        +'</tbody></table>';
     }
     const QUEUE_STATUS_LABELS={queued:'대기 중',analyzing:'분석 중',generating_images:'이미지 생성 중',awaiting_approval:'승인 대기',ready_for_registration:'등록 준비 완료',failed:'실패'};
     async function loadAutoBatchView(){
