@@ -187,3 +187,20 @@ test('CoupangClient.uploadInvoice POSTs a single-entry orderSheetInvoiceApplyDto
   }]);
   assert.equal(result.data.responseList[0].succeed, true);
 });
+
+test('CoupangClient.suspendSale/resumeSale PUT the vendor-items sales stop/resume endpoints with no body', async () => {
+  let captured;
+  const fetchImpl = async (url, init) => {
+    captured = { url: String(url), method: init.method, body: init.body };
+    return { ok: true, status: 200, async text() { return JSON.stringify({ code: 'SUCCESS', message: 'Sale has been suspended.' }); } };
+  };
+  const client = new CoupangClient({ accessKey: 'ak', secretKey: 'sk', vendorId: 'A00000000', fetchImpl });
+
+  await client.suspendSale(3242596358);
+  assert.equal(captured.method, 'PUT');
+  assert.match(captured.url, /\/v2\/providers\/seller_api\/apis\/api\/v1\/marketplace\/vendor-items\/3242596358\/sales\/stop$/);
+  assert.equal(captured.body, undefined);
+
+  await client.resumeSale(3242596358);
+  assert.match(captured.url, /\/sales\/resume$/);
+});

@@ -172,6 +172,21 @@ export class CoupangClient {
       operation: 'upload_invoice',
     });
   }
+
+  // "상품 아이템별 판매 중지" (automoney_complete_automation_implementation_plan.md
+  // 15.2, "주문 전 품절 → 발주 차단 → 채널 판매중지") -- confirmed spec, 2026-07-26
+  // (developers.coupang.com). No request body; response is just {code, message}.
+  async suspendSale(vendorItemId) {
+    return this.request('PUT', `/v2/providers/seller_api/apis/api/v1/marketplace/vendor-items/${vendorItemId}/sales/stop`, {
+      operation: 'suspend_sale',
+    });
+  }
+
+  async resumeSale(vendorItemId) {
+    return this.request('PUT', `/v2/providers/seller_api/apis/api/v1/marketplace/vendor-items/${vendorItemId}/sales/resume`, {
+      operation: 'resume_sale',
+    });
+  }
 }
 
 // Coupang Wing Open API custom HMAC scheme: the signed message is the
