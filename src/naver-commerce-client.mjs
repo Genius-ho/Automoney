@@ -121,6 +121,25 @@ export class NaverCommerceClient {
     return this.request('GET', `/v2/products/origin-products/${originProductNo}`, { operation: 'get_product' });
   }
 
+  // "상품 판매 상태 변경" (automoney_complete_automation_implementation_plan.md
+  // 15.2, "주문 전 품절 → 발주 차단 → 채널 판매중지") -- confirmed spec, 2026-07-26
+  // (apicenter.commerce.naver.com, pasted directly by the user). Note the v1
+  // path -- getProduct()/createOriginProduct() above are v2, this one isn't.
+  // Whole-product level (originProductNo), unlike Coupang's per-vendorItemId
+  // requirement -- no live item enumeration needed first. Documented
+  // transition rule relevant here: SALE/OUTOFSTOCK/WAIT -> SUSPENSION is
+  // always valid regardless of current status.
+  async changeProductStatus(originProductNo, { statusType, saleStartDate, saleEndDate, stockQuantity } = {}) {
+    const body = { statusType };
+    if (saleStartDate) body.saleStartDate = saleStartDate;
+    if (saleEndDate) body.saleEndDate = saleEndDate;
+    if (stockQuantity !== undefined) body.stockQuantity = stockQuantity;
+    return this.request('PUT', `/v1/products/origin-products/${originProductNo}/change-status`, {
+      body,
+      operation: 'change_product_status',
+    });
+  }
+
   // createOriginProduct rejects arbitrary external image URLs (R2, or any
   // other host) with "올바른 이미지 파일이 아닙니다" even when the file is a
   // perfectly valid image -- confirmed live 2026-07-24. Naver's own docs

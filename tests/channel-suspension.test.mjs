@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
 
-import { suspendCoupangListing, runSupplierMonitorAndSuspendSweep } from '../src/channel-suspension.mjs';
+import { suspendCoupangListing, suspendNaverListing, runSupplierMonitorAndSuspendSweep } from '../src/channel-suspension.mjs';
 
 test('suspendCoupangListing is a no-op when the draft has no linked Coupang listing', async () => {
   const result = await suspendCoupangListing({}, {}, 46, { getCoupangRegistrationImpl: async () => null });
@@ -37,23 +37,65 @@ test('suspendCoupangListing continues past a single item failure and still repor
   assert.match(result.items[1].error, /boom/);
 });
 
-test('runSupplierMonitorAndSuspendSweep only attempts suspension for SUPPLIER_OUT_OF_STOCK results with a linked draft', async () => {
-  const suspended = [];
-  const results = await runSupplierMonitorAndSuspendSweep({}, {}, {}, {
+test('suspendNaverListing is a no-op when the draft has no linked Naver listing', async () => {
+  const result = await suspendNaverListing({}, {}, 46, { getNaverRegistrationImpl: async () => null });
+  assert.deepEqual(result, { suspended: false, reason: 'NOT_LINKED' });
+});
+
+test('suspendNaverListing calls changeProductStatus with statusType=SUSPENSION on the whole product (no item enumeration)', async () => {
+  let statusArgs;
+  const client = { async changeProductStatus(originProductNo, args) { statusArgs = { originProductNo, ...args }; } };
+  const result = await suspendNaverListing({}, client, 46, {
+    getNaverRegistrationImpl: async () => ({ originProductNo: '13620845243' }),
+  });
+  assert.equal(statusArgs.originProductNo, '13620845243');
+  assert.equal(statusArgs.statusType, 'SUSPENSION');
+  assert.equal(result.suspended, true);
+});
+
+test('suspendNaverListing reports a failure without throwing', async () => {
+  const client = { async changeProductStatus() { throw new Error('boom'); } };
+  const result = await suspendNaverListing({}, client, 46, {
+    getNaverRegistrationImpl: async () => ({ originProductNo: '13620845243' }),
+  });
+  assert.equal(result.suspended, false);
+  assert.match(result.error, /boom/);
+});
+
+test('runSupplierMonitorAndSuspendSweep only attempts suspension for SUPPLIER_OUT_OF_STOCK results with a linked draft, on both channels', async () => {
+  const coupangSuspended = [];
+  const naverSuspended = [];
+  const results = await runSupplierMonitorAndSuspendSweep({}, {}, { coupangClient: {}, naverClient: {} }, {
     runSupplierMonitorSweepImpl: async () => ([
       { supplierProductId: 1, alerts: [{ code: 'SUPPLIER_PRICE_INCREASED' }] },
       { supplierProductId: 2, alerts: [{ code: 'SUPPLIER_OUT_OF_STOCK' }] },
     ]),
     findLinkedCoupangProductDraftIdsImpl: async (db, supplierProductId) => (supplierProductId === 2 ? [46] : []),
-    suspendCoupangListingImpl: async (db, client, draftId) => { suspended.push(draftId); return { suspended: true, items: [] }; },
+    findLinkedNaverProductDraftIdsImpl: async (db, supplierProductId) => (supplierProductId === 2 ? [46] : []),
+    suspendCoupangListingImpl: async (db, client, draftId) => { coupangSuspended.push(draftId); return { suspended: true, items: [] }; },
+    suspendNaverListingImpl: async (db, client, draftId) => { naverSuspended.push(draftId); return { suspended: true }; },
   });
-  assert.deepEqual(suspended, [46]);
+  assert.deepEqual(coupangSuspended, [46]);
+  assert.deepEqual(naverSuspended, [46]);
   assert.equal(results[0].coupangSuspensions, undefined);
+  assert.equal(results[0].naverSuspensions, undefined);
   assert.deepEqual(results[1].coupangSuspensions, [{ productDraftId: 46, suspended: true, items: [] }]);
+  assert.deepEqual(results[1].naverSuspensions, [{ productDraftId: 46, suspended: true }]);
+});
+
+test('runSupplierMonitorAndSuspendSweep skips a channel entirely when its client is not provided', async () => {
+  const results = await runSupplierMonitorAndSuspendSweep({}, {}, { coupangClient: {} }, {
+    runSupplierMonitorSweepImpl: async () => ([{ supplierProductId: 2, alerts: [{ code: 'SUPPLIER_OUT_OF_STOCK' }] }]),
+    findLinkedCoupangProductDraftIdsImpl: async () => [46],
+    suspendCoupangListingImpl: async () => ({ suspended: true, items: [] }),
+    findLinkedNaverProductDraftIdsImpl: async () => { throw new Error('should not be called -- no naverClient given'); },
+  });
+  assert.deepEqual(results[0].coupangSuspensions, [{ productDraftId: 46, suspended: true, items: [] }]);
+  assert.equal(results[0].naverSuspensions, undefined);
 });
 
 test('runSupplierMonitorAndSuspendSweep records a suspension failure without throwing', async () => {
-  const results = await runSupplierMonitorAndSuspendSweep({}, {}, {}, {
+  const results = await runSupplierMonitorAndSuspendSweep({}, {}, { coupangClient: {} }, {
     runSupplierMonitorSweepImpl: async () => ([{ supplierProductId: 2, alerts: [{ code: 'SUPPLIER_OUT_OF_STOCK' }] }]),
     findLinkedCoupangProductDraftIdsImpl: async () => [46],
     suspendCoupangListingImpl: async () => { throw new Error('boom'); },

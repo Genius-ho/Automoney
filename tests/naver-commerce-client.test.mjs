@@ -233,6 +233,26 @@ test('NaverCommerceClient surfaces a non-OK response as NaverCommerceApiError wi
   );
 });
 
+// Confirmed spec, 2026-07-26 -- pasted directly from apicenter.commerce.naver.com
+// by the user (the docs site itself is blocked for WebFetch/browser
+// navigation in this environment).
+test('NaverCommerceClient.changeProductStatus PUTs statusType to the v1 change-status endpoint', async () => {
+  let captured;
+  const fetchImpl = async (url, init) => {
+    if (String(url).includes('/v1/oauth2/token')) return tokenFetchImpl()(url);
+    captured = { url: String(url), method: init.method, body: JSON.parse(init.body) };
+    return { ok: true, status: 200, async text() { return JSON.stringify({ originProductNo: 13620845243, originProduct: { statusType: 'SUSPENSION' } }); } };
+  };
+  const client = new NaverCommerceClient({ clientId: 'client-1', clientSecret: '$2b$10$j7fv77w6f6U3cxYt80fLJ.', fetchImpl });
+
+  const result = await client.changeProductStatus(13620845243, { statusType: 'SUSPENSION' });
+
+  assert.equal(captured.url, 'https://api.commerce.naver.com/external/v1/products/origin-products/13620845243/change-status');
+  assert.equal(captured.method, 'PUT');
+  assert.deepEqual(captured.body, { statusType: 'SUSPENSION' });
+  assert.equal(result.originProduct.statusType, 'SUSPENSION');
+});
+
 test('NaverCommerceClient surfaces a failed token request as NaverCommerceApiError', async () => {
   const fetchImpl = async () => ({ ok: false, status: 400, async text() { return JSON.stringify({ error: 'invalid_client' }); } });
   const client = new NaverCommerceClient({ clientId: 'client-1', clientSecret: '$2b$10$j7fv77w6f6U3cxYt80fLJ.', fetchImpl });
