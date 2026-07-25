@@ -8,6 +8,7 @@ import {
   tryAcquireOrderCollectionLock,
   releaseOrderCollectionLock,
   updateChannelOrderMapping,
+  getChannelOrder,
 } from '../src/channel-orders-store.mjs';
 
 function fakeRow(overrides = {}) {
@@ -67,6 +68,18 @@ test('updateChannelOrderMapping updates status, productDraftId, and supplierProd
   assert.equal(result.supplierMappingStatus, 'mapped');
   assert.equal(result.productDraftId, 46);
   assert.equal(result.supplierProductId, 900);
+});
+
+test('getChannelOrder returns the row by id, or null when not found', async () => {
+  let captured;
+  const db = { async query(sql, params) { captured = { sql, params }; return { rows: [fakeRow()] }; } };
+  const order = await getChannelOrder(db, 1);
+  assert.match(captured.sql, /where id = \$1/);
+  assert.deepEqual(captured.params, [1]);
+  assert.equal(order.id, 1);
+
+  const dbEmpty = { async query() { return { rows: [] }; } };
+  assert.equal(await getChannelOrder(dbEmpty, 999), null);
 });
 
 test('getOrderCollectionState returns null for an unknown channel', async () => {

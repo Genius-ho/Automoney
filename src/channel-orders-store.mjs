@@ -75,6 +75,11 @@ export async function updateChannelOrderMapping(db, orderId, { supplierMappingSt
   return result.rows[0] ? toChannelOrder(result.rows[0]) : null;
 }
 
+export async function getChannelOrder(db, id) {
+  const result = await db.query('select * from channel_orders where id = $1', [id]);
+  return result.rows[0] ? toChannelOrder(result.rows[0]) : null;
+}
+
 export async function listChannelOrders(db, { channel, supplierMappingStatus } = {}) {
   const conditions = [];
   const params = [];

@@ -28,6 +28,7 @@ import { listChannelOrders } from './channel-orders-store.mjs';
 import { maskOrderForLog } from './order-collector.mjs';
 import { DomemePrivateApiError, DomemePrivateClient } from './domeme-private-client.mjs';
 import { getValidDomemeSId } from './domeme-private-session.mjs';
+import { listSupplierOrdersForAdmin } from './purchase-order-store.mjs';
 import { isAllowedPublicAssetPath } from './public-assets.mjs';
 import { buildMainImagePackage } from './manual-ai/package-builder.mjs';
 import { buildDetailPagePackage } from './manual-ai/detail-package-builder.mjs';
@@ -617,6 +618,19 @@ async function handleRequest({ request, response, db, aiSecrets, rootDir }) {
     return;
   }
 
+  // Phase 8 (section 13.4 발주안 화면) -- read-only listing of supplier_orders
+  // drafts joined with their channel-order context. No approve/order action
+  // exists on this route yet: real order placement needs the domeme
+  // dome/supply market value resolved correctly per supplier product first
+  // (see purchase-order-builder.mjs), so this stays a review-only screen
+  // until that's wired up.
+  if (url.pathname === '/api/purchase-orders' && request.method === 'GET') {
+    const status = url.searchParams.get('status') || undefined;
+    const orders = await listSupplierOrdersForAdmin(db, { status });
+    sendJson(response, 200, { orders: orders.map(maskOrderForLog) });
+    return;
+  }
+
   if (url.pathname === '/api/auto-batch/queue' && request.method === 'GET') {
     const status = url.searchParams.get('status') || undefined;
     const [queue, activeCount, nextItem] = await Promise.all([
@@ -948,6 +962,7 @@ function adminHtml() {
         <button id="viewAutoBatchButton" type="button">자동배치</button>
         <button id="viewChannelOrdersButton" type="button">주문</button>
         <button id="viewDomemePrecheckButton" type="button">발주(도매매)</button>
+        <button id="viewPurchaseOrdersButton" type="button">발주안</button>
       </div>
       <div class="toolbar">
         <select id="statusFilter"><option value="">all</option><option value="draft">draft</option><option value="needs_review">needs_review</option><option value="blocked">blocked</option><option value="approved">approved</option></select>
@@ -969,7 +984,7 @@ function adminHtml() {
     const statusFilter=document.getElementById('statusFilter');const naverWinnerFilter=document.getElementById('naverWinnerFilter');const finalDecisionFilter=document.getElementById('finalDecisionFilter');const batchFilter=document.getElementById('batchFilter');const collectedOnly=document.getElementById('collectedOnly');
     document.getElementById('reloadButton').addEventListener('click',loadList);document.getElementById('naverCandidateButton').addEventListener('click',()=>{naverWinnerFilter.value='candidate';loadList();});statusFilter.addEventListener('change',loadList);naverWinnerFilter.addEventListener('change',loadList);finalDecisionFilter.addEventListener('change',loadList);batchFilter.addEventListener('change',loadList);collectedOnly.addEventListener('change',loadList);
     let currentView='all';
-    const viewButtons={all:document.getElementById('viewAllButton'),recommend:document.getElementById('viewRecommendButton'),registrations:document.getElementById('viewRegistrationsButton'),autoBatch:document.getElementById('viewAutoBatchButton'),channelOrders:document.getElementById('viewChannelOrdersButton'),domemePrecheck:document.getElementById('viewDomemePrecheckButton')};
+    const viewButtons={all:document.getElementById('viewAllButton'),recommend:document.getElementById('viewRecommendButton'),registrations:document.getElementById('viewRegistrationsButton'),autoBatch:document.getElementById('viewAutoBatchButton'),channelOrders:document.getElementById('viewChannelOrdersButton'),domemePrecheck:document.getElementById('viewDomemePrecheckButton'),purchaseOrders:document.getElementById('viewPurchaseOrdersButton')};
     for(const [view,button] of Object.entries(viewButtons))button.addEventListener('click',()=>switchView(view));
     function switchView(view){
       currentView=view;
@@ -982,6 +997,7 @@ function adminHtml() {
       else if(view==='autoBatch')loadAutoBatchView();
       else if(view==='channelOrders')loadChannelOrdersView();
       else if(view==='domemePrecheck')loadDomemePrecheckView();
+      else if(view==='purchaseOrders')loadPurchaseOrdersView();
     }
     const QUEUE_STATUS_LABELS={queued:'대기 중',analyzing:'분석 중',generating_images:'이미지 생성 중',awaiting_approval:'승인 대기',ready_for_registration:'등록 준비 완료',failed:'실패'};
     async function loadAutoBatchView(){
@@ -1099,6 +1115,36 @@ function adminHtml() {
       return runs.map(r=>'<div><button type="button" data-auto-batch-run-id="'+r.id+'">#'+r.id+'</button> '
         +escapeHtml(r.status)+' / '+escapeHtml(r.stageReached||'-')+' / '+escapeHtml(r.startedAt||'-')
         +(r.errorMessage?' / <span class="badge reasonBlock">'+escapeHtml(r.errorMessage)+'</span>':'')+'</div>').join('');
+    }
+    const SUPPLIER_ORDER_STATUS_LABELS={detected:'감지됨',mapping_required:'매핑 필요',validating_supplier:'검증/차단됨',order_draft_ready:'발주안 준비됨',awaiting_purchase_approval:'승인 대기',supplier_ordering:'발주 중',supplier_ordered:'발주 완료',supplier_order_failed:'발주 실패',cancelled:'취소됨'};
+    const BLOCK_REASON_LABELS={ORDER_CANCELLED:'채널 주문 취소됨',ADDRESS_INCOMPLETE:'배송지 정보 불완전',OPTION_MISMATCH:'옵션 매칭 실패',DRAFT_NOT_FOUND:'draft를 찾을 수 없음',SUPPLIER_FETCH_FAILED:'공급처 조회 실패',SUPPLIER_SOLD_OUT:'공급처 품절',SUPPLIER_SALE_STOPPED:'공급처 판매중지',MOQ_CHANGED:'최소주문수량 변경됨',LOSS_AT_CURRENT_PRICE:'현재가 기준 손실'};
+    let purchaseOrdersStatusFilter='awaiting_purchase_approval';
+    async function loadPurchaseOrdersView(){
+      const el=document.getElementById('specialView');
+      el.innerHTML='<p class="muted" style="padding:12px">불러오는 중...</p>';
+      const query=purchaseOrdersStatusFilter?('?status='+encodeURIComponent(purchaseOrdersStatusFilter)):'';
+      const data=await api('/api/purchase-orders'+query);
+      const orders=data.orders||[];
+      el.innerHTML='<div style="padding:12px">'
+        +'<div class="section"><h3>발주안 (Phase 8, 13.4) -- 검토 전용, 실제 발주 기능은 아직 연결되지 않음</h3>'
+        +'<select id="purchaseOrdersStatusFilter"><option value="">전체</option>'
+        +'<option value="awaiting_purchase_approval">승인 대기</option>'
+        +'<option value="validating_supplier">검증/차단됨</option>'
+        +'<option value="supplier_ordered">발주 완료</option></select>'
+        +'<div id="purchaseOrdersList">'+purchaseOrdersListHtml(orders)+'</div>'
+        +'</div></div>';
+      const filterEl=document.getElementById('purchaseOrdersStatusFilter');
+      filterEl.value=purchaseOrdersStatusFilter;
+      filterEl.addEventListener('change',()=>{purchaseOrdersStatusFilter=filterEl.value;loadPurchaseOrdersView();});
+    }
+    function purchaseOrdersListHtml(orders){
+      if(!orders||!orders.length)return '<p class="muted">발주안이 없습니다.</p>';
+      return '<table><thead><tr><th>채널</th><th>공급처 상품번호</th><th>옵션코드</th><th>판매수량</th><th>발주수량</th><th>판매금액</th><th>공급가</th><th>예상순이익</th><th>상태</th><th>차단사유</th></tr></thead><tbody>'
+        +orders.map(o=>'<tr><td>'+escapeHtml(o.channel||'-')+'</td><td>'+escapeHtml(o.supplierProductNo||'-')+'</td><td>'+escapeHtml(o.supplierOptionCode||'-')+'</td>'
+          +'<td>'+(o.saleQty??'-')+'</td><td>'+(o.supplierOrderQty??'-')+'</td><td>'+money(o.salePrice)+'</td><td>'+money(o.supplierUnitPrice)+'</td><td>'+money(o.estimatedProfit)+'</td>'
+          +'<td>'+(o.status==='awaiting_purchase_approval'?'<span class="badge">':'<span class="badge reasonBlock">')+escapeHtml(SUPPLIER_ORDER_STATUS_LABELS[o.status]||o.status)+'</span></td>'
+          +'<td>'+(o.blockReasons&&o.blockReasons.length?o.blockReasons.map(r=>escapeHtml(BLOCK_REASON_LABELS[r]||r)).join(', '):'-')+'</td></tr>').join('')
+        +'</tbody></table>';
     }
     const ORDER_MAPPING_STATUS_LABELS={mapping_required:'매핑 필요',mapped:'매핑 완료'};
     const ORDER_CHANNEL_LABELS={coupang:'쿠팡',naver:'네이버'};
