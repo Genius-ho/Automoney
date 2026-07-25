@@ -33,6 +33,7 @@ import { approveSupplierOrder } from './purchase-order-approval.mjs';
 import { listOrderExceptionsForAdmin, resolveOrderException } from './order-exception-store.mjs';
 import { getDashboardSummary } from './dashboard-store.mjs';
 import { listSupplierAlerts, acknowledgeSupplierAlert } from './supplier-alert-store.mjs';
+import { startScheduledJobs, stopScheduledJobs } from './scheduler.mjs';
 import { attemptSupplierCancellation } from './cancellation-handler.mjs';
 import { isAllowedPublicAssetPath } from './public-assets.mjs';
 import { buildMainImagePackage } from './manual-ai/package-builder.mjs';
@@ -142,8 +143,14 @@ export async function createAdminServer({ rootDir = process.cwd() } = {}) {
   }, AUTO_BATCH_TICK_INTERVAL_MS);
   tickHandle.unref?.();
 
+  // Phase 6-10's own periodic sweeps (section 18) -- see scheduler.mjs's
+  // header comment for why this is separate from the autoBatch tick above
+  // rather than folded into it.
+  const scheduledJobHandles = await startScheduledJobs(db, rootDir);
+
   server.on('close', () => {
     clearInterval(tickHandle);
+    stopScheduledJobs(scheduledJobHandles);
     db.end().catch(() => {});
   });
 
