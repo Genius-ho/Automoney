@@ -147,3 +147,29 @@ export function buildNaverOriginProductPayload({
     },
   };
 }
+
+// Image-only swap for a listing already registered externally via 스피드등록
+// (mirrors coupang-payload-builder.mjs's mapLiveProductToUpdatePayload). Spreads
+// `live.originProduct` wholesale rather than rebuilding a payload field by
+// field -- unlike Coupang's GET/PUT shapes (which genuinely differ), Naver's
+// docs state originProduct/smartstoreChannelProduct are the same structure
+// across registration, get, and both update endpoints, so the live GET
+// response is itself a valid starting point for the PUT body. Never touched
+// live and only overridden here: `images` and `detailContent`. UNVERIFIED
+// against a real live call (same caveat as the rest of this file) -- if
+// getProduct() turns out to carry response-only fields PUT rejects, that's
+// the first thing to check.
+export function mapLiveNaverProductToImageSwapPayload(live, { mainImageUrl, detailImageUrls = [] }) {
+  const detailContent = detailImageUrls.map((url) => `<img src="${url}" />`).join('');
+  return {
+    originProduct: {
+      ...live.originProduct,
+      images: {
+        representativeImage: mainImageUrl ? { url: mainImageUrl } : null,
+        optionalImages: detailImageUrls.slice(0, 9).map((url) => ({ url })),
+      },
+      detailContent,
+    },
+    smartstoreChannelProduct: live.smartstoreChannelProduct,
+  };
+}

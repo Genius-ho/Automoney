@@ -5,6 +5,7 @@ function toRegistrationRow(row) {
     channelProductNo: row.channel_product_no,
     status: row.status,
     linkedVia: row.linked_via,
+    imagesSwappedAt: row.images_swapped_at,
     createdAt: row.created_at,
     updatedAt: row.updated_at,
   };
@@ -57,4 +58,14 @@ export async function linkNaverRegistration(db, productDraftId, { originProductN
     [productDraftId, String(originProductNo), requestHash],
   );
   return toRegistrationRow({ ...result.rows[0], product_draft_id: productDraftId });
+}
+
+// Mirrors coupang-registration-store.mjs's recordImagesSwapped.
+export async function recordImagesSwapped(db, productDraftId) {
+  const result = await db.query(
+    `update naver_product_registrations set status = 'images_swapped', images_swapped_at = now(), updated_at = now()
+     where product_draft_id = $1 returning *`,
+    [productDraftId],
+  );
+  return result.rows[0] ? toRegistrationRow({ ...result.rows[0], product_draft_id: productDraftId }) : null;
 }

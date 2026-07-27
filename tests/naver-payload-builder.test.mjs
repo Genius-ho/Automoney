@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
 
-import { buildNaverOriginProductPayload } from '../src/naver-payload-builder.mjs';
+import { buildNaverOriginProductPayload, mapLiveNaverProductToImageSwapPayload } from '../src/naver-payload-builder.mjs';
 
 function fakeDraft(overrides = {}) {
   return {
@@ -133,4 +133,54 @@ test('buildNaverOriginProductPayload includes smartstoreChannelProduct with the 
   assert.equal(payload.smartstoreChannelProduct.channelId, 'channel-99');
   assert.equal(payload.smartstoreChannelProduct.naverShoppingRegistration, true);
   assert.equal(payload.smartstoreChannelProduct.channelProductName, '무타공 수납 정리함');
+});
+
+// Mirrors coupang-payload-builder.mjs's mapLiveProductToUpdatePayload tests --
+// a live getProduct() response spread wholesale, only images/detailContent
+// overridden.
+function liveNaverProductFixture(overrides = {}) {
+  return {
+    originProduct: {
+      statusType: 'SALE',
+      name: '무타공 수납 정리함',
+      salePrice: 19800,
+      stockQuantity: 999,
+      leafCategoryId: '50000803',
+      images: { representativeImage: { url: 'https://pub.example/old-main.jpg' }, optionalImages: [{ url: 'https://pub.example/old-detail-1.jpg' }] },
+      detailContent: '<img src="https://pub.example/old-detail-1.jpg" />',
+      deliveryInfo: { deliveryType: 'DELIVERY' },
+      detailAttribute: { manufacturerName: '와우픽' },
+    },
+    smartstoreChannelProduct: { channelProductDisplayStatusType: 'SUSPENSION', naverShoppingRegistration: true },
+    ...overrides,
+  };
+}
+
+test('mapLiveNaverProductToImageSwapPayload replaces only images/detailContent, carrying every other originProduct field through verbatim', () => {
+  const live = liveNaverProductFixture();
+  const payload = mapLiveNaverProductToImageSwapPayload(live, {
+    mainImageUrl: 'https://pub.example/new-main.jpg',
+    detailImageUrls: ['https://pub.example/new-detail-1.jpg', 'https://pub.example/new-detail-2.jpg'],
+  });
+
+  assert.equal(payload.originProduct.images.representativeImage.url, 'https://pub.example/new-main.jpg');
+  assert.deepEqual(payload.originProduct.images.optionalImages, [{ url: 'https://pub.example/new-detail-1.jpg' }, { url: 'https://pub.example/new-detail-2.jpg' }]);
+  assert.match(payload.originProduct.detailContent, /new-detail-1\.jpg/);
+  assert.match(payload.originProduct.detailContent, /new-detail-2\.jpg/);
+
+  // untouched fields carried through from the live GET response
+  assert.equal(payload.originProduct.statusType, 'SALE');
+  assert.equal(payload.originProduct.salePrice, 19800);
+  assert.equal(payload.originProduct.stockQuantity, 999);
+  assert.equal(payload.originProduct.leafCategoryId, '50000803');
+  assert.deepEqual(payload.originProduct.deliveryInfo, { deliveryType: 'DELIVERY' });
+  assert.equal(payload.originProduct.detailAttribute.manufacturerName, '와우픽');
+  assert.deepEqual(payload.smartstoreChannelProduct, { channelProductDisplayStatusType: 'SUSPENSION', naverShoppingRegistration: true });
+});
+
+test('mapLiveNaverProductToImageSwapPayload caps optionalImages at 9, same limit as create', () => {
+  const live = liveNaverProductFixture();
+  const detailImageUrls = Array.from({ length: 10 }, (_, i) => `https://pub.example/detail-${i + 1}.jpg`);
+  const payload = mapLiveNaverProductToImageSwapPayload(live, { mainImageUrl: 'https://pub.example/main.jpg', detailImageUrls });
+  assert.equal(payload.originProduct.images.optionalImages.length, 9);
 });

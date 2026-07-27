@@ -24,7 +24,8 @@ import { buildRegistrationPreview, createDirectRegistration, extractList, previe
 import { getSellerShippingSettings, saveSellerShippingSettings } from './coupang-seller-settings-store.mjs';
 import { NaverCommerceClient, NaverCommerceApiError } from './naver-commerce-client.mjs';
 import { createNaverDirectRegistration } from './naver-registration-flow.mjs';
-import { getNaverRegistration, linkNaverRegistration } from './naver-registration-store.mjs';
+import { getNaverRegistration, linkNaverRegistration, recordImagesSwapped as recordNaverImagesSwapped } from './naver-registration-store.mjs';
+import { mapLiveNaverProductToImageSwapPayload } from './naver-payload-builder.mjs';
 import { createPgPool, runSchema } from './postgres-store.mjs';
 import { listChannelOrders } from './channel-orders-store.mjs';
 import { maskOrderForLog } from './order-collector.mjs';
@@ -575,6 +576,45 @@ async function handleRequest({ request, response, db, aiSecrets, rootDir }) {
       await client.updateOptionStock(registration.originProductNo, payload);
       const after = await client.getProduct(registration.originProductNo);
       sendJson(response, 200, { dryRun: false, before: { salePrice: currentSalePrice }, after: { salePrice: after?.originProduct?.salePrice ?? null } });
+    } catch (error) {
+      if (error instanceof NaverCommerceApiError) { sendJson(response, 502, { error: error.message, code: 'NAVER_API_ERROR', bodyPreview: error.bodyPreview }); return; }
+      throw error;
+    }
+    return;
+  }
+
+  // 네이버 이미지 교체 -- mirrors registrationSwapMatch (Coupang) above, using
+  // updateOriginProduct/mapLiveNaverProductToImageSwapPayload instead.
+  const naverSwapMatch = url.pathname.match(/^\/api\/product-drafts\/(\d+)\/naver-registration\/swap-images$/);
+  if (naverSwapMatch && request.method === 'POST') {
+    const draftId = Number(naverSwapMatch[1]);
+    try {
+      const body = await readJson(request);
+      const registration = await getNaverRegistration(db, draftId);
+      if (!registration?.originProductNo) { sendJson(response, 409, { error: 'This draft is not linked to a Naver originProductNo yet', code: 'NOT_LINKED' }); return; }
+      const mainImage = await getApprovedManualMainImage(db, draftId);
+      const detailSet = await getApprovedManualDetailSet(db, draftId);
+      if (!mainImage || !detailSet) { sendJson(response, 409, { error: 'Approved main image and/or approved detail-page image set are missing', code: 'IMAGES_NOT_APPROVED' }); return; }
+      const { mainImageUrl, detailImageUrls } = await uploadApprovedImagesToR2({
+        rootDir,
+        draftId,
+        mainImageLocalUrl: mainImage.coupangStoredUrl,
+        detailImageLocalUrls: detailSet.images.map((image) => image.normalizedStoredUrl),
+      });
+      const config = await loadNaverCommerceConfig(rootDir);
+      const client = new NaverCommerceClient(config);
+      const live = await client.getProduct(registration.originProductNo);
+      const payload = mapLiveNaverProductToImageSwapPayload(live, { mainImageUrl, detailImageUrls });
+
+      await mkdir(`${rootDir}/artifacts`, { recursive: true });
+      await writeFile(`${rootDir}/artifacts/naver-swap-payload-draft-${draftId}-${Date.now()}.json`, JSON.stringify(payload, null, 2));
+
+      if (body.confirm !== true) { sendJson(response, 200, { dryRun: true, payload }); return; }
+
+      await client.updateOriginProduct(registration.originProductNo, payload);
+      await recordNaverImagesSwapped(db, draftId);
+      const after = await client.getProduct(registration.originProductNo);
+      sendJson(response, 200, { dryRun: false, before: live, after });
     } catch (error) {
       if (error instanceof NaverCommerceApiError) { sendJson(response, 502, { error: error.message, code: 'NAVER_API_ERROR', bodyPreview: error.bodyPreview }); return; }
       throw error;
@@ -1951,22 +1991,34 @@ function adminHtml() {
       const panel=document.querySelector('#detail [data-panel="naverLive"]');
       if(!panel)return;
       const container=panel.querySelector('#naverLiveContent');
-      const regData=await api('/api/product-drafts/'+id+'/naver-registration');
+      const [regData,mainRes,detailRes]=await Promise.all([
+        api('/api/product-drafts/'+id+'/naver-registration'),
+        api('/api/product-drafts/'+id+'/ai-workflows/main-image/results'),
+        api('/api/product-drafts/'+id+'/ai-workflows/detail-page/results'),
+      ]);
       const reg=regData.registration;
-      container.innerHTML=naverLiveHtml(draft,reg);
+      const approvedMain=(mainRes.results||[]).find(r=>r.status==='approved')||null;
+      const approvedDetail=(detailRes.sets||[]).find(s=>s.status==='approved')||null;
+      container.innerHTML=naverLiveHtml(draft,reg,approvedMain,approvedDetail);
       wireNaverLiveSection(id,draft,container);
     }
-    function naverLiveHtml(draft,reg){
+    function naverLiveHtml(draft,reg,approvedMain,approvedDetail){
       const linked=reg&&reg.originProductNo;
       const linkSection=linked
         ?'<div><strong>연결됨</strong>: originProductNo '+escapeHtml(reg.originProductNo)+' <span class="badge status">'+escapeHtml(reg.linkedVia||'')+'</span> / status '+escapeHtml(reg.status||'')+'</div>'
         :'<div class="muted">아직 네이버 상품과 연결되지 않았습니다. 스피드등록으로 등록한 뒤 네이버 커머스센터에서 originProductNo를 확인해 입력하세요.</div><label>originProductNo</label><input id="naverLinkOriginProductNo"><p><button id="naverLinkButton" type="button">연결하기</button></p>';
+      const imagesReady=approvedMain&&approvedDetail;
+      const swapSection='<div class="section"><h3>이미지 반영</h3>'
+        +(imagesReady
+          ?'<div>승인된 대표이미지: <img src="'+attr(approvedMain.coupangStoredUrl)+'"> 승인된 상세이미지 '+approvedDetail.images.length+'장</div><p><button id="naverSwapPreviewButton" type="button" '+(linked?'':'disabled')+'>이미지 반영 미리보기</button></p><div id="naverSwapPreviewResult"></div>'
+          :'<div class="muted">승인된 대표이미지 또는 상세이미지 세트가 아직 없습니다 (이미지 프롬프트 탭에서 먼저 승인하세요).</div>')
+        +'</div>';
       const priceSection='<div class="section"><h3>가격 조정</h3>'
         +(linked
           ?'<p><button id="naverPriceLoadButton" type="button">현재 가격 불러오기</button></p><div id="naverPriceResult"></div>'
           :'<div class="muted">먼저 네이버 상품과 연결해야 합니다.</div>')
         +'</div>';
-      return '<div class="section">'+linkSection+'</div>'+priceSection;
+      return '<div class="section">'+linkSection+'</div>'+swapSection+priceSection;
     }
     function wireNaverLiveSection(id,draft,container){
       const linkButton=container.querySelector('#naverLinkButton');
@@ -1975,6 +2027,23 @@ function adminHtml() {
         if(!originProductNo){alert('originProductNo를 입력하세요');return;}
         await api('/api/product-drafts/'+id+'/naver-registration/link',{method:'POST',body:JSON.stringify({originProductNo})});
         await loadNaverLiveSection(id,draft);
+      };
+      const swapPreviewButton=container.querySelector('#naverSwapPreviewButton');
+      if(swapPreviewButton)swapPreviewButton.onclick=async()=>{
+        const resultEl=container.querySelector('#naverSwapPreviewResult');
+        resultEl.innerHTML='<p class="muted">미리보기 생성 중...</p>';
+        try{
+          const data=await api('/api/product-drafts/'+id+'/naver-registration/swap-images',{method:'POST',body:JSON.stringify({})});
+          resultEl.innerHTML='<pre>'+escapeHtml(JSON.stringify(data.payload,null,2))+'</pre><p><button id="naverSwapConfirmButton" type="button">위 내용으로 실제 반영</button></p>';
+          resultEl.querySelector('#naverSwapConfirmButton').onclick=async()=>{
+            if(!confirm('실제 네이버 상품에 이미지를 반영합니다. 되돌릴 수 없습니다. 계속할까요?'))return;
+            const confirmed=await api('/api/product-drafts/'+id+'/naver-registration/swap-images',{method:'POST',body:JSON.stringify({confirm:true})});
+            resultEl.innerHTML='<p>반영 완료. statusType='+escapeHtml(confirmed.after?.originProduct?.statusType||'')+'</p>';
+            await loadNaverLiveSection(id,draft);
+          };
+        }catch(error){
+          resultEl.innerHTML='<p class="muted">'+escapeHtml(error.message)+'</p>';
+        }
       };
       const priceLoadButton=container.querySelector('#naverPriceLoadButton');
       if(priceLoadButton)priceLoadButton.onclick=async()=>{

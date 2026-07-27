@@ -121,6 +121,27 @@ export class NaverCommerceClient {
     return this.request('GET', `/v2/products/origin-products/${originProductNo}`, { operation: 'get_product' });
   }
 
+  // "(v2) 원상품 수정" -- confirmed spec, 2026-07-28 (apicenter.commerce.naver.com,
+  // pasted directly by the user since the docs site is blocked for both
+  // WebFetch and browser navigation in this environment, same as every other
+  // Naver spec comment in this file). Keys off originProductNo, the same
+  // identifier getProduct()/linkNaverRegistration already use -- unlike the
+  // sibling PUT /v2/products/channel-products/{channelProductNo} endpoint,
+  // which needs a channelProductNo this app never stores for speedgo-linked
+  // listings. Body shape mirrors createOriginProduct's own
+  // {originProduct, smartstoreChannelProduct} envelope (Naver's docs confirm
+  // originProduct/smartstoreChannelProduct are the same structures across
+  // registration, get, and both update endpoints) -- "부분 수정이 아닌 전체
+  // 본문 형태가 안전합니다" (a full resubmission, not a partial patch), so
+  // mapLiveNaverProductToImageSwapPayload spreads the live GET response
+  // rather than building a payload from scratch.
+  async updateOriginProduct(originProductNo, payload) {
+    return this.request('PUT', `/v2/products/origin-products/${originProductNo}`, {
+      body: payload,
+      operation: 'update_origin_product',
+    });
+  }
+
   // "상품 판매 상태 변경" (automoney_complete_automation_implementation_plan.md
   // 15.2, "주문 전 품절 → 발주 차단 → 채널 판매중지") -- confirmed spec, 2026-07-26
   // (apicenter.commerce.naver.com, pasted directly by the user). Note the v1

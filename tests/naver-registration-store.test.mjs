@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
 
-import { getNaverRegistration, recordNaverDirectRegistration } from '../src/naver-registration-store.mjs';
+import { getNaverRegistration, recordImagesSwapped, recordNaverDirectRegistration } from '../src/naver-registration-store.mjs';
 
 test('getNaverRegistration returns null when no row exists for the draft', async () => {
   const db = { async query() { return { rows: [] }; } };
@@ -44,4 +44,23 @@ test('recordNaverDirectRegistration returns null (not the existing row) when a c
   const db = { async query() { return { rows: [] }; } };
   const result = await recordNaverDirectRegistration(db, 501, { originProductNo: '123', requestHash: 'hash' });
   assert.equal(result, null);
+});
+
+test('recordImagesSwapped sets status=images_swapped and stamps images_swapped_at', async () => {
+  const db = {
+    async query(sql, params) {
+      assert.match(sql, /status = 'images_swapped'/);
+      assert.match(sql, /images_swapped_at = now\(\)/);
+      assert.deepEqual(params, [501]);
+      return { rows: [{ origin_product_no: '7777777777', status: 'images_swapped', images_swapped_at: '2026-07-28T00:00:00.000Z' }] };
+    },
+  };
+  const result = await recordImagesSwapped(db, 501);
+  assert.equal(result.status, 'images_swapped');
+  assert.equal(result.imagesSwappedAt, '2026-07-28T00:00:00.000Z');
+});
+
+test('recordImagesSwapped returns null when no row exists for the draft', async () => {
+  const db = { async query() { return { rows: [] }; } };
+  assert.equal(await recordImagesSwapped(db, 999), null);
 });
