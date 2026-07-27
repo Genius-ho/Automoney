@@ -130,6 +130,49 @@ export function mapOptionsToMandatoryAttributes({ draftOptions, mandatoryOptionN
   return { items, unresolvedMandatoryAttributes, missingStock };
 }
 
+// "API 판매자 브랜드 및 상품 식별 정보 필수 입력" (Coupang policy for sellers whose
+// first API key was issued on/after 2026-06-01): every item needs a GTIN or
+// MPN whenever its brand's own Coupang brand-master entry says so
+// (isUIDRequired). Pure so it's testable without a live searchBrand() call
+// -- coupang-registration-flow.mjs is the only caller that touches the
+// network, passing in whatever CoupangClient.searchBrand(brandName) returned.
+// Never fabricates a GTIN/MPN for a brand that doesn't have one for real
+// (Coupang explicitly bans inventing purchase-order/SKU numbers as a stand-in,
+// e.g. "P003"/"SKU-001") -- MISSING_GTIN_MPN blocks registration instead.
+export function resolveBrandIdentifier({ brandSearchResult, brandName, gtin = null, mpn = null }) {
+  const candidates = extractList(brandSearchResult);
+  const match = candidates.find((candidate) => candidate?.brandName === brandName) || null;
+
+  if (!match) {
+    return { status: 'BRAND_NOT_FOUND', brandId: null, isUIDRequired: null, allowedUIDTypes: [], identifierAttributes: [] };
+  }
+  if (!match.isUIDRequired) {
+    return { status: 'NO_UID_REQUIRED', brandId: match.brandId, isUIDRequired: false, allowedUIDTypes: match.allowedUIDTypes || [], identifierAttributes: [] };
+  }
+
+  const allowedUIDTypes = match.allowedUIDTypes || [];
+  if (allowedUIDTypes.includes('GTIN') && gtin) {
+    return {
+      status: 'PASS', brandId: match.brandId, isUIDRequired: true, allowedUIDTypes,
+      identifierAttributes: [{ attributeTypeName: 'Global Trade Item Number', attributeValueName: gtin, exposed: 'NONE' }],
+    };
+  }
+  if (allowedUIDTypes.includes('MPN') && mpn) {
+    return {
+      status: 'PASS', brandId: match.brandId, isUIDRequired: true, allowedUIDTypes,
+      identifierAttributes: [{ attributeTypeName: 'Manufacturer Part Number', attributeValueName: mpn, exposed: 'NONE' }],
+    };
+  }
+  return { status: 'MISSING_GTIN_MPN', brandId: match.brandId, isUIDRequired: true, allowedUIDTypes, identifierAttributes: [] };
+}
+
+function extractList(raw) {
+  const payload = raw?.data ?? raw;
+  if (Array.isArray(payload)) return payload;
+  if (Array.isArray(payload?.content)) return payload.content;
+  return [];
+}
+
 export function formatKstDateTime(date = new Date()) {
   const parts = new Intl.DateTimeFormat('en-CA', {
     timeZone: 'Asia/Seoul',
@@ -185,6 +228,8 @@ export function buildCoupangProductPayload({
   sellerProductId = null,
   sellerProductItemIds = [],
   brand = null,
+  brandId = null,
+  identifierAttributes = [],
   manufacture = null,
   sellerProductNameOverride = null,
   displayProductNameOverride = null,
@@ -251,6 +296,7 @@ export function buildCoupangProductPayload({
     saleEndedAt,
     displayProductName: displayProductNameOverride ?? draft.displayProductName,
     brand,
+    ...(brandId ? { brandId } : {}),
     manufacture,
     deliveryMethod: 'SEQUENCIAL',
     deliveryCompanyCode,
@@ -283,7 +329,7 @@ export function buildCoupangProductPayload({
       parallelImported: 'NOT_PARALLEL_IMPORTED',
       overseasPurchased: 'NOT_OVERSEAS_PURCHASED',
       adultOnly: 'EVERYONE',
-      attributes: item.attributes,
+      attributes: [...item.attributes, ...identifierAttributes],
       images: imageOnlyImages,
       notices,
       contents,

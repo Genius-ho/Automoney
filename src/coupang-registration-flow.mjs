@@ -2,7 +2,7 @@ import { createHash } from 'node:crypto';
 
 import { CoupangClient } from './coupang-client.mjs';
 import { createCoupangCategoryAdapter } from './coupang-category-adapter.mjs';
-import { buildCoupangProductPayload, extractSupplierNoticeFields, formatKstDateTime, mapOptionsToMandatoryAttributes } from './coupang-payload-builder.mjs';
+import { buildCoupangProductPayload, extractSupplierNoticeFields, formatKstDateTime, mapOptionsToMandatoryAttributes, resolveBrandIdentifier } from './coupang-payload-builder.mjs';
 import { uploadApprovedImagesToR2 } from './r2-publisher.mjs';
 import { exportProductDraft } from './admin-store.mjs';
 import { getAppliedAnalysis } from './product-analysis-orchestrator.mjs';
@@ -209,7 +209,7 @@ export async function previewCategoryAndShipping(db, draftId, { coupangConfig, c
 // WING-검수 style ready/missing report, adapted from the read-only
 // scripts/coupang-preflight.mjs logic so both surfaces agree on what
 // "ready to register" means.
-function buildReadinessReport({ draft, prediction, categoryMeta, optionMapping, outboundShippingPlace, returnShippingCenter, shippingSettings, material, verifiedSize, manufacturer, countryOfOrigin, mainImageUrl, detailImageUrls, noticeCategoryTemplateName, resolvedNotices = [], mode = 'improved' }) {
+function buildReadinessReport({ draft, prediction, categoryMeta, optionMapping, outboundShippingPlace, returnShippingCenter, shippingSettings, material, verifiedSize, manufacturer, countryOfOrigin, mainImageUrl, detailImageUrls, noticeCategoryTemplateName, resolvedNotices = [], identifierStatus, mode = 'improved' }) {
   const ready = [];
   const missing = [];
 
@@ -255,6 +255,15 @@ function buildReadinessReport({ draft, prediction, categoryMeta, optionMapping, 
     missing.push('카테고리 메타정보 없음 -- 필수옵션/고시정보/인증 확인 불가');
   }
 
+  // "API 판매자 브랜드 및 상품 식별 정보 필수 입력" policy (2026-06-01~): Coupang's
+  // own brand-master entry decides per brand whether GTIN/MPN is mandatory --
+  // BRAND_NOT_FOUND/NO_UID_REQUIRED both mean nothing further is owed here,
+  // only MISSING_GTIN_MPN actually blocks (see resolveBrandIdentifier).
+  if (identifierStatus?.status === 'PASS') ready.push(`상품식별정보(${identifierStatus.identifierAttributes[0]?.attributeTypeName}) 입력됨`);
+  else if (identifierStatus?.status === 'MISSING_GTIN_MPN') missing.push(`브랜드 "${SELLER_FIXED_CONFIG.brand}"는 GTIN 또는 MPN이 필요합니다 (허용: ${JSON.stringify(identifierStatus.allowedUIDTypes)})`);
+  else if (identifierStatus?.status === 'NO_UID_REQUIRED') ready.push('브랜드 확인됨 -- 상품식별정보 불필요');
+  else if (identifierStatus?.status === 'BRAND_NOT_FOUND') ready.push('쿠팡 브랜드 미등록 -- 상품식별정보 불필요');
+
   if (material) ready.push(`소재: ${material}`); else missing.push('소재 (고시정보 필수)');
   if (verifiedSize) ready.push(`치수: ${verifiedSize}`); else missing.push('치수 (고시정보 필수)');
   if (manufacturer) ready.push(`제조자: ${manufacturer}`); else missing.push('제조자 (고시정보 필수)');
@@ -290,10 +299,23 @@ export async function buildRegistrationPreview(db, rootDir, draftId, {
 } = {}) {
   if (draftId === PROTECTED_DRAFT_ID) throw Object.assign(new Error('draft 64는 보호 대상입니다'), { code: 'DRAFT_PROTECTED' });
 
+  const client = clientImpl || new CoupangClient(coupangConfig);
+
   const { draft, prediction, categoryMeta, outboundShippingPlace, returnShippingCenter, shippingSettings } =
-    await previewCategoryAndShipping(db, draftId, { coupangConfig, clientImpl, categoryAdapterImpl, exportProductDraftImpl, getSellerShippingSettingsImpl });
+    await previewCategoryAndShipping(db, draftId, { coupangConfig, clientImpl: client, categoryAdapterImpl, exportProductDraftImpl, getSellerShippingSettingsImpl });
 
   const appliedAnalysis = await getAppliedAnalysisImpl(db, draftId);
+
+  // "API 판매자 브랜드 및 상품 식별 정보 필수 입력" policy -- resolved fresh on every
+  // preview (never cached) since Coupang's own brand-master entry is the
+  // live source of truth for whether this brand needs a GTIN/MPN at all.
+  const brandSearchResult = await client.searchBrand(SELLER_FIXED_CONFIG.brand);
+  const identifierStatus = resolveBrandIdentifier({
+    brandSearchResult,
+    brandName: SELLER_FIXED_CONFIG.brand,
+    gtin: overrides.gtin ?? null,
+    mpn: overrides.mpn ?? null,
+  });
 
   let mainImageLocalUrl;
   let detailImageLocalUrls;
@@ -385,6 +407,8 @@ export async function buildRegistrationPreview(db, rootDir, draftId, {
     remoteAreaDeliverable: SELLER_FIXED_CONFIG.remoteAreaDeliverable,
     unionDeliverable: true,
     brand: SELLER_FIXED_CONFIG.brand,
+    brandId: identifierStatus.brandId,
+    identifierAttributes: identifierStatus.identifierAttributes,
     manufacture: SELLER_FIXED_CONFIG.manufacture,
     searchTags,
     requested: false,
@@ -394,12 +418,13 @@ export async function buildRegistrationPreview(db, rootDir, draftId, {
     draft, prediction, categoryMeta, optionMapping, outboundShippingPlace, returnShippingCenter, shippingSettings,
     material, verifiedSize, manufacturer, countryOfOrigin, mainImageUrl, detailImageUrls, noticeCategoryTemplateName,
     resolvedNotices: payload.items?.[0]?.notices || [],
+    identifierStatus,
     mode,
   });
 
   const requestHash = createHash('sha256').update(JSON.stringify(payload)).digest('hex');
 
-  return { draft, prediction, categoryMeta, payload, readiness, requestHash, mainImageUrl, detailImageUrls, appliedAnalysis };
+  return { draft, prediction, categoryMeta, payload, readiness, requestHash, mainImageUrl, detailImageUrls, appliedAnalysis, identifierStatus };
 }
 
 // Steps 8-9: dedup-checked, gated, requested=false createProduct() call and

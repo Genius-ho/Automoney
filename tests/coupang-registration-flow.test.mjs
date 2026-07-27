@@ -86,8 +86,13 @@ function fakeCategoryAdapter({ prediction = { displayCategoryCode: 71691, catego
   };
 }
 
-function fakeCoupangClient({ createProductResult = { code: 'SUCCESS', data: '99999999999' }, outbound = [{ shippingPlaceName: '행당 출고지', outboundShippingPlaceCode: 111, placeAddresses: [{ companyContactNumber: '010-0000-0000' }] }], returnCenters = [{ shippingPlaceName: '행당 반품지', returnCenterCode: '222', placeAddresses: [{}] }], getProductResults = [], requestApprovalResult = { code: 'SUCCESS', data: null } } = {}) {
-  const calls = { createProduct: 0, requestApproval: 0, getProduct: 0 };
+// Default searchBrandResult is an empty match list ("와우픽" isn't a
+// registered Coupang brand) -- resolveBrandIdentifier treats that as
+// BRAND_NOT_FOUND, which never blocks readiness, so every existing test that
+// doesn't care about the brand/GTIN policy keeps its "clean, non-blocked"
+// expectations without having to know about this feature.
+function fakeCoupangClient({ createProductResult = { code: 'SUCCESS', data: '99999999999' }, outbound = [{ shippingPlaceName: '행당 출고지', outboundShippingPlaceCode: 111, placeAddresses: [{ companyContactNumber: '010-0000-0000' }] }], returnCenters = [{ shippingPlaceName: '행당 반품지', returnCenterCode: '222', placeAddresses: [{}] }], getProductResults = [], requestApprovalResult = { code: 'SUCCESS', data: null }, searchBrandResult = { data: [] } } = {}) {
+  const calls = { createProduct: 0, requestApproval: 0, getProduct: 0, searchBrand: 0 };
   return {
     calls,
     async listOutboundShippingPlaces() { return { data: outbound }; },
@@ -95,6 +100,7 @@ function fakeCoupangClient({ createProductResult = { code: 'SUCCESS', data: '999
     async createProduct(payload) { calls.createProduct += 1; this.lastPayload = payload; return createProductResult; },
     async getProduct() { const result = getProductResults[Math.min(calls.getProduct, getProductResults.length - 1)]; calls.getProduct += 1; return result; },
     async requestApproval(sellerProductId) { calls.requestApproval += 1; this.lastApprovalSellerProductId = sellerProductId; return requestApprovalResult; },
+    async searchBrand(brandName) { calls.searchBrand += 1; this.lastSearchBrandName = brandName; return searchBrandResult; },
   };
 }
 
@@ -288,6 +294,38 @@ test('buildRegistrationPreview assembles a requested=false payload using applied
 
   const noticeMaterial = preview.payload.items[0].notices.find((n) => n.noticeCategoryDetailName === '종류');
   assert.ok(noticeMaterial);
+});
+
+test('buildRegistrationPreview blocks when the seller brand requires a GTIN/MPN that was never supplied', async () => {
+  const db = makeDraftsDb([]);
+  const client = fakeCoupangClient({
+    searchBrandResult: { data: [{ brandId: 'KR-999', brandName: SELLER_FIXED_CONFIG.brand, isUIDRequired: true, allowedUIDTypes: ['GTIN', 'MPN'] }] },
+  });
+  const preview = await buildRegistrationPreview(db, '/repo', 46, commonPreviewDeps({ clientImpl: client }));
+
+  assert.equal(preview.identifierStatus.status, 'MISSING_GTIN_MPN');
+  assert.equal(preview.readiness.blocked, true);
+  assert.ok(preview.readiness.missing.some((line) => line.includes('GTIN 또는 MPN이 필요합니다')));
+  assert.deepEqual(preview.payload.items[0].attributes.filter((a) => a.attributeTypeName.startsWith('Global') || a.attributeTypeName.startsWith('Manufacturer')), []);
+});
+
+test('buildRegistrationPreview unblocks and attaches a Global Trade Item Number attribute when overrides.gtin is supplied for a UID-required brand', async () => {
+  const db = makeDraftsDb([]);
+  const client = fakeCoupangClient({
+    searchBrandResult: { data: [{ brandId: 'KR-999', brandName: SELLER_FIXED_CONFIG.brand, isUIDRequired: true, allowedUIDTypes: ['GTIN', 'MPN'] }] },
+  });
+  const preview = await buildRegistrationPreview(db, '/repo', 46, commonPreviewDeps({
+    clientImpl: client,
+    overrides: { gtin: '8801234567890' },
+  }));
+
+  assert.equal(preview.identifierStatus.status, 'PASS');
+  assert.equal(preview.payload.brandId, 'KR-999');
+  assert.deepEqual(
+    preview.payload.items[0].attributes.filter((a) => a.attributeTypeName === 'Global Trade Item Number'),
+    [{ attributeTypeName: 'Global Trade Item Number', attributeValueName: '8801234567890', exposed: 'NONE' }],
+  );
+  assert.equal(preview.readiness.blocked, false);
 });
 
 test('buildRegistrationPreview overrides win over applied-analysis autofill', async () => {

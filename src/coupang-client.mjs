@@ -93,6 +93,18 @@ export class CoupangClient {
     });
   }
 
+  // "브랜드 검색" -- confirmed spec, 2026-07-28 (developers.coupang.com). Not
+  // just a name->brandId lookup: isUIDRequired/allowedUIDTypes tell the
+  // caller whether this brand needs a GTIN or MPN on every item at all (see
+  // resolveBrandIdentifier in coupang-payload-builder.mjs), which is the
+  // actual reason this call has to happen before every registration now.
+  async searchBrand(brandName, { countPerPage = 10, page = 1 } = {}) {
+    return this.request('POST', '/v2/providers/seller_api/apis/api/v1/marketplace/brands/search', {
+      body: { brandName, countPerPage, page },
+      operation: 'search_brand',
+    });
+  }
+
   async createProduct(payload) {
     return this.request('POST', '/v2/providers/seller_api/apis/api/v1/marketplace/seller-products', {
       body: payload,

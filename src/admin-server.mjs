@@ -1876,6 +1876,8 @@ function adminHtml() {
       if(val('ovNoticeTemplate'))overrides.noticeCategoryTemplateName=val('ovNoticeTemplate');
       if(val('ovDisplayCategoryCode'))overrides.displayCategoryCode=Number(val('ovDisplayCategoryCode'));
       if(val('ovHandlingCaution'))overrides.handlingCaution=val('ovHandlingCaution');
+      if(val('ovGtin'))overrides.gtin=val('ovGtin');
+      if(val('ovMpn'))overrides.mpn=val('ovMpn');
       return overrides;
     }
     function wireDirectRegisterSection(id,draft,container){
@@ -1904,6 +1906,8 @@ function adminHtml() {
             +'<label>고시정보 템플릿</label><select id="ovNoticeTemplate"><option value="">(자동 선택: 첫 번째 후보)</option>'+templateOptions+'</select>'
             +'<label>displayCategoryCode 재지정(선택)</label><input id="ovDisplayCategoryCode" value="'+attr(data.prediction.displayCategoryCode||'')+'">'
             +'<label>취급시 주의사항</label><input id="ovHandlingCaution">'
+            +'<label>GTIN(바코드, 공식 식별번호가 있을 때만)</label><input id="ovGtin">'
+            +'<label>MPN(제조사 모델번호, 공식 식별번호가 있을 때만)</label><input id="ovMpn">'
             +'</div>';
         }catch(error){
           resultEl.innerHTML='<p class="muted">'+escapeHtml(error.message)+'</p>';

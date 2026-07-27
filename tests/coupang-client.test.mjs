@@ -144,6 +144,22 @@ test('CoupangClient.listOrderSheets queries the v5 ordersheets endpoint with the
   assert.deepEqual(result.data, []);
 });
 
+test('CoupangClient.searchBrand posts brandName/countPerPage/page to the brands/search endpoint', async () => {
+  let captured;
+  const fetchImpl = async (url, init) => {
+    captured = { url: String(url), method: init.method, body: JSON.parse(init.body) };
+    return { ok: true, status: 200, async text() { return JSON.stringify({ data: [{ brandId: 'KR-5', brandName: '와우픽', isUIDRequired: false, allowedUIDTypes: [] }] }); } };
+  };
+  const client = new CoupangClient({ accessKey: 'ak', secretKey: 'sk', vendorId: 'A00000000', fetchImpl });
+
+  const result = await client.searchBrand('와우픽');
+
+  assert.equal(captured.url, 'https://api-gateway.coupang.com/v2/providers/seller_api/apis/api/v1/marketplace/brands/search');
+  assert.equal(captured.method, 'POST');
+  assert.deepEqual(captured.body, { brandName: '와우픽', countPerPage: 10, page: 1 });
+  assert.equal(result.data[0].brandId, 'KR-5');
+});
+
 test('CoupangClient surfaces a non-OK response as CoupangApiError without leaking the secret', async () => {
   const fetchImpl = async () => ({
     ok: false,

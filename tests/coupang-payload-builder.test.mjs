@@ -8,6 +8,7 @@ import {
   formatKstDateTime,
   mapLiveProductToUpdatePayload,
   mapOptionsToMandatoryAttributes,
+  resolveBrandIdentifier,
 } from '../src/coupang-payload-builder.mjs';
 
 test('formatKstDateTime renders a UTC instant as Coupang\'s local-time format in Asia/Seoul', () => {
@@ -408,6 +409,119 @@ test('buildCoupangProductPayload builds a single-item modify request with seller
 
   const manufacturerNotice = item.notices.find((notice) => notice.noticeCategoryDetailName === '제조자(수입자)');
   assert.equal(manufacturerNotice.content, '와우픽');
+});
+
+test('buildCoupangProductPayload adds brandId to the envelope and appends identifierAttributes to every item, on top of the mandatory ones', () => {
+  const draft = draft64Fixture();
+  const optionMapping = mapOptionsToMandatoryAttributes({
+    draftOptions: [{ optionValue: '베이지/그레이', additionalPrice: 0 }],
+    mandatoryOptionNames: ['색상'],
+    stockByOptionValue: { '베이지/그레이': 10 },
+  });
+
+  const payload = buildCoupangProductPayload({
+    draft,
+    vendorId: 'A01550261',
+    displayCategoryCode: 71691,
+    categoryMeta: categoryMetaFixture(),
+    noticeCategoryTemplateName: '패션잡화(모자/벨트/액세서리 등)',
+    supplierNoticeFields: extractSupplierNoticeFields(draft64RawJson()),
+    optionMapping,
+    outboundShippingPlace: { outboundShippingPlaceCode: 24466172, shippingPlaceName: '행당' },
+    returnShippingCenter: { returnCenterCode: '1002401151', shippingPlaceName: '반품지1', placeAddresses: [{}] },
+    mainImageUrl: 'https://pub-example.r2.dev/drafts/64/coupang/main.jpg',
+    approvedDetailImageUrls: TEN_APPROVED_DETAIL_IMAGES.map((_, i) => `https://pub-example.r2.dev/drafts/64/coupang/detail-${i}.jpg`),
+    brand: '산리오',
+    brandId: 'KR-999',
+    identifierAttributes: [{ attributeTypeName: 'Global Trade Item Number', attributeValueName: '8801234567890', exposed: 'NONE' }],
+  });
+
+  assert.equal(payload.brandId, 'KR-999');
+  assert.deepEqual(payload.items[0].attributes, [
+    { attributeTypeName: '색상', attributeValueName: '베이지/그레이' },
+    { attributeTypeName: 'Global Trade Item Number', attributeValueName: '8801234567890', exposed: 'NONE' },
+  ]);
+});
+
+test('buildCoupangProductPayload omits brandId entirely when none is supplied (no registered brand match)', () => {
+  const draft = draft64Fixture();
+  const optionMapping = { items: [{ optionValue: null, additionalPrice: 0, stockQuantity: 5, attributes: [] }], unresolvedMandatoryAttributes: [], missingStock: [] };
+
+  const payload = buildCoupangProductPayload({
+    draft,
+    vendorId: 'A01550261',
+    categoryMeta: {},
+    supplierNoticeFields: extractSupplierNoticeFields(draft64RawJson()),
+    optionMapping,
+    mainImageUrl: 'https://pub-example.r2.dev/main.jpg',
+    approvedDetailImageUrls: [],
+    brand: '와우픽',
+  });
+
+  assert.equal('brandId' in payload, false);
+  assert.deepEqual(payload.items[0].attributes, []);
+});
+
+test('resolveBrandIdentifier returns BRAND_NOT_FOUND when the brand has no Coupang brand-master entry', () => {
+  const result = resolveBrandIdentifier({ brandSearchResult: { data: [] }, brandName: '와우픽' });
+  assert.equal(result.status, 'BRAND_NOT_FOUND');
+  assert.equal(result.brandId, null);
+  assert.deepEqual(result.identifierAttributes, []);
+});
+
+test('resolveBrandIdentifier returns NO_UID_REQUIRED when the matched brand does not require GTIN/MPN', () => {
+  const result = resolveBrandIdentifier({
+    brandSearchResult: { data: [{ brandId: 'KR-5', brandName: '와우픽', isUIDRequired: false, allowedUIDTypes: [] }] },
+    brandName: '와우픽',
+  });
+  assert.equal(result.status, 'NO_UID_REQUIRED');
+  assert.equal(result.brandId, 'KR-5');
+  assert.deepEqual(result.identifierAttributes, []);
+});
+
+test('resolveBrandIdentifier returns MISSING_GTIN_MPN when required but neither value was supplied -- never fabricates one', () => {
+  const result = resolveBrandIdentifier({
+    brandSearchResult: { data: [{ brandId: 'KR-999', brandName: '산리오', isUIDRequired: true, allowedUIDTypes: ['GTIN', 'MPN'] }] },
+    brandName: '산리오',
+  });
+  assert.equal(result.status, 'MISSING_GTIN_MPN');
+  assert.equal(result.brandId, 'KR-999');
+  assert.deepEqual(result.identifierAttributes, []);
+});
+
+test('resolveBrandIdentifier returns PASS with a Global Trade Item Number attribute when GTIN is supplied and allowed', () => {
+  const result = resolveBrandIdentifier({
+    brandSearchResult: { data: [{ brandId: 'KR-999', brandName: '산리오', isUIDRequired: true, allowedUIDTypes: ['GTIN', 'MPN'] }] },
+    brandName: '산리오',
+    gtin: '8801234567890',
+  });
+  assert.equal(result.status, 'PASS');
+  assert.deepEqual(result.identifierAttributes, [
+    { attributeTypeName: 'Global Trade Item Number', attributeValueName: '8801234567890', exposed: 'NONE' },
+  ]);
+});
+
+test('resolveBrandIdentifier prefers GTIN over MPN when both are supplied and both are allowed', () => {
+  const result = resolveBrandIdentifier({
+    brandSearchResult: { data: [{ brandId: 'KR-999', brandName: '산리오', isUIDRequired: true, allowedUIDTypes: ['GTIN', 'MPN'] }] },
+    brandName: '산리오',
+    gtin: '8801234567890',
+    mpn: 'MT0Q3FE/A',
+  });
+  assert.equal(result.identifierAttributes[0].attributeTypeName, 'Global Trade Item Number');
+});
+
+test('resolveBrandIdentifier falls back to MPN when the brand only allows MPN, not GTIN', () => {
+  const result = resolveBrandIdentifier({
+    brandSearchResult: { data: [{ brandId: 'KR-999', brandName: '산리오', isUIDRequired: true, allowedUIDTypes: ['MPN'] }] },
+    brandName: '산리오',
+    gtin: '8801234567890',
+    mpn: 'MT0Q3FE/A',
+  });
+  assert.equal(result.status, 'PASS');
+  assert.deepEqual(result.identifierAttributes, [
+    { attributeTypeName: 'Manufacturer Part Number', attributeValueName: 'MT0Q3FE/A', exposed: 'NONE' },
+  ]);
 });
 
 test('buildCoupangProductPayload fills notice fields a different template names (e.g. "기타 재화") via noticeContentOverrides', () => {
