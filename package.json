@@ -6,6 +6,7 @@
   "scripts": {
     "db:check": "node scripts/db-check.js",
     "admin": "node scripts/admin-server.js",
+    "speedgo:login": "node scripts/speedgo-login.mjs",
     "collect:candidates": "node scripts/collect-candidates.js",
     "monitor:suppliers": "node scripts/monitor-supplier-products.mjs",
     "collect:orders": "node scripts/collect-orders.mjs",
