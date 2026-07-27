@@ -13,6 +13,7 @@ import { runShipmentCollectionSweep } from './shipment-collector.mjs';
 import { runChannelDispatchSweep } from './channel-dispatch.mjs';
 import { runCancellationExceptionSweep } from './cancellation-handler.mjs';
 import { runSupplierMonitorAndSuspendSweep } from './channel-suspension.mjs';
+import { sendDailySummary } from './daily-summary.mjs';
 
 // automoney_complete_automation_implementation_plan.md section 18 스케줄
 // 기준. 상품 카테고리 발굴(3일)/스피드등록/상품개선(매일)은 admin-server.mjs's own
@@ -29,6 +30,7 @@ export const ORDER_TICK_INTERVAL_MS = 30 * 60 * 1000; // 쿠팡/네이버 주문
 export const DISPATCH_TICK_INTERVAL_MS = 90 * 60 * 1000; // 배송상태 동기화: 1~2시간마다
 export const SUPPLIER_MONITOR_TICK_INTERVAL_MS = 6 * 60 * 60 * 1000; // 공급처 가격·재고 감시: 하루 4회
 export const TELEGRAM_APPROVAL_POLL_INTERVAL_MS = 15 * 1000; // 텔레그램 인라인 버튼 응답: 즉시 반응이 필요해 다른 sweep보다 훨씬 짧게
+export const DAILY_SUMMARY_TICK_INTERVAL_MS = 24 * 60 * 60 * 1000; // 등록/이미지교체 현황 요약: 하루 1회 (2026-07-28 사용자 요청)
 
 // Loaded once at startup, not per-tick -- same reasoning as admin-server.mjs's
 // own loadAutoBatchDeps: missing/invalid config disables scheduling
@@ -103,6 +105,7 @@ export async function startScheduledJobs(db, rootDir, {
     tickImpl('supplierMonitor', SUPPLIER_MONITOR_TICK_INTERVAL_MS, () => runSupplierMonitorAndSuspendSweep(db, domemeClient, { coupangClient, naverClient }), opts),
     tickImpl('purchaseOrderTelegramNotify', ORDER_TICK_INTERVAL_MS, () => notifyPendingPurchaseApprovals(db, telegramConfig), opts),
     tickImpl('telegramApprovalPoll', TELEGRAM_APPROVAL_POLL_INTERVAL_MS, () => approvalPoller.pollOnce(db, domemePrivateClient, telegramConfig), opts),
+    tickImpl('dailySummary', DAILY_SUMMARY_TICK_INTERVAL_MS, () => sendDailySummary(db, telegramConfig), opts),
   ];
 }
 
