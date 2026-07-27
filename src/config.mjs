@@ -73,6 +73,18 @@ export async function loadNaverCommerceConfig(rootDir = process.cwd()) {
   return { clientId, clientSecret, channelId };
 }
 
+// Alerts are supplementary (22.9) -- missing/partial config disables
+// notifications rather than breaking startup, same reasoning as
+// loadCodexConfig. Returns null, never throws.
+export async function loadTelegramConfig(rootDir = process.cwd()) {
+  const values = await loadEnvValues(rootDir).catch(() => ({}));
+  const pick = (name) => values[name] || process.env[name];
+  const botToken = pick('TELEGRAM_BOT_TOKEN');
+  const chatId = pick('TELEGRAM_CHAT_ID');
+  if (!botToken || !chatId) return null;
+  return { botToken, chatId };
+}
+
 export async function loadR2Config(rootDir = process.cwd()) {
   const values = await loadEnvValues(rootDir);
   const pick = (name) => values[name] || process.env[name];

@@ -3,7 +3,8 @@ import { mkdir, readFile, rename, rm, writeFile } from 'node:fs/promises';
 import { extname, join, resolve } from 'node:path';
 import { createHash } from 'node:crypto';
 
-import { loadAiSecrets, loadCodexConfig, loadCoupangConfig, loadDatabaseUrl, loadDomemePrivateConfig, loadEnvConfig, loadJobPathsConfig, loadNaverCommerceConfig, loadNaverConfig, loadPricingRules, loadPythonConfig } from './config.mjs';
+import { loadAiSecrets, loadCodexConfig, loadCoupangConfig, loadDatabaseUrl, loadDomemePrivateConfig, loadEnvConfig, loadJobPathsConfig, loadNaverCommerceConfig, loadNaverConfig, loadPricingRules, loadPythonConfig, loadTelegramConfig } from './config.mjs';
+import { sendCriticalAlert } from './telegram-notifier.mjs';
 import { DomemeClient } from './domeme-client.mjs';
 import { runCandidateDiscoveryBatch, runDailyProcessingBatch } from './auto-discovery-batch.mjs';
 import { getBatchScheduleState, updateBatchScheduleState } from './batch-schedule-store.mjs';
@@ -134,6 +135,7 @@ export async function createAdminServer({ rootDir = process.cwd() } = {}) {
   });
 
   const autoBatchDeps = await loadAutoBatchDeps(rootDir);
+  const telegramConfig = await loadTelegramConfig(rootDir);
   const tickHandle = setInterval(async () => {
     if (!autoBatchDeps) return;
     try {
@@ -155,6 +157,11 @@ export async function createAdminServer({ rootDir = process.cwd() } = {}) {
       }
     } catch (error) {
       console.error(`autoBatch.tickError=${error.message}`);
+      try {
+        await sendCriticalAlert(telegramConfig, 'autoBatch.tick', error.message);
+      } catch (alertError) {
+        console.error(`autoBatch.tickAlertFailed=${alertError.message}`);
+      }
     }
   }, AUTO_BATCH_TICK_INTERVAL_MS);
   tickHandle.unref?.();

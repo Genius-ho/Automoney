@@ -28,6 +28,7 @@ function toSupplierOrder(row) {
     channelShipStatus: row.channel_ship_status,
     channelShipError: row.channel_ship_error,
     channelShippedAt: row.channel_shipped_at,
+    telegramNotifiedAt: row.telegram_notified_at,
     createdAt: row.created_at,
     updatedAt: row.updated_at,
   };
@@ -139,6 +140,34 @@ export async function recordSupplierOrderCancellation(db, id, { note = null } = 
     `update supplier_orders set status = 'cancelled', failure_message = $2, updated_at = now()
      where id = $1 returning *`,
     [id, note],
+  );
+  return result.rows[0] ? toSupplierOrder(result.rows[0]) : null;
+}
+
+// Telegram 인라인 버튼 발주 승인: every row a human still needs to see a
+// prompt for -- awaiting_purchase_approval and never yet notified. Reuses
+// the same join as listSupplierOrdersForAdmin (13.4 발주안 화면) since the
+// Telegram message needs the same channel-order context to be legible.
+export async function listSupplierOrdersAwaitingTelegramNotification(db) {
+  const result = await db.query(
+    `select so.*, co.channel, co.channel_order_id, co.option_info
+     from supplier_orders so
+     join channel_orders co on co.id = so.channel_order_id
+     where so.status = 'awaiting_purchase_approval' and so.telegram_notified_at is null
+     order by so.created_at asc`,
+  );
+  return result.rows.map((row) => ({
+    ...toSupplierOrder(row),
+    channel: row.channel,
+    channelOrderId: row.channel_order_id,
+    optionInfo: row.option_info,
+  }));
+}
+
+export async function markSupplierOrderTelegramNotified(db, id) {
+  const result = await db.query(
+    `update supplier_orders set telegram_notified_at = now(), updated_at = now() where id = $1 returning *`,
+    [id],
   );
   return result.rows[0] ? toSupplierOrder(result.rows[0]) : null;
 }

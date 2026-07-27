@@ -843,6 +843,13 @@ alter table supplier_orders add column if not exists channel_ship_error text;
 alter table supplier_orders add column if not exists channel_shipped_at timestamptz;
 create index if not exists idx_supplier_orders_channel_ship_status on supplier_orders(channel_ship_status);
 
+-- Telegram 인라인 버튼 발주 승인 (22.9): tracks whether an
+-- awaiting_purchase_approval row has already had its Telegram approval
+-- prompt sent, so the 30-minute purchaseOrderValidation sweep (which
+-- re-upserts every mapped order's row every tick) doesn't re-notify the
+-- same pending order on every subsequent tick.
+alter table supplier_orders add column if not exists telegram_notified_at timestamptz;
+
 -- Phase 10 (section 15): 관리자 예외 큐. Shared across 15.1's "이미 출고"/
 -- "미출고, 공급처 취소 가능 여부 확인" cancellation cases and 15.3's 반품/교환
 -- (explicitly never auto-processed -- "모든 반품·교환은 관리자 예외 큐로 보낸다").

@@ -16,6 +16,8 @@ import {
   recordSupplierShipment,
   recordChannelShipmentResult,
   listShippedNotDispatched,
+  listSupplierOrdersAwaitingTelegramNotification,
+  markSupplierOrderTelegramNotified,
 } from '../src/purchase-order-store.mjs';
 
 function fakeRow(overrides = {}) {
@@ -158,6 +160,28 @@ test('listShippedNotDispatched selects shipments with tracking that have not bee
   const rows = await listShippedNotDispatched(db);
   assert.match(captured, /tracking_number is not null and channel_ship_status <> 'sent'/);
   assert.equal(rows[0].channelShipStatus, 'mapping_failed');
+});
+
+test('listSupplierOrdersAwaitingTelegramNotification selects only awaiting_purchase_approval rows never notified', async () => {
+  let captured;
+  const db = {
+    async query(sql, params) {
+      captured = { sql, params };
+      return { rows: [fakeRow({ status: 'awaiting_purchase_approval', channel: 'coupang', channel_order_id: '22000009546234', option_info: '블랙' })] };
+    },
+  };
+  const rows = await listSupplierOrdersAwaitingTelegramNotification(db);
+  assert.match(captured.sql, /so\.status = 'awaiting_purchase_approval' and so\.telegram_notified_at is null/);
+  assert.equal(rows[0].channel, 'coupang');
+  assert.equal(rows[0].optionInfo, '블랙');
+});
+
+test('markSupplierOrderTelegramNotified sets telegram_notified_at', async () => {
+  let captured;
+  const db = { async query(sql, params) { captured = { sql, params }; return { rows: [fakeRow({ status: 'awaiting_purchase_approval' })] }; } };
+  await markSupplierOrderTelegramNotified(db, 1);
+  assert.match(captured.sql, /set telegram_notified_at = now\(\)/);
+  assert.deepEqual(captured.params, [1]);
 });
 
 test('recordChannelShipmentResult only sets channel_shipped_at when the status is "sent"', async () => {
