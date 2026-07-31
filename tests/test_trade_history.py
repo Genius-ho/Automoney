@@ -46,12 +46,35 @@ class TradeHistoryTest(unittest.TestCase):
         self.assertEqual(total, Decimal("9.00"))
         self.assertEqual(unknown_sales, 1)
 
+    def test_pre_split_fills_are_restated_so_a_post_split_sell_finds_its_cost_basis(self):
+        """KORU did a real 20:1 split effective 2026-07-15 (see
+        corporate_actions.KNOWN_SHARE_SPLITS). Without restating the older,
+        pre-split fills, a post-split sell of the same underlying shares
+        looks like it exceeds every recorded buy -- production data showed
+        exactly this: real gains being reported as "unknown cost basis" and
+        dropped from the realized-P/L total."""
+        rows = [
+            self._row("2026-07-14T14:00:00+00:00", "BUY", "3", "429.9733333333333333333333333", "0", symbol="KORU"),
+            self._row("2026-07-16T14:00:00+00:00", "BUY", "10", "21.87", "0", symbol="KORU"),
+            self._row("2026-07-23T14:00:00+00:00", "SELL", "50", "22.43086", "0", symbol="KORU"),
+        ]
+
+        result = aggregate_daily_trades(rows)
+        sell = next(item for item in result if item.side == "SELL")
+
+        # 3 pre-split shares restate to 60 post-split shares; +10 post-split
+        # buy = 70 available, comfortably covering the 50-share sell.
+        self.assertIsNotNone(sell.realized_pnl)
+        total, unknown_sales = summarize_realized_pnl(result)
+        self.assertEqual(unknown_sales, 0)
+        self.assertGreater(total, Decimal("0"))
+
     @staticmethod
-    def _row(filled_at, side, quantity, price, commission):
+    def _row(filled_at, side, quantity, price, commission, symbol="SOXL"):
         quantity = Decimal(str(quantity))
         price = Decimal(price)
         return {
-            "symbol": "SOXL",
+            "symbol": symbol,
             "side": side,
             "status": "FILLED",
             "execution": {

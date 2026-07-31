@@ -6,6 +6,8 @@ from datetime import datetime
 from decimal import Decimal
 from typing import Any
 
+from corporate_actions import KNOWN_SHARE_SPLITS
+
 
 @dataclass(frozen=True)
 class DailyTrade:
@@ -37,7 +39,19 @@ def aggregate_daily_trades(rows: list[dict[str, Any]]) -> list[DailyTrade]:
         price = Decimal(str(execution.get("averageFilledPrice") or "0"))
         amount_value = execution.get("filledAmount")
         amount = Decimal(str(amount_value)) if amount_value not in (None, "") else quantity * price
-        fills.append((datetime.fromisoformat(str(filled_at).replace("Z", "+00:00")), row, execution, quantity, price, amount))
+        timestamp = datetime.fromisoformat(str(filled_at).replace("Z", "+00:00"))
+        # A pre-split fill's quantity/price are still denominated in
+        # pre-split share terms; every fill afterwards is post-split. Without
+        # restating the old fills, the running inventory below silently
+        # under-counts shares held across the split, so every sell after it
+        # looks like it exceeds what was ever bought -- permanently marking
+        # real gains as "unknown cost basis" and dropping them from the
+        # total. amount/commission/tax are dollar figures and unaffected.
+        split = KNOWN_SHARE_SPLITS.get(str(row.get("symbol") or ""))
+        if split and timestamp.date() <= split.ex_date:
+            quantity *= split.quantity_multiplier
+            price /= split.quantity_multiplier
+        fills.append((timestamp, row, execution, quantity, price, amount))
     fills.sort(key=lambda item: item[0])
 
     inventory: dict[str, tuple[Decimal, Decimal]] = {}
