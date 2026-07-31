@@ -188,6 +188,35 @@ class TradingWebServiceTests(unittest.TestCase):
                 {"symbol": "TQQQ", "realized_pnl": "100", "unknown_sales": 0, "sell_count": 1},
             ])
 
+    def test_realized_pnl_finds_cost_basis_for_a_buy_before_the_reporting_window(self):
+        """A share bought (e.g. manually, outside this app) before the
+        reporting start date must still be found as cost basis for a sell
+        that happens to fall inside the window -- otherwise that sell's P/L
+        is silently dropped as "unknown", undercounting the total."""
+        with tempfile.TemporaryDirectory() as temp:
+            broker = FakeTradingBroker()
+            broker.closed_orders = [
+                {"symbol": "TQQQ", "side": "BUY", "status": "FILLED", "execution": {
+                    "filledQuantity": "10", "averageFilledPrice": "80", "filledAmount": "800",
+                    "commission": "0", "filledAt": "2024-01-05T00:00:00+00:00",
+                }},
+                {"symbol": "TQQQ", "side": "SELL", "status": "FILLED", "execution": {
+                    "filledQuantity": "10", "averageFilledPrice": "90", "filledAmount": "900",
+                    "commission": "0", "filledAt": datetime.now(timezone.utc).isoformat(),
+                }},
+            ]
+            service = self._service(temp, broker)
+            self._activate(service, "TQQQ")
+
+            history = service.trade_history("TQQQ", (date.today() - timedelta(days=7)).isoformat())
+            cumulative = service.cumulative_realized_pnl((date.today() - timedelta(days=7)).isoformat())
+
+            self.assertEqual(history["realized_pnl"], "100")
+            self.assertEqual(history["unknown_sales"], 0)
+            self.assertEqual(len(history["trades"]), 1)  # the old 2024 buy is outside the window and not reported
+            self.assertEqual(cumulative["realized_pnl"], "100")
+            self.assertEqual(cumulative["unknown_sales"], 0)
+
     def test_cumulative_realized_pnl_rejects_a_future_start_date(self):
         with tempfile.TemporaryDirectory() as temp:
             service = self._service(temp, FakeTradingBroker())

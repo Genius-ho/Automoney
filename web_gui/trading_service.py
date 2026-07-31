@@ -27,6 +27,14 @@ AUTO_REPRICE_SYMBOLS = {"KORU", "SOXL"}
 # order may still be open at the broker, so reregistering it would risk a
 # duplicate live order.
 REREGISTERABLE_STATUSES = {"CANCELED", "REJECTED"}
+# Realized-P/L FIFO cost-basis reconstruction needs every prior fill, not just
+# ones inside the reporting window -- a share bought manually (outside this
+# app, e.g. directly in the Toss app) before the reporting start date would
+# otherwise leave a later sell's cost basis "unknown" and silently drop it
+# from the total. So the broker query for building the ledger always reaches
+# back to this fixed early anchor; the caller's start date only filters which
+# already-cost-basis-resolved sells get reported/summed.
+LEDGER_ANCHOR_DATE = "2020-01-01"
 
 
 class TradingWebService(WebService):
@@ -213,8 +221,8 @@ class TradingWebService(WebService):
             raise ValueError("집계 시작일은 오늘보다 늦을 수 없습니다.")
         self.runtime.history_start_dates[symbol] = start.isoformat()
         self.runtime_store.save(self.runtime)
-        rows = self.broker().get_all_orders_raw("CLOSED", symbol, start.isoformat(), date.today().isoformat())
-        daily = aggregate_daily_trades(rows)
+        rows = self.broker().get_all_orders_raw("CLOSED", symbol, LEDGER_ANCHOR_DATE, date.today().isoformat())
+        daily = [trade for trade in aggregate_daily_trades(rows) if trade.trade_date >= start.isoformat()]
         total, unknown_sales = summarize_realized_pnl(daily)
         return {
             "symbol": symbol,
@@ -235,8 +243,8 @@ class TradingWebService(WebService):
         unknown_sales = 0
         by_symbol: list[dict[str, Any]] = []
         for index, symbol in enumerate(symbols):
-            rows = self.broker().get_all_orders_raw("CLOSED", symbol, start.isoformat(), date.today().isoformat())
-            daily = aggregate_daily_trades(rows)
+            rows = self.broker().get_all_orders_raw("CLOSED", symbol, LEDGER_ANCHOR_DATE, date.today().isoformat())
+            daily = [trade for trade in aggregate_daily_trades(rows) if trade.trade_date >= start.isoformat()]
             symbol_total, symbol_unknown = summarize_realized_pnl(daily)
             sell_count = sum(1 for trade in daily if trade.side == "SELL")
             if sell_count:
