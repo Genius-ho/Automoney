@@ -8,11 +8,11 @@ from enum import StrEnum
 from typing import Any, Iterable, Literal, Sequence
 
 DOWN_LADDER_LEVELS = (1, 2, 3, 4, 5)
-DOWN_LADDER_REQUIRED_LEVELS = (1, 2)
 
 
 def normalize_down_ladder_levels(raw: Iterable[Any], *, strict: bool = True) -> list[int]:
-    """Normalize a Down Ladder level selection: dedupe, sort, force levels 1-2.
+    """Normalize a Down Ladder level selection: dedupe and sort. Any subset of
+    1-5 is allowed, including empty (all levels off).
 
     strict=True (API entry points) rejects out-of-range/non-integer values so
     client bugs surface immediately. strict=False (loading persisted files)
@@ -31,7 +31,6 @@ def normalize_down_ladder_levels(raw: Iterable[Any], *, strict: bool = True) -> 
                 raise ValueError(f"Down ladder 단계는 1~5 사이여야 합니다: {level}")
             continue
         values.add(level)
-    values.update(DOWN_LADDER_REQUIRED_LEVELS)
     return sorted(values)
 
 Money = Decimal
@@ -94,6 +93,10 @@ class StrategyState:
     base_buy_qty: int = 2
     applied_fill_order_ids: list[str] = field(default_factory=list)
     down_ladder_enabled_levels: list[int] = field(default_factory=lambda: [1, 2])
+    # Final take-profit percentage above average cost. Defaults to the
+    # symbol's SYMBOL_PROFILES value (see state_store._decode / load), but is
+    # user-editable per symbol from here on.
+    final_tp_pct: Decimal = Decimal("15")
     updated_at: str = ""
 
     def validate(self) -> None:
@@ -107,13 +110,13 @@ class StrategyState:
             raise ValueError("Base buy quantity must be an even number of at least 2.")
         if not Decimal("5") <= self.big_number_pct <= Decimal("30"):
             raise ValueError("Big-number buffer must be between 5% and 30%.")
+        if not Decimal("1") <= self.final_tp_pct <= Decimal("100"):
+            raise ValueError("최종 익절 %는 1~100 사이여야 합니다.")
         levels = self.down_ladder_enabled_levels
         if sorted(set(levels)) != list(levels):
             raise ValueError("Down ladder 단계는 중복 없이 오름차순이어야 합니다.")
         if not set(levels) <= set(DOWN_LADDER_LEVELS):
             raise ValueError("Down ladder 단계는 1~5 사이여야 합니다.")
-        if not set(DOWN_LADDER_REQUIRED_LEVELS) <= set(levels):
-            raise ValueError("Down ladder 1·2단계는 항상 활성화되어야 합니다.")
 
 
 @dataclass(frozen=True)
@@ -173,8 +176,7 @@ def attempt_amount(state: StrategyState) -> Money:
 
 def final_take_profit_price(state: StrategyState) -> Money:
     state.validate()
-    _, final_tp_pct = symbol_profile(state.symbol)
-    return money(state.avg_cost * (Decimal("1") + final_tp_pct / 100))
+    return money(state.avg_cost * (Decimal("1") + state.final_tp_pct / 100))
 
 
 def down_ladder_prices(attempt: Money, anchor_price: Money, steps: int = 5) -> tuple[Money, ...]:
@@ -251,8 +253,7 @@ def build_plan(state: StrategyState, current_price: Money, today: date | None = 
         orders.append(OrderIntent(_order_id(state, today, "quarter-sell"), "sell", quarter_qty, star, OrderKind.LIMIT, "Star-price quarter LOC sell"))
     remaining_qty = state.position_qty - quarter_qty
     if remaining_qty:
-        _, final_tp_pct = symbol_profile(state.symbol)
-        orders.append(OrderIntent(_order_id(state, today, "take-profit"), "sell", remaining_qty, final_take_profit_price(state), OrderKind.LIMIT, f"Final take-profit limit sell (+{final_tp_pct}% from average)"))
+        orders.append(OrderIntent(_order_id(state, today, "take-profit"), "sell", remaining_qty, final_take_profit_price(state), OrderKind.LIMIT, f"Final take-profit limit sell (+{state.final_tp_pct}% from average)"))
 
     buy_notional = sum((order.limit_price or Decimal("0")) * order.quantity for order in orders if order.side == "buy")
     if buy_notional > amount:

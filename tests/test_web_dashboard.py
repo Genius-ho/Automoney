@@ -104,8 +104,12 @@ class WebDashboardLoginUiTests(unittest.TestCase):
             self.assertIn(command, self.javascript)
         self.assertIn('/api/etf-status', self.javascript)
 
-    def test_ladder_checkboxes_one_and_two_are_rendered_disabled(self):
-        self.assertIn('level<=2', self.javascript.replace(' ', ''))
+    def test_all_five_ladder_checkboxes_are_toggleable(self):
+        """Levels 1-2 used to be force-enabled/disabled; a shrinking seed can
+        make a trader want to turn those off too, so every level (1-5) must
+        now carry the same change listener with no special-cased disabling."""
+        self.assertNotIn('level<=2', self.javascript.replace(' ', ''))
+        self.assertNotIn('.disabled=true', self.javascript.replace(' ', '').split('ladder-levels')[1].split('body.append(tr)')[0])
 
 
 class DashboardServiceTests(unittest.TestCase):
@@ -241,6 +245,14 @@ class WebDashboardHttpTests(unittest.TestCase):
 
         self.assertEqual(status, 401)
         self.assertFalse(body["ok"])
+
+    def test_login_response_tells_the_client_how_long_the_session_lasts(self):
+        """The frontend warns the user before the session silently expires --
+        it needs the actual TTL, not a guess, to compute when to show that."""
+        status, login, _ = self._post("/api/login", {"password": "web-secret"})
+
+        self.assertEqual(status, 200)
+        self.assertEqual(login["expires_in"], 43200)
 
     def test_login_then_refresh_returns_the_real_account_contract_in_one_request(self):
         status, login, headers = self._post("/api/login", {"password": "web-secret"})

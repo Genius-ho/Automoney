@@ -51,7 +51,15 @@ class RuntimeStatus:
     broker_client_order_ids: dict[str, str] = field(default_factory=dict)
     broker_order_ids: dict[str, str] = field(default_factory=dict)
     order_price_overrides: dict[str, str] = field(default_factory=dict)
+    # Per-symbol dedup key (a trading-session date) for the once-per-day
+    # auto-tick buy submission, gated by auto_order_delay_minutes after the
+    # regular session opens.
     auto_attempt_keys: dict[str, str] = field(default_factory=dict)
+    # Same idea but for sell-side orders, which submit as soon as pre-market
+    # opens (immediate-sell orders shouldn't wait for the regular-session
+    # delay -- a pre-market pop that fades by the open would otherwise be
+    # missed).
+    auto_sell_attempt_keys: dict[str, str] = field(default_factory=dict)
     # Persisted, restart-surviving record of every order a human has hand-
     # edited (via edit_failed_price or reregister_order): the fixed facts
     # (symbol/side/quantity/price/reason) needed to identify it as a "custom

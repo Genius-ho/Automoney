@@ -1,7 +1,7 @@
 import os
 import tempfile
 import unittest
-from datetime import datetime, timedelta, timezone
+from datetime import date, datetime, timedelta, timezone
 from decimal import Decimal
 from pathlib import Path
 from unittest.mock import patch
@@ -152,6 +152,49 @@ class TradingWebServiceTests(unittest.TestCase):
 
             self.assertEqual(len(result["trades"]), 1)
             self.assertEqual(result["trades"][0]["side"], "BUY")
+
+    def test_cumulative_realized_pnl_sums_only_known_symbols_closed_sells(self):
+        with tempfile.TemporaryDirectory() as temp:
+            broker = FakeTradingBroker()
+            now = datetime.now(timezone.utc).isoformat()
+            broker.closed_orders = [
+                {"symbol": "TQQQ", "side": "BUY", "status": "FILLED", "execution": {
+                    "filledQuantity": "10", "averageFilledPrice": "80", "filledAmount": "800",
+                    "commission": "0", "filledAt": now,
+                }},
+                {"symbol": "TQQQ", "side": "SELL", "status": "FILLED", "execution": {
+                    "filledQuantity": "10", "averageFilledPrice": "90", "filledAmount": "900",
+                    "commission": "0", "filledAt": now,
+                }},
+                # SOXL never auto-traded (not in known_symbols) -- must be excluded even
+                # though it has a closed sell in the broker's raw order feed.
+                {"symbol": "SOXL", "side": "BUY", "status": "FILLED", "execution": {
+                    "filledQuantity": "5", "averageFilledPrice": "20", "filledAmount": "100",
+                    "commission": "0", "filledAt": now,
+                }},
+                {"symbol": "SOXL", "side": "SELL", "status": "FILLED", "execution": {
+                    "filledQuantity": "5", "averageFilledPrice": "10", "filledAmount": "50",
+                    "commission": "0", "filledAt": now,
+                }},
+            ]
+            service = self._service(temp, broker)
+            self._activate(service, "TQQQ")
+
+            result = service.cumulative_realized_pnl("2026-01-01")
+
+            self.assertEqual(result["realized_pnl"], "100")
+            self.assertEqual(result["unknown_sales"], 0)
+            self.assertEqual(result["by_symbol"], [
+                {"symbol": "TQQQ", "realized_pnl": "100", "unknown_sales": 0, "sell_count": 1},
+            ])
+
+    def test_cumulative_realized_pnl_rejects_a_future_start_date(self):
+        with tempfile.TemporaryDirectory() as temp:
+            service = self._service(temp, FakeTradingBroker())
+            future = (date.today() + timedelta(days=2)).isoformat()
+
+            with self.assertRaises(ValueError):
+                service.cumulative_realized_pnl(future)
 
     def test_dry_run_broker_cannot_submit_web_orders(self):
         with tempfile.TemporaryDirectory() as temp:
@@ -452,6 +495,40 @@ class AutoTickTests(unittest.TestCase):
             service.auto_tick()
 
             self.assertEqual(broker.submitted, [])
+
+    def test_auto_tick_submits_sells_before_the_buy_delay_elapses(self):
+        """Sell legs are immediate-sell limit orders, so they must not wait
+        for auto_order_delay_minutes the way LOC buy legs do -- a pre-market
+        pop that fades by the regular open would otherwise be missed."""
+        with tempfile.TemporaryDirectory() as temp:
+            broker = AutoTickBroker()
+            broker.market_open_offset_minutes = 10
+            # auto_tick's own refresh_account call re-derives position_qty from
+            # broker holdings, so the held position must come from the broker
+            # (not just the initial plan()/state.json seed) or it gets reset to 0.
+            broker.get_holdings_raw = lambda: {"result": {"holdings": [
+                {"symbol": "TQQQ", "quantity": "8", "averagePrice": "75"},
+            ]}}
+            service = TradingWebService(Path(temp), broker_factory=lambda: broker)
+            service.plan({
+                "symbol": "TQQQ", "current_price": "84.5", "previous_close": "82",
+                "cash_usd": "5000", "position_qty": 8, "avg_cost": "75",
+                "t_value": "3", "base_buy_qty": 2, "mode": "GENERAL",
+            })
+            service.sync_orders("TQQQ")
+            service.runtime.active_symbols.append("TQQQ")
+            service.runtime.known_symbols.append("TQQQ")
+            # session start (-10m) + 60m is still in the future -> buy leg not ready yet
+            service.runtime.auto_order_delay_minutes = 60
+            service.runtime_store.save(service.runtime)
+            broker.submitted.clear()
+
+            service.auto_tick()
+
+            sell_ids = [cid for cid in broker.submitted if "sell" in cid]
+            buy_ids = [cid for cid in broker.submitted if "buy" in cid]
+            self.assertTrue(sell_ids, "sell legs should submit immediately, unblocked by the buy delay")
+            self.assertEqual(buy_ids, [])
 
     def test_pending_order_count_reflects_open_statuses(self):
         with tempfile.TemporaryDirectory() as temp:

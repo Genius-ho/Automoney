@@ -66,7 +66,48 @@ class DownLadderLevelsPersistenceTests(unittest.TestCase):
 
             state = store.load("SOXL")
 
-            self.assertEqual(state.down_ladder_enabled_levels, [1, 2, 3])
+            self.assertEqual(state.down_ladder_enabled_levels, [3])
+
+    def test_explicit_empty_levels_are_not_coerced_back_to_default(self):
+        """A trader who turns off every ladder level (e.g. to stop drawing
+        down a shrinking seed) must have that choice survive a save/reload,
+        not get silently reset to [1, 2]."""
+        with tempfile.TemporaryDirectory() as directory:
+            store = StateStore(Path(directory) / "state.json")
+            state = store.load("TQQQ")
+            state.down_ladder_enabled_levels = []
+            store.save(state)
+
+            self.assertEqual(store.load("TQQQ").down_ladder_enabled_levels, [])
+
+
+class FinalTakeProfitPctPersistenceTests(unittest.TestCase):
+    def test_new_symbol_defaults_to_its_symbol_profiles_value(self):
+        with tempfile.TemporaryDirectory() as directory:
+            store = StateStore(Path(directory) / "state.json")
+            self.assertEqual(store.load("TQQQ").final_tp_pct, Decimal("15"))
+            self.assertEqual(store.load("SOXL").final_tp_pct, Decimal("20"))
+
+    def test_explicit_override_survives_save_and_reload(self):
+        with tempfile.TemporaryDirectory() as directory:
+            store = StateStore(Path(directory) / "state.json")
+            state = store.load("TQQQ")
+            state.final_tp_pct = Decimal("22.5")
+            store.save(state)
+
+            self.assertEqual(store.load("TQQQ").final_tp_pct, Decimal("22.5"))
+
+    def test_legacy_file_without_the_field_defaults_per_symbol(self):
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory) / "state.json"
+            path.write_text(json.dumps({
+                "version": 2,
+                "last_symbol": "SOXL",
+                "portfolios": {"SOXL": {"symbol": "SOXL", "position_qty": 5}},
+            }), encoding="utf-8")
+            store = StateStore(path)
+
+            self.assertEqual(store.load("SOXL").final_tp_pct, Decimal("20"))
 
 
 class SavedSymbolsTests(unittest.TestCase):

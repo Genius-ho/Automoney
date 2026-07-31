@@ -170,7 +170,7 @@ class Handler(BaseHTTPRequestHandler):
                 token, csrf = self.auth.login(str(self._body().get("password") or ""))
                 self._json(
                     HTTPStatus.OK,
-                    {"ok": True, "csrf": csrf, "session": token},
+                    {"ok": True, "csrf": csrf, "session": token, "expires_in": 43200},
                     {"Set-Cookie": f"mumae_v2_session={token}; HttpOnly; SameSite=Strict; Path=/; Max-Age=43200{self._cookie_flags()}"},
                 )
                 return

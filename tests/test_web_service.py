@@ -1,6 +1,8 @@
 import tempfile
 import unittest
+from decimal import Decimal
 from pathlib import Path
+from unittest.mock import patch
 
 from web_gui.web_service import WebService
 
@@ -19,6 +21,14 @@ class FakeBroker:
 
     def get_daily_candles_raw(self, symbol, count):
         return {"result": {"candles": [{"closePrice": "84.5"}, {"closePrice": "82"}]}}
+
+
+class FakeEmptyBroker(FakeBroker):
+    """Reports no TQQQ holding at all -- simulates a position that was just
+    fully sold out (take-profit/quarter-sell emptied it to zero)."""
+
+    def get_holdings_raw(self):
+        return {"result": {"holdings": []}}
 
 
 class FakeMixedBroker(FakeBroker):
@@ -59,10 +69,12 @@ class WebServiceTests(unittest.TestCase):
     def test_refreshes_holdings_without_exposing_live_orders(self):
         with tempfile.TemporaryDirectory() as temp:
             service = WebService(Path(temp), broker_factory=FakeBroker)
-            result = service.refresh_account("TQQQ")
+            with patch("web_gui.web_service.time.sleep"):
+                result = service.refresh_account("TQQQ")
 
             self.assertTrue(result["api_connected"])
             self.assertEqual(result["holdings"][0]["total_value"], "676.0")
+            self.assertEqual(result["holdings"][0]["average_price"], "75")
             self.assertEqual(result["state"]["t_value"], "1")
             self.assertFalse(result["live_order_enabled"])
 
@@ -70,12 +82,60 @@ class WebServiceTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as temp:
             service = WebService(Path(temp), broker_factory=FakeMixedBroker)
 
-            result = service.refresh_account("TQQQ")
+            with patch("web_gui.web_service.time.sleep"):
+                result = service.refresh_account("TQQQ")
 
             self.assertEqual(
                 [row["symbol"] for row in result["holdings"]],
                 ["SOXL", "TQQQ"],
             )
+
+    def test_day_change_pct_is_computed_for_every_held_symbol(self):
+        with tempfile.TemporaryDirectory() as temp:
+            service = WebService(Path(temp), broker_factory=FakeMixedBroker)
+
+            with patch("web_gui.web_service.time.sleep"):
+                result = service.refresh_account("TQQQ")
+            by_symbol = {row["symbol"]: row for row in result["holdings"]}
+
+            self.assertAlmostEqual(Decimal(by_symbol["TQQQ"]["day_change_pct"]), Decimal("2.5") / Decimal("82") * 100)
+            self.assertAlmostEqual(Decimal(by_symbol["SOXL"]["day_change_pct"]), Decimal("2.5") / Decimal("82") * 100)
+
+    def test_previous_close_is_fetched_at_most_once_per_symbol_per_day(self):
+        """Previous close never changes intraday, so a second refresh the same
+        day must reuse the cached value instead of calling the broker again --
+        this is what keeps adding day-change to every holding cheap even
+        though refresh_account runs every 60s from the auto-tick loop."""
+        with tempfile.TemporaryDirectory() as temp:
+            broker = FakeMixedBroker()
+            broker.candle_calls = []
+            original = broker.get_daily_candles_raw
+            broker.get_daily_candles_raw = lambda ticker, count: (broker.candle_calls.append(ticker), original(ticker, count))[1]
+            service = WebService(Path(temp), broker_factory=lambda: broker)
+
+            with patch("web_gui.web_service.time.sleep"):
+                service.refresh_account("TQQQ")
+                first_call_count = len(broker.candle_calls)
+                service.refresh_account("TQQQ")
+
+            self.assertGreater(first_call_count, 0)
+            self.assertEqual(len(broker.candle_calls), first_call_count)
+
+    def test_t_value_resets_to_zero_once_the_position_fully_exits(self):
+        """A take-profit/quarter-sell pair that empties the position ends the
+        cycle; t_value must go back to 0 so the next entry starts a fresh
+        cycle instead of showing stale progress from the closed one."""
+        with tempfile.TemporaryDirectory() as temp:
+            service = WebService(Path(temp), broker_factory=FakeEmptyBroker)
+            service.update_state({
+                "symbol": "TQQQ", "position_qty": 10, "avg_cost": "75", "t_value": "11",
+            })
+
+            with patch("web_gui.web_service.time.sleep"):
+                result = service.refresh_account("TQQQ")
+
+            self.assertEqual(result["state"]["t_value"], "0")
+            self.assertEqual(service.load_state("TQQQ").t_value, Decimal("0"))
 
 
 class DownLadderLevelsUpdateTests(unittest.TestCase):
@@ -113,6 +173,42 @@ class DownLadderLevelsUpdateTests(unittest.TestCase):
 
             self.assertEqual(service.load_state("KORU").down_ladder_enabled_levels, [1, 2])
             self.assertEqual(service.load_state("SOXL").down_ladder_enabled_levels, [1, 2, 3])
+
+    def test_can_disable_every_ladder_level(self):
+        with tempfile.TemporaryDirectory() as temp:
+            service = WebService(Path(temp))
+
+            state = service.update_state({"symbol": "TQQQ", "down_ladder_enabled_levels": []})
+
+            self.assertEqual(state.down_ladder_enabled_levels, [])
+            self.assertEqual(service.load_state("TQQQ").down_ladder_enabled_levels, [])
+
+
+class FinalTakeProfitPctUpdateTests(unittest.TestCase):
+    def test_update_state_persists_an_edited_final_tp_pct(self):
+        with tempfile.TemporaryDirectory() as temp:
+            service = WebService(Path(temp))
+
+            state = service.update_state({"symbol": "TQQQ", "final_tp_pct": "18.5"})
+
+            self.assertEqual(state.final_tp_pct, Decimal("18.5"))
+            self.assertEqual(service.load_state("TQQQ").final_tp_pct, Decimal("18.5"))
+
+    def test_update_state_without_the_field_leaves_existing_value_untouched(self):
+        with tempfile.TemporaryDirectory() as temp:
+            service = WebService(Path(temp))
+            service.update_state({"symbol": "TQQQ", "final_tp_pct": "18.5"})
+
+            service.update_state({"symbol": "TQQQ", "t_value": "2"})
+
+            self.assertEqual(service.load_state("TQQQ").final_tp_pct, Decimal("18.5"))
+
+    def test_update_state_rejects_out_of_range_final_tp_pct(self):
+        with tempfile.TemporaryDirectory() as temp:
+            service = WebService(Path(temp))
+
+            with self.assertRaises(ValueError):
+                service.update_state({"symbol": "TQQQ", "final_tp_pct": "0"})
 
 
 class KnownSymbolsReconciliationTests(unittest.TestCase):

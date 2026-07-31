@@ -31,6 +31,16 @@ class StrategyFormulaTests(unittest.TestCase):
     def test_final_take_profit_is_avg_plus_15_percent(self):
         self.assertEqual(final_take_profit_price(self.state), Decimal("57.50"))
 
+    def test_final_take_profit_pct_is_user_overridable(self):
+        self.state.final_tp_pct = Decimal("22")
+        self.assertEqual(final_take_profit_price(self.state), Decimal("61.00"))
+
+    def test_validate_rejects_out_of_range_final_tp_pct(self):
+        with self.assertRaises(ValueError):
+            StrategyState(final_tp_pct=Decimal("0")).validate()
+        with self.assertRaises(ValueError):
+            StrategyState(final_tp_pct=Decimal("101")).validate()
+
     def test_verified_down_ladder_example(self):
         prices = down_ladder_prices(Decimal("629.63"), Decimal("185.18"), steps=7)
         self.assertEqual(prices, (Decimal("157.41"), Decimal("125.93"), Decimal("104.94"), Decimal("89.95"), Decimal("78.70"), Decimal("69.96"), Decimal("62.96")))
@@ -134,18 +144,20 @@ class DownLadderLevelSelectionTests(unittest.TestCase):
 
 
 class NormalizeDownLadderLevelsTests(unittest.TestCase):
-    def test_dedupes_sorts_and_forces_one_and_two(self):
-        self.assertEqual(normalize_down_ladder_levels([4, 3, 3]), [1, 2, 3, 4])
+    def test_dedupes_and_sorts(self):
+        self.assertEqual(normalize_down_ladder_levels([4, 3, 3]), [3, 4])
 
-    def test_empty_input_defaults_to_one_and_two(self):
-        self.assertEqual(normalize_down_ladder_levels([]), [1, 2])
+    def test_empty_input_stays_empty(self):
+        """Levels 1-2 are no longer force-enabled: a trader can turn off every
+        ladder leg (e.g. to stop drawing down a shrinking seed further)."""
+        self.assertEqual(normalize_down_ladder_levels([]), [])
 
     def test_strict_mode_rejects_out_of_range_values(self):
         with self.assertRaises(ValueError):
             normalize_down_ladder_levels([1, 2, 9], strict=True)
 
     def test_lenient_mode_silently_drops_out_of_range_values(self):
-        self.assertEqual(normalize_down_ladder_levels([1, 9, 3], strict=False), [1, 2, 3])
+        self.assertEqual(normalize_down_ladder_levels([1, 9, 3], strict=False), [1, 3])
 
     def test_strict_mode_rejects_non_integer_values(self):
         with self.assertRaises(ValueError):
@@ -153,10 +165,11 @@ class NormalizeDownLadderLevelsTests(unittest.TestCase):
 
 
 class DownLadderValidationTests(unittest.TestCase):
-    def test_validate_rejects_state_missing_required_levels(self):
-        state = StrategyState(down_ladder_enabled_levels=[3, 4])
-        with self.assertRaises(ValueError):
-            state.validate()
+    def test_validate_accepts_a_state_with_no_ladder_levels_enabled(self):
+        StrategyState(down_ladder_enabled_levels=[]).validate()
+
+    def test_validate_accepts_state_missing_levels_one_and_two(self):
+        StrategyState(down_ladder_enabled_levels=[3, 4]).validate()
 
     def test_validate_rejects_out_of_range_or_duplicate_levels(self):
         with self.assertRaises(ValueError):

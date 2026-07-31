@@ -1,7 +1,9 @@
 """Cross-platform application service used by the browser GUI."""
 from __future__ import annotations
 
+import time
 from dataclasses import asdict, replace
+from datetime import date
 from decimal import Decimal, InvalidOperation
 from pathlib import Path
 from typing import Any, Callable
@@ -70,6 +72,23 @@ class WebService:
         self._broker: TossBroker | None = None
         self.plan_cache: dict[str, list[OrderIntent]] = {}
         self.quote_cache: dict[str, tuple[Decimal, Decimal]] = {}
+        # Previous close never changes intraday, so it's fetched via a broker
+        # call at most once per symbol per calendar day (not on every
+        # refresh/auto-tick) -- keyed by ticker, value is (date, close).
+        self._previous_close_cache: dict[str, tuple[str, Decimal]] = {}
+
+    def _previous_close(self, broker: TossBroker, ticker: str) -> Decimal | None:
+        today_key = date.today().isoformat()
+        cached = self._previous_close_cache.get(ticker)
+        if cached and cached[0] == today_key:
+            return cached[1]
+        candles = broker.get_daily_candles_raw(ticker, 2).get("result", {}).get("candles", [])
+        time.sleep(0.25)
+        if len(candles) < 2:
+            return None
+        previous = _text_decimal(candles[1].get("closePrice"))
+        self._previous_close_cache[ticker] = (today_key, previous)
+        return previous
 
     def _reconcile_known_symbols(self) -> None:
         """known_symbols must include every ETF that has ever been saved, not
@@ -114,6 +133,7 @@ class WebService:
             base_buy_qty=int(payload.get("base_buy_qty", current.base_buy_qty)),
             big_number_pct=_text_decimal(payload.get("big_number_pct"), str(current.big_number_pct)),
             big_number_enabled=bool(payload.get("big_number_enabled", current.big_number_enabled)),
+            final_tp_pct=_text_decimal(payload.get("final_tp_pct"), str(current.final_tp_pct)),
             mode=Mode(str(payload.get("mode", current.mode.value))),
             down_ladder_enabled_levels=levels,
         )
@@ -259,11 +279,11 @@ class WebService:
         symbols = sorted(set(holding_rows) | {symbol})
         price_rows = _collect_symbol_rows(broker.get_prices_raw(symbols))
         buying_power = broker.get_buying_power_raw()
-        candles = broker.get_daily_candles_raw(symbol, 2)
         cash = _text_decimal(buying_power.get("result", {}).get("cashBuyingPower"))
 
         holdings: list[dict[str, Any]] = []
         selected = self.store.load(symbol)
+        selected_previous_close: Decimal | None = None
         for ticker in symbols:
             row = holding_rows.get(ticker, {})
             quote = price_rows.get(ticker, {})
@@ -275,10 +295,16 @@ class WebService:
             pnl = value - cost
             rate = pnl / cost * 100 if cost else Decimal("0")
             ticker_state = selected if ticker == symbol else self.store.load(ticker)
+            previous_close = self._previous_close(broker, ticker)
+            if ticker == symbol:
+                selected_previous_close = previous_close
+            day_change_pct = (price - previous_close) / previous_close * 100 if previous_close and price > 0 else None
             holdings.append(_json_value({
                 "symbol": ticker,
                 "quantity": quantity,
+                "average_price": average,
                 "current_price": price,
+                "day_change_pct": day_change_pct,
                 "total_value": value,
                 "pnl": pnl,
                 "pnl_pct": rate,
@@ -291,11 +317,16 @@ class WebService:
         selected.cash_usd = cash
         if selected.position_qty > 0 and selected.t_value == 0:
             selected.t_value = Decimal("1")
+        elif selected.position_qty == 0 and selected.t_value != 0:
+            # Full exit (take-profit/quarter-sell emptied the position) ends
+            # the cycle; the next build_plan() call starts a brand-new entry
+            # LOC buy regardless of t_value, but t_value itself must go back
+            # to 0 here or it keeps showing the old cycle's progress forever.
+            selected.t_value = Decimal("0")
         self.store.save(selected)
 
         selected_price = _find_decimal(price_rows.get(symbol, {}), ("lastPrice", "price", "currentPrice"))
-        daily = candles.get("result", {}).get("candles", [])
-        previous = _text_decimal(daily[1].get("closePrice")) if len(daily) > 1 else selected_price
+        previous = selected_previous_close if selected_previous_close is not None else selected_price
         result = self.dashboard(selected, selected_price, previous, holdings)
         result["api_connected"] = True
         result["broker_mode"] = broker.mode

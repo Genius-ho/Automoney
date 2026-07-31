@@ -189,8 +189,8 @@ class ApplicationEngine(TradingWebService):
         symbol = str(payload.get("symbol", "")).upper()
         self._require_settings_gate("strategy.set_ladder_levels")
         raw_levels = payload.get("levels")
-        if not isinstance(raw_levels, list) or not raw_levels:
-            raise ValueError("levels는 1개 이상의 정수 배열이어야 합니다.")
+        if not isinstance(raw_levels, list):
+            raise ValueError("levels는 정수 배열이어야 합니다.")
         state = self.load_state(symbol)
         before = list(state.down_ladder_enabled_levels)
         after = normalize_down_ladder_levels(raw_levels, strict=True)
@@ -251,6 +251,8 @@ class ApplicationEngine(TradingWebService):
             return self.sync_orders(symbol or "TQQQ")
         if command == "history.refresh":
             return self.trade_history(symbol or "TQQQ", str(payload.get("start_date")))
+        if command == "history.cumulative_realized_pnl":
+            return self.cumulative_realized_pnl(payload.get("start_date") or None)
         if command == "analysis.long_term":
             return self.analyze_long_term()
         if command == "analysis.pairs":
@@ -283,6 +285,8 @@ class ApplicationEngine(TradingWebService):
             return self.start_auto(symbol, str(payload.get("confirmation") or ""))
         if command == "auto.stop":
             return self.stop_auto(symbol)
+        if command == "runtime.clear_error":
+            return self.clear_last_error(symbol)
         if command == "strategy.set_ladder_levels":
             return self._set_ladder_levels(payload)
         if command == "schedule.update":

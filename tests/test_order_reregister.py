@@ -599,5 +599,60 @@ class AuditLogTests(unittest.TestCase):
             self.assertEqual(engine.runtime.custom_order_history, {})
 
 
+class StaleUnsentCustomOrderPruningTests(unittest.TestCase):
+    def test_never_sent_edit_is_pruned_once_its_leg_falls_out_of_the_plan(self):
+        """Reproduces a live incident: a star-buy order was price-edited
+        (edit_failed_price) but never resubmitted, then the position fully
+        exited before the leg was sent, so the next plan rebuild (position
+        back to 0) drops that leg entirely. The edited order can never be
+        matched to a broker row and offers no reregister/edit button (already
+        is_custom), so without pruning it would linger in custom_order_ledger
+        forever, permanently inflating the SUBMIT-confirmation order count
+        and blocking every future order for the symbol."""
+        with tempfile.TemporaryDirectory() as temp:
+            broker = LiveTradingBroker()
+            service = _service(temp, broker)
+            _activate(service)
+            order = next(item for item in service.plan_cache["TQQQ"] if item.quantity >= 2)
+            cid = order.client_order_id
+            service.runtime.skipped_order_ids.append(cid)
+            service.runtime_store.save(service.runtime)
+            service.edit_failed_price("TQQQ", cid, "63.00")
+            self.assertIn(cid, service.runtime.custom_order_ledger)
+            self.assertNotIn(cid, service.runtime.broker_order_ids)
+
+            # Position fully exits -> the next rebuild's plan is just a fresh
+            # entry buy; the edited leg is no longer part of it.
+            service.plan({
+                "symbol": "TQQQ", "current_price": "84.5", "previous_close": "82",
+                "position_qty": 0, "avg_cost": "0", "t_value": "0",
+            })
+            synced = service.sync_orders("TQQQ")
+
+            self.assertNotIn(cid, service.runtime.custom_order_ledger)
+            self.assertNotIn(cid, service.runtime.order_price_overrides)
+            self.assertFalse(any(row["id"] == cid for row in synced["orders"]))
+
+    def test_already_sent_custom_order_survives_falling_out_of_the_plan(self):
+        """Contrast case: once an edited order was actually submitted (it has
+        a broker_order_id), it must keep showing up -- e.g. so a CANCELED one
+        stays reregisterable -- even after the plan moves on without it."""
+        with tempfile.TemporaryDirectory() as temp:
+            broker = LiveTradingBroker()
+            service = _service(temp, broker)
+            _activate(service)
+            cid, order = _make_canceled_custom_order(service, broker)
+            self.assertIn(cid, service.runtime.broker_order_ids)
+
+            service.plan({
+                "symbol": "TQQQ", "current_price": "84.5", "previous_close": "82",
+                "position_qty": 0, "avg_cost": "0", "t_value": "0",
+            })
+            synced = service.sync_orders("TQQQ")
+
+            self.assertIn(cid, service.runtime.custom_order_ledger)
+            self.assertTrue(any(row["id"] == cid for row in synced["orders"]))
+
+
 if __name__ == "__main__":
     unittest.main()

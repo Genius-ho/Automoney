@@ -1,3 +1,4 @@
+import gzip
 import io
 import json
 from decimal import Decimal
@@ -80,6 +81,24 @@ class TossRateLimitTests(unittest.TestCase):
         self.assertEqual(first['timeInForce'], 'CLS')
         self.assertEqual(second['timeInForce'], 'CLS')
         self.assertEqual(mocked_sleep.call_count, 2)
+    @patch("toss_api.urlopen")
+    def test_gzip_encoded_error_body_is_decompressed_not_garbled(self, mocked_urlopen):
+        payload = json.dumps({"error": {"code": "price-out-of-range", "message": "가격 범위를 벗어난 주문입니다."}})
+        compressed = HTTPError(
+            "https://example.test",
+            422,
+            "unprocessable",
+            {"Content-Encoding": "gzip"},
+            io.BytesIO(gzip.compress(payload.encode("utf-8"))),
+        )
+        self.addCleanup(compressed.close)
+        mocked_urlopen.side_effect = compressed
+
+        with self.assertRaises(TossApiError) as ctx:
+            TossBroker()._request("GET", "/test", include_auth=False)
+
+        self.assertIn("가격 범위를 벗어난 주문입니다.", str(ctx.exception))
+
     @patch("toss_api.time.sleep")
     @patch("toss_api.urlopen")
     def test_retries_429_using_retry_after(self, mocked_urlopen, mocked_sleep):

@@ -105,8 +105,20 @@ class TradingWebService(WebService):
         # can still be found and matched against fresh broker rows here.
         planned = list(self.plan_cache.get(symbol, []))
         planned_ids = {order.client_order_id for order in planned}
+        stale_ledger_ids: list[str] = []
         for client_order_id, info in self.runtime.custom_order_ledger.items():
             if info.get("symbol") != symbol or client_order_id in planned_ids:
+                continue
+            if client_order_id not in self.runtime.broker_order_ids:
+                # Hand-edited (order_price_overrides/custom_order_ledger) but
+                # never actually sent, and the leg it was edited for has since
+                # fallen out of today's plan (e.g. the position fully exited
+                # before the user resubmitted it) -- it can never be matched
+                # to a broker row or re-shown with an actionable button, so it
+                # would otherwise linger forever, inflating the "unsent order"
+                # count the SUBMIT confirmation text is checked against and
+                # permanently blocking new orders for this symbol.
+                stale_ledger_ids.append(client_order_id)
                 continue
             planned.append(OrderIntent(
                 client_order_id,
@@ -116,6 +128,11 @@ class TradingWebService(WebService):
                 OrderKind.LIMIT,
                 str(info.get("reason", "")),
             ))
+        if stale_ledger_ids:
+            for client_order_id in stale_ledger_ids:
+                self.runtime.custom_order_ledger.pop(client_order_id, None)
+                self.runtime.order_price_overrides.pop(client_order_id, None)
+            self.runtime_store.save(self.runtime)
         unused = set(range(len(rows)))
         statuses: dict[str, str] = {}
         records: dict[str, dict[str, Any]] = {}
@@ -205,6 +222,39 @@ class TradingWebService(WebService):
             "realized_pnl": str(total),
             "unknown_sales": unknown_sales,
             "trades": [_json_value(asdict(item)) for item in daily],
+        }
+
+    def cumulative_realized_pnl(self, start_date: str | None = None) -> dict[str, Any]:
+        """Total already-realized profit (closed sells only, not open-position
+        unrealized P&L) across every ETF this account has ever auto-traded."""
+        symbols = sorted(self.runtime.known_symbols) or list(ETF_UNIVERSE)
+        start = date.fromisoformat(start_date) if start_date else date.today() - timedelta(days=90)
+        if start > date.today():
+            raise ValueError("집계 시작일은 오늘보다 늦을 수 없습니다.")
+        total = Decimal("0")
+        unknown_sales = 0
+        by_symbol: list[dict[str, Any]] = []
+        for index, symbol in enumerate(symbols):
+            rows = self.broker().get_all_orders_raw("CLOSED", symbol, start.isoformat(), date.today().isoformat())
+            daily = aggregate_daily_trades(rows)
+            symbol_total, symbol_unknown = summarize_realized_pnl(daily)
+            sell_count = sum(1 for trade in daily if trade.side == "SELL")
+            if sell_count:
+                by_symbol.append({
+                    "symbol": symbol,
+                    "realized_pnl": str(symbol_total),
+                    "unknown_sales": symbol_unknown,
+                    "sell_count": sell_count,
+                })
+            total += symbol_total
+            unknown_sales += symbol_unknown
+            if index < len(symbols) - 1:
+                time.sleep(0.25)
+        return {
+            "start_date": start.isoformat(),
+            "realized_pnl": str(total),
+            "unknown_sales": unknown_sales,
+            "by_symbol": by_symbol,
         }
 
     def analyze_pairs(self) -> dict[str, Any]:
@@ -548,6 +598,14 @@ class TradingWebService(WebService):
             self.runtime.last_auto_error.pop(symbol, None)
         self.runtime_store.save(self.runtime)
 
+    def clear_last_error(self, symbol: str) -> dict[str, Any]:
+        """Dismiss a symbol's last new-order error from the dashboard (e.g. a
+        stale message left over from a since-fixed decoding bug)."""
+        symbol = symbol.upper()
+        self.runtime.last_auto_error.pop(symbol, None)
+        self.runtime_store.save(self.runtime)
+        return {"symbol": symbol, "last_error": ""}
+
     def submit_orders(self, symbol: str, item_ids: list[str], confirmation: str, *, all_pending: bool = False) -> dict[str, Any]:
         """The single entry point for all new-order submission (manual, auto-tick,
         start_auto's initial batch, and the rejected-order/price-guard replacement
@@ -682,21 +740,34 @@ class TradingWebService(WebService):
 
     def auto_tick(self) -> None:
         """Background tick: sync (account/position/order-status/fills) keeps
-        running every tick for every known symbol regardless of run state;
-        new-order submission only runs for active (RUNNING) symbols, once per
-        market session."""
+        running every tick for every known symbol regardless of run state.
+        New-order submission runs once per market session for active
+        (RUNNING) symbols, split by side: sell orders are immediate-sell
+        limit orders, so they go out as soon as pre-market opens (a
+        pre-market pop that fades by the regular open would otherwise be
+        missed); buy orders are LOC and unaffected by timing within the day,
+        so they keep waiting for auto_order_delay_minutes after the regular
+        session opens."""
         if not self.runtime.known_symbols and not self.runtime.active_symbols:
             return
         now = datetime.now(timezone.utc)
         session_key = None
+        regular_start = regular_end = None
         for offset in (0, 1):
             target = (now - timedelta(days=offset)).date().isoformat()
-            market = self.broker().get_us_market_calendar_raw(target).get("result", {}).get("today", {}).get("regularMarket") or {}
-            if not market.get("startTime") or not market.get("endTime"):
+            today = self.broker().get_us_market_calendar_raw(target).get("result", {}).get("today", {})
+            regular = today.get("regularMarket") or {}
+            if not regular.get("startTime") or not regular.get("endTime"):
                 continue
-            start = datetime.fromisoformat(market["startTime"]).astimezone(timezone.utc)
-            end = datetime.fromisoformat(market["endTime"]).astimezone(timezone.utc)
-            if start + timedelta(minutes=self.runtime.auto_order_delay_minutes) <= now <= end:
+            start = datetime.fromisoformat(regular["startTime"]).astimezone(timezone.utc)
+            end = datetime.fromisoformat(regular["endTime"]).astimezone(timezone.utc)
+            pre_market = today.get("preMarket") or {}
+            session_start = (
+                datetime.fromisoformat(pre_market["startTime"]).astimezone(timezone.utc)
+                if pre_market.get("startTime") else start
+            )
+            if session_start <= now <= end:
+                regular_start, regular_end = start, end
                 session_key = start.date().isoformat()
                 break
         if not session_key:
@@ -708,16 +779,27 @@ class TradingWebService(WebService):
                 self.sync_orders(symbol)
             except (TossApiError, PermissionError, ValueError) as error:
                 print(f"Auto-tick sync skipped {symbol}: {error}", file=sys.stderr)
+        buy_ready = regular_start + timedelta(minutes=self.runtime.auto_order_delay_minutes) <= now
         for symbol in tuple(self.runtime.active_symbols):
-            if self.runtime.auto_attempt_keys.get(symbol) == session_key:
-                continue
-            self.runtime.auto_attempt_keys[symbol] = session_key
-            self.runtime_store.save(self.runtime)
-            try:
-                planned = self.plan_cache.get(symbol, [])
-                self.submit_orders(symbol, [item.client_order_id for item in planned], f"SUBMIT {symbol} {len(planned)}", all_pending=True)
-            except (TossApiError, PermissionError, ValueError) as error:
-                print(f"Auto-tick skipped {symbol}: {error}", file=sys.stderr)
-                continue
+            planned = self.plan_cache.get(symbol, [])
+            sell_ids = [item.client_order_id for item in planned if item.side == "sell"]
+            buy_ids = [item.client_order_id for item in planned if item.side == "buy"]
+
+            if self.runtime.auto_sell_attempt_keys.get(symbol) != session_key:
+                self.runtime.auto_sell_attempt_keys[symbol] = session_key
+                self.runtime_store.save(self.runtime)
+                try:
+                    self.submit_orders(symbol, sell_ids, f"SUBMIT {symbol} {len(sell_ids)}")
+                except (TossApiError, PermissionError, ValueError) as error:
+                    print(f"Auto-tick sell skipped {symbol}: {error}", file=sys.stderr)
+
+            if buy_ready and self.runtime.auto_attempt_keys.get(symbol) != session_key:
+                self.runtime.auto_attempt_keys[symbol] = session_key
+                self.runtime_store.save(self.runtime)
+                try:
+                    self.submit_orders(symbol, buy_ids, f"SUBMIT {symbol} {len(buy_ids)}")
+                except (TossApiError, PermissionError, ValueError) as error:
+                    print(f"Auto-tick skipped {symbol}: {error}", file=sys.stderr)
+                    continue
         self.runtime.last_auto_key = session_key
         self.runtime_store.save(self.runtime)

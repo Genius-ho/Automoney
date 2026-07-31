@@ -2,7 +2,7 @@ import io
 import json
 import unittest
 
-from mumae_cli import main
+from mumae_cli import ensure_utf8_console, main
 
 
 class FakeEngine:
@@ -73,6 +73,37 @@ class MumaeCliTests(unittest.TestCase):
         self.assertEqual(result, 0)
         self.assertNotIn("secret-value", stdout.getvalue())
         self.assertEqual(engine.calls[0][0], "api.update")
+
+
+class EnsureUtf8ConsoleTests(unittest.TestCase):
+    """Windows consoles (cmd.exe, PowerShell 5) default to a non-UTF-8 code
+    page; every message this app prints is Korean, so without forcing UTF-8,
+    the first Korean string -- including from the background auto-tick
+    thread's error logging -- raises UnicodeEncodeError and silently kills
+    that thread with no systemd-style auto-restart to catch it."""
+
+    def test_reconfigures_streams_that_support_it(self):
+        calls = []
+
+        class FakeConsoleStream:
+            def reconfigure(self, encoding, errors):
+                calls.append((encoding, errors))
+
+        ensure_utf8_console([FakeConsoleStream()])
+
+        self.assertEqual(calls, [("utf-8", "replace")])
+
+    def test_skips_streams_without_reconfigure(self):
+        # io.StringIO (what tests use to capture output) has no reconfigure
+        # method -- must be skipped, not raise.
+        ensure_utf8_console([io.StringIO()])
+
+    def test_swallows_reconfigure_failures(self):
+        class BrokenStream:
+            def reconfigure(self, encoding, errors):
+                raise OSError("no console attached")
+
+        ensure_utf8_console([BrokenStream()])
 
 
 if __name__ == "__main__":

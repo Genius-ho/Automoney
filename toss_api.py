@@ -1,6 +1,7 @@
 """Toss Securities Open API connector for local planning and explicitly confirmed live orders."""
 from __future__ import annotations
 
+import gzip
 import json
 import os
 import re
@@ -103,6 +104,22 @@ class TossBroker:
         self._token_expires_at = time.time() + int(payload.get("expires_in", 300))
         return token
 
+    @staticmethod
+    def _decode_body(raw: bytes, headers) -> str:
+        """Undo gzip transport-encoding before decoding text.
+
+        urllib (unlike requests) never auto-decompresses responses, so a
+        gzip-compressed body decoded straight as UTF-8 turns into garbled
+        text (and gets persisted that way into runtime.last_auto_error).
+        """
+        content_encoding = (headers.get("Content-Encoding") or "").lower() if headers else ""
+        if content_encoding == "gzip":
+            try:
+                raw = gzip.decompress(raw)
+            except OSError:
+                pass
+        return raw.decode("utf-8", errors="replace")
+
     def _request(self, method: str, path: str, data: bytes | None = None, headers: dict[str, str] | None = None, include_auth: bool = True) -> dict:
         request_headers = {"Accept": "application/json", **(headers or {})}
         if include_auth:
@@ -112,10 +129,10 @@ class TossBroker:
             request = Request(f"{BASE_URL}{path}", data=data, method=method, headers=request_headers)
             try:
                 with urlopen(request, timeout=15) as response:
-                    return json.loads(response.read().decode("utf-8"))
+                    return json.loads(self._decode_body(response.read(), response.headers))
             except HTTPError as error:
                 try:
-                    body = error.read().decode("utf-8", errors="replace")
+                    body = self._decode_body(error.read(), error.headers)
                 finally:
                     error.close()
                 if error.code == 401 and include_auth and not auth_retry_used:

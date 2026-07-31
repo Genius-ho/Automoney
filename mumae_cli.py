@@ -225,5 +225,22 @@ def main(
     return 0
 
 
+def ensure_utf8_console(streams: Sequence[Any] = (sys.stdout, sys.stderr)) -> None:
+    """Windows consoles (cmd.exe, PowerShell 5) default to the system ANSI
+    code page (e.g. cp949 on Korean Windows), not UTF-8. Every message in
+    this app is Korean, so without this, the first Korean string printed --
+    including from the background auto-tick thread's error logging --
+    raises UnicodeEncodeError. On Linux/systemd a crashed thread is at least
+    backstopped by Restart=on-failure; the Windows launcher has no such
+    restart, so this would silently and permanently stop auto-trading."""
+    for stream in streams:
+        if hasattr(stream, "reconfigure"):
+            try:
+                stream.reconfigure(encoding="utf-8", errors="replace")
+            except (ValueError, OSError):
+                pass
+
+
 if __name__ == "__main__":
+    ensure_utf8_console()
     raise SystemExit(main())

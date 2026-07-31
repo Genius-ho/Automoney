@@ -9,7 +9,7 @@ from datetime import datetime, timezone
 from decimal import Decimal
 from pathlib import Path
 
-from mumae_core import Mode, StrategyState, normalize_down_ladder_levels
+from mumae_core import Mode, StrategyState, normalize_down_ladder_levels, symbol_profile
 
 
 class StateStore:
@@ -25,8 +25,16 @@ class StateStore:
         raw["big_number_pct"] = Decimal(str(raw.get("big_number_pct", "15")))
         raw["mode"] = Mode(raw.get("mode", Mode.GENERAL.value))
         # strict=False: a legacy or hand-edited file must never block server startup.
+        # NB: use dict.get's default (not `or`) so an explicit, user-chosen []
+        # (all levels off) isn't silently coerced back to [1, 2].
         raw["down_ladder_enabled_levels"] = normalize_down_ladder_levels(
-            raw.get("down_ladder_enabled_levels") or [1, 2], strict=False
+            raw.get("down_ladder_enabled_levels", [1, 2]), strict=False
+        )
+        symbol = str(raw.get("symbol", "TQQQ")).upper()
+        raw["final_tp_pct"] = (
+            Decimal(str(raw["final_tp_pct"]))
+            if raw.get("final_tp_pct") not in (None, "")
+            else symbol_profile(symbol)[1]
         )
         known = {field.name for field in fields(StrategyState)}
         state = StrategyState(**{key: value for key, value in raw.items() if key in known})
@@ -50,10 +58,10 @@ class StateStore:
         if "portfolios" not in raw:
             legacy = self._decode(raw)
             target = symbol or legacy.symbol
-            return legacy if target == legacy.symbol else StrategyState(symbol=target)
+            return legacy if target == legacy.symbol else StrategyState(symbol=target, final_tp_pct=symbol_profile(target)[1])
         target = symbol or raw.get("last_symbol", "TQQQ")
         portfolio = raw.get("portfolios", {}).get(target)
-        return self._decode(portfolio) if portfolio else StrategyState(symbol=target)
+        return self._decode(portfolio) if portfolio else StrategyState(symbol=target, final_tp_pct=symbol_profile(target)[1])
 
     def save(self, state: StrategyState) -> None:
         state.validate()
@@ -71,5 +79,5 @@ class StateStore:
     @staticmethod
     def _serialize(state: StrategyState) -> dict:
         raw = asdict(state)
-        raw.update({"t_value": str(state.t_value), "avg_cost": str(state.avg_cost), "cash_usd": str(state.cash_usd), "big_number_pct": str(state.big_number_pct), "mode": state.mode.value, "updated_at": datetime.now(timezone.utc).isoformat()})
+        raw.update({"t_value": str(state.t_value), "avg_cost": str(state.avg_cost), "cash_usd": str(state.cash_usd), "big_number_pct": str(state.big_number_pct), "final_tp_pct": str(state.final_tp_pct), "mode": state.mode.value, "updated_at": datetime.now(timezone.utc).isoformat()})
         return raw
