@@ -1039,7 +1039,7 @@ function toDraftDetail(row, images, options) {
       crawlError: image.crawl_error || null,
       selectedForDetail: Boolean(image.selected_for_detail),
       qualityStatus: image.quality_status || null,
-      sourceSection: image.source_section || 'unknown',
+      sourceSection: image.source_section ?? null,
       rejectReason: image.reject_reason || null,
     })),
     options: options.map((option) => ({
