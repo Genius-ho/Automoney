@@ -3,6 +3,7 @@ function toRegistrationRow(row) {
     productDraftId: Number(row.product_draft_id),
     originProductNo: row.origin_product_no,
     channelProductNo: row.channel_product_no,
+    requestHash: row.request_hash,
     status: row.status,
     linkedVia: row.linked_via,
     imagesSwappedAt: row.images_swapped_at,
@@ -13,6 +14,41 @@ function toRegistrationRow(row) {
 
 export async function getNaverRegistration(db, productDraftId) {
   const result = await db.query('select * from naver_product_registrations where product_draft_id = $1', [productDraftId]);
+  return result.rows[0] ? toRegistrationRow({ ...result.rows[0], product_draft_id: productDraftId }) : null;
+}
+
+export async function reserveNaverSpeedgoRegistration(db, productDraftId, { requestHash }) {
+  if (!requestHash) throw new Error('requestHash is required');
+  const inserted = await db.query(
+    `insert into naver_product_registrations
+       (product_draft_id, request_hash, status, linked_via)
+     values ($1, $2, 'submitting', 'speedgo_automation')
+     on conflict (product_draft_id) do nothing returning *`,
+    [productDraftId, requestHash],
+  );
+  if (inserted.rows[0]) return { action: 'reserved', registration: toRegistrationRow(inserted.rows[0]) };
+  const existing = await getNaverRegistration(db, productDraftId);
+  if (existing?.originProductNo) return { action: 'already_linked', registration: existing };
+  if (existing?.status === 'submitting' && existing.requestHash === requestHash) return { action: 'recover', registration: existing };
+  return { action: 'conflict', registration: existing };
+}
+
+export async function completeNaverSpeedgoRegistration(db, productDraftId, {
+  requestHash, originProductNo, channelProductNo,
+}) {
+  if (!requestHash) throw new Error('requestHash is required');
+  if (!originProductNo) throw new Error('originProductNo is required');
+  if (!channelProductNo) throw new Error('channelProductNo is required');
+  const result = await db.query(
+    `update naver_product_registrations set
+       origin_product_no = $3, channel_product_no = $4, status = 'created', updated_at = now()
+     where product_draft_id = $1
+       and request_hash = $2
+       and status = 'submitting'
+       and linked_via = 'speedgo_automation'
+     returning *`,
+    [productDraftId, requestHash, String(originProductNo), String(channelProductNo)],
+  );
   return result.rows[0] ? toRegistrationRow({ ...result.rows[0], product_draft_id: productDraftId }) : null;
 }
 

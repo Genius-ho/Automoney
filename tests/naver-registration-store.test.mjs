@@ -1,7 +1,78 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
 
-import { getNaverRegistration, recordImagesSwapped, recordNaverDirectRegistration } from '../src/naver-registration-store.mjs';
+import {
+  completeNaverSpeedgoRegistration,
+  getNaverRegistration,
+  recordImagesSwapped,
+  recordNaverDirectRegistration,
+  reserveNaverSpeedgoRegistration,
+} from '../src/naver-registration-store.mjs';
+
+test('reserveNaverSpeedgoRegistration inserts one submitting speedgo row', async () => {
+  const db = { async query(sql, params) {
+    assert.match(sql, /'submitting'/);
+    assert.match(sql, /'speedgo_automation'/);
+    assert.deepEqual(params, [501, 'hash-1']);
+    return { rows: [{ product_draft_id: 501, request_hash: 'hash-1', status: 'submitting', linked_via: 'speedgo_automation' }] };
+  } };
+  const result = await reserveNaverSpeedgoRegistration(db, 501, { requestHash: 'hash-1' });
+  assert.equal(result.action, 'reserved');
+  assert.equal(result.registration.status, 'submitting');
+});
+
+test('reserveNaverSpeedgoRegistration reports an existing linked row', async () => {
+  let queryCount = 0;
+  const db = { async query(sql, params) {
+    queryCount += 1;
+    if (queryCount === 1) return { rows: [] };
+    assert.match(sql, /select \* from naver_product_registrations/);
+    assert.deepEqual(params, [501]);
+    return { rows: [{ product_draft_id: 501, origin_product_no: '7777777777', status: 'created', linked_via: 'speedgo_automation' }] };
+  } };
+  const result = await reserveNaverSpeedgoRegistration(db, 501, { requestHash: 'hash-1' });
+  assert.equal(result.action, 'already_linked');
+  assert.equal(result.registration.originProductNo, '7777777777');
+});
+
+test('reserveNaverSpeedgoRegistration recovers a same-hash submitting row', async () => {
+  let queryCount = 0;
+  const db = { async query(sql, params) {
+    queryCount += 1;
+    if (queryCount === 1) return { rows: [] };
+    return { rows: [{ product_draft_id: 501, request_hash: 'hash-1', status: 'submitting', linked_via: 'speedgo_automation' }] };
+  } };
+  const result = await reserveNaverSpeedgoRegistration(db, 501, { requestHash: 'hash-1' });
+  assert.equal(result.action, 'recover');
+  assert.equal(result.registration.requestHash, 'hash-1');
+});
+
+test('reserveNaverSpeedgoRegistration reports a different-hash conflict without modifying it', async () => {
+  let queryCount = 0;
+  const db = { async query(sql, params) {
+    queryCount += 1;
+    if (queryCount === 1) return { rows: [] };
+    return { rows: [{ product_draft_id: 501, request_hash: 'hash-other', status: 'submitting', linked_via: 'speedgo_automation' }] };
+  } };
+  const result = await reserveNaverSpeedgoRegistration(db, 501, { requestHash: 'hash-1' });
+  assert.equal(result.action, 'conflict');
+  assert.equal(result.registration.requestHash, 'hash-other');
+});
+
+test('completeNaverSpeedgoRegistration stores verified ids only on the matching reservation', async () => {
+  const db = { async query(sql, params) {
+    assert.match(sql, /status = 'created'/);
+    assert.match(sql, /status = 'submitting'/);
+    assert.match(sql, /linked_via = 'speedgo_automation'/);
+    assert.deepEqual(params, [501, 'hash-1', '7777777777', '8888888888']);
+    return { rows: [{ product_draft_id: 501, origin_product_no: '7777777777', channel_product_no: '8888888888', status: 'created', linked_via: 'speedgo_automation' }] };
+  } };
+  const result = await completeNaverSpeedgoRegistration(db, 501, {
+    requestHash: 'hash-1', originProductNo: '7777777777', channelProductNo: '8888888888',
+  });
+  assert.equal(result.originProductNo, '7777777777');
+  assert.equal(result.status, 'created');
+});
 
 test('getNaverRegistration returns null when no row exists for the draft', async () => {
   const db = { async query() { return { rows: [] }; } };
