@@ -253,6 +253,41 @@ async function waitForSuccessEvidence(page, isCancelled) {
   throw new Error('Speedgo success evidence did not become visible');
 }
 
+async function findFirstPresent(page, selectorName, candidates) {
+  for (const candidate of candidates) {
+    if (candidate.kind !== 'css') continue;
+    try {
+      const locator = page.locator(candidate.value);
+      const count = typeof locator.count === 'function' ? await locator.count() : 1;
+      if (count > 0) return typeof locator.first === 'function' ? locator.first() : locator;
+    } catch {
+      // Try the next compatible structural candidate.
+    }
+  }
+  throw speedgoError('SPEEDGO_SELECTOR_NOT_FOUND', `No Speedgo locator found for ${selectorName}`, page, { selectorName });
+}
+
+async function waitForSupplierSearchResults(page) {
+  if (typeof page.waitForURL === 'function') {
+    await page.waitForURL(/\/index\/item\/supplyList\.php(?:\?|$)/i, {
+      waitUntil: 'domcontentloaded',
+      timeout: SUBMISSION_TIMEOUT_MS,
+    });
+    return;
+  }
+  if (typeof page.waitForTimeout === 'function') await page.waitForTimeout(100);
+}
+
+async function visibleLocators(locator) {
+  const count = typeof locator.count === 'function' ? await locator.count() : 1;
+  const visible = [];
+  for (let index = 0; index < count; index += 1) {
+    const instance = typeof locator.nth === 'function' ? locator.nth(index) : locator;
+    if (await instance.isVisible()) visible.push(instance);
+  }
+  return visible;
+}
+
 export function createSpeedgoBrowser({
   chromiumImpl,
   rootDir,
@@ -353,9 +388,12 @@ export function createSpeedgoBrowser({
       try {
         const supplierProductNo = String(input?.supplierProductNo || '').trim();
         const search = await findFirstVisible(page, 'searchInput', SPEEDGO_SELECTORS.searchInput);
+        const searchMode = await findFirstPresent(page, 'searchModeInput', SPEEDGO_SELECTORS.searchModeInput);
+        const searchSubmit = await findFirstVisible(page, 'searchSubmit', SPEEDGO_SELECTORS.searchSubmit);
+        await searchMode.fill('no');
         await search.fill(supplierProductNo);
-        if (typeof search.press === 'function') await search.press('Enter');
-        else await page.keyboard.press('Enter');
+        const resultWait = waitForSupplierSearchResults(page);
+        await Promise.all([resultWait, searchSubmit.click()]);
 
         const matches = page.getByText(supplierProductNo, { exact: true });
         const count = typeof matches.count === 'function' ? await matches.count() : 0;
@@ -370,7 +408,23 @@ export function createSpeedgoBrowser({
         if (visibleMatches.length > 1) {
           throw speedgoError('SPEEDGO_AMBIGUOUS_PRODUCT', 'More than one exact Speedgo supplier product match was found', page);
         }
-        await visibleMatches[0].click();
+        const cards = page.locator('.sub_cont_bane1').filter({ hasText: supplierProductNo });
+        const visibleCards = await visibleLocators(cards);
+        if (visibleCards.length === 0) {
+          throw speedgoError('SPEEDGO_SUPPLIER_PRODUCT_NOT_FOUND', 'The matching Speedgo supplier product card was not visible', page);
+        }
+        if (visibleCards.length > 1) {
+          throw speedgoError('SPEEDGO_AMBIGUOUS_PRODUCT', 'More than one matching Speedgo supplier product card was visible', page);
+        }
+
+        const cardTriggerCandidates = visibleCards[0].locator('.bane_brd1[onclick*="itemInfo("]');
+        const cardTriggers = await visibleLocators(cardTriggerCandidates);
+        if (cardTriggers.length === 0) {
+          throw speedgoError('SPEEDGO_SUPPLIER_PRODUCT_NOT_FOUND', 'The matching Speedgo supplier product card trigger was not visible', page);
+        }
+        await cardTriggers[0].click();
+        const transfer = await findFirstVisible(page, 'transferButton', SPEEDGO_SELECTORS.transferButton);
+        if (typeof transfer.waitFor === 'function') await transfer.waitFor({ state: 'visible' });
         return true;
       } catch (error) {
         if (error?.code === 'SPEEDGO_AMBIGUOUS_PRODUCT') throw error;

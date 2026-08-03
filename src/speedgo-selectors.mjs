@@ -80,11 +80,22 @@ export const SPEEDGO_SELECTORS = Object.freeze({
     { kind: 'role', role: 'link', name: /^로그아웃$/ },
   ],
   searchInput: [
+    { kind: 'css', value: 'input[name="sw"]' },
     { kind: 'css', value: 'input[name="ss"]' },
     { kind: 'role', role: 'searchbox', name: /상품|검색/ },
     { kind: 'css', value: 'input[type="search"]' },
   ],
+  searchModeInput: [
+    { kind: 'css', value: '#search_list input[name="sf"]' },
+    { kind: 'css', value: 'input[name="sf"]' },
+  ],
+  searchSubmit: [
+    { kind: 'css', value: '#search_list button[type="submit"]' },
+    { kind: 'css', value: '#search_list input[type="submit"]' },
+    { kind: 'css', value: 'button[type="submit"], input[type="submit"]' },
+  ],
   transferButton: [
+    { kind: 'css', value: '.main_cont_btn1[onclick*="speedGoSend("]' },
     { kind: 'css', value: '[data-action="speedgo-transfer"], [data-action*="speedgo" i]' },
     { kind: 'role', role: 'button', name: /^스피드고\s*전송$/ },
     { kind: 'text', value: /^스피드고\s*전송$/ },

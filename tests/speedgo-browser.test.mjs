@@ -19,6 +19,7 @@ function fakeBrowserHarness({
   submitResponses = null,
   successText = '상품 등록 완료',
   resultLinks = [],
+  exactProductVisibility,
   successUrlTransition,
 } = {}) {
   const responseListeners = new Set();
@@ -29,6 +30,8 @@ function fakeBrowserHarness({
   let cookiesAdded = null;
   let storageStatePath = null;
   let contextClosed = false;
+  let searchSubmitted = false;
+  const searchWaiters = [];
   const hasSuccessUrlTransition = successUrlTransition ?? Boolean(successText);
   const responsesAfterSubmit = submitResponses || (submitResponse
     ? [{ response: submitResponse, delayMs: 0 }]
@@ -36,6 +39,12 @@ function fakeBrowserHarness({
 
   const classify = ({ css, role, name, text, label }) => {
     const semanticText = String(name?.source || name || text?.source || text || label?.source || label || '');
+    if (css === 'input[name="sw"]') return 'search';
+    if (css === '#search_list input[name="sf"]' || css === 'input[name="sf"]') return 'searchMode';
+    if (css === '#search_list button[type="submit"]') return 'searchSubmit';
+    if (css === '.bane_brd1[onclick*="itemInfo("]') return 'cardTrigger';
+    if (css === '.main_cont_btn1[onclick*="speedGoSend("]') return 'cardTransfer';
+    if (css === 'a[href*="speedgo" i]') return 'globalSpeedgo';
     if (css === 'input[name="ss"]' || semanticText.includes('검색')) return 'search';
     if (semanticText.includes('로그아웃')) return 'login';
     if (semanticText.includes('스피드고') && semanticText.includes('전송')) return 'transfer';
@@ -59,6 +68,7 @@ function fakeBrowserHarness({
   };
 
   const visible = (concept) => {
+    if (['searchMode', 'searchSubmit', 'cardTrigger', 'cardTransfer', 'globalSpeedgo'].includes(concept)) return true;
     if (concept === 'login') return authenticated;
     if (concept === 'success') return Boolean(successText);
     return ['search', 'transfer', 'naver', 'productName', 'salePrice', 'deliveryFee', 'detailContent', 'mainImage', 'detailImage', 'addOption', 'optionGroup', 'optionName', 'optionPrice', 'optionStock', 'submit', 'links'].includes(concept);
@@ -83,6 +93,7 @@ function fakeBrowserHarness({
       isVisible: async () => !invalid && visible(concept),
       waitFor: async () => {
         if (invalid || !visible(concept)) throw new Error('not visible');
+        calls.push(`waitFor:${concept}`);
       },
       fill: async (value) => {
         if (invalid) throw new Error('locator resolved to no elements');
@@ -106,6 +117,10 @@ function fakeBrowserHarness({
       },
       click: async () => {
         calls.push(`click:${concept}`);
+        if (concept === 'searchSubmit') {
+          searchSubmitted = true;
+          while (searchWaiters.length) searchWaiters.shift()();
+        }
         if (concept === 'submit') {
           submitClicks += 1;
           if (submitError) throw submitError;
@@ -128,13 +143,30 @@ function fakeBrowserHarness({
 
   const exactProductLocator = {
     count: async () => exactProductMatches,
-    nth: () => ({ isVisible: async () => true, click: async () => calls.push('click:product') }),
+    nth: (index) => ({
+      isVisible: async () => exactProductVisibility?.[index] ?? true,
+      click: async () => calls.push('click:product'),
+    }),
+  };
+
+  const cardLocator = {
+    count: async () => exactProductVisibility
+      ? exactProductVisibility.filter(Boolean).length
+      : exactProductMatches,
+    nth: () => cardLocator,
+    isVisible: async () => true,
+    filter: () => cardLocator,
+    locator: (css) => makeLocator({ css }),
   };
 
   const page = {
     goto: async (url) => calls.push(`goto:${url}`),
-    url: () => hasSuccessUrlTransition ? 'https://domemedb.domeggook.com/speedgo/result' : 'https://domemedb.domeggook.com/index/',
-    locator: (css) => makeLocator({ css }),
+    url: () => hasSuccessUrlTransition
+      ? 'https://domemedb.domeggook.com/speedgo/result'
+      : searchSubmitted
+        ? 'https://domemedb.domeggook.com/index/item/supplyList.php?sf=no&sw=49168396'
+        : 'https://domemedb.domeggook.com/index/',
+    locator: (css) => css === '.sub_cont_bane1' ? cardLocator : makeLocator({ css }),
     getByRole: (role, { name } = {}) => makeLocator({ role, name }),
     getByText: (text, options = {}) => {
       if (options.exact && /^\d+$/.test(String(text))) return exactProductLocator;
@@ -147,7 +179,12 @@ function fakeBrowserHarness({
     off: (event, listener) => {
       if (event === 'response') responseListeners.delete(listener);
     },
-    waitForURL: async () => {
+    waitForURL: async (pattern) => {
+      calls.push(`waitForURL:${pattern}`);
+      if (pattern?.toString().includes('supplyList') && !searchSubmitted) {
+        await new Promise((resolve) => searchWaiters.push(resolve));
+        return;
+      }
       if (!hasSuccessUrlTransition) throw new Error('no success transition');
     },
     waitForTimeout: async () => {},
@@ -286,6 +323,31 @@ test('findSupplierProduct maps zero and multiple exact matches at its boundary',
     await assert.rejects(browser.findSupplierProduct({ supplierProductNo: '49168396' }), { code });
     await browser.close();
   }
+});
+
+test('findSupplierProduct follows the live product-number form and matching card flow', async () => {
+  const harness = fakeBrowserHarness({
+    exactProductMatches: 2,
+    exactProductVisibility: [false, true],
+  });
+  const browser = createSpeedgoBrowser({ chromiumImpl: harness.chromium, rootDir: 'C:/repo' });
+  await browser.open();
+
+  await browser.findSupplierProduct({ supplierProductNo: '49168396' });
+
+  const searchSubmitIndex = harness.calls.indexOf('click:searchSubmit');
+  assert.equal(harness.calls.filter((call) => call === 'click:searchSubmit').length, 1);
+  assert.ok(harness.calls.includes('fill:search:49168396'));
+  assert.ok(harness.calls.includes('fill:searchMode:no'));
+  assert.ok(harness.calls.some((call) => String(call).startsWith('waitForURL:') && String(call).includes('supplyList')));
+  assert.ok(harness.calls.indexOf('click:cardTrigger') > searchSubmitIndex);
+  assert.ok(harness.calls.includes('waitFor:cardTransfer'));
+  assert.equal(harness.calls.includes('click:product'), false);
+
+  await browser.openSpeedgoTransfer();
+  assert.equal(harness.calls.includes('click:cardTransfer'), true);
+  assert.equal(harness.calls.includes('click:globalSpeedgo'), false);
+  await browser.close();
 });
 
 test('transfer and market methods expose stable SPEEDGO_TRANSFER_UI_NOT_FOUND errors', async () => {

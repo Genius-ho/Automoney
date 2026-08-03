@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
 
-import { findFirstVisible } from '../src/speedgo-selectors.mjs';
+import { findFirstVisible, SPEEDGO_SELECTORS } from '../src/speedgo-selectors.mjs';
 
 function fakePage({ visible = [] } = {}) {
   const visibleKeys = new Set(visible);
@@ -68,4 +68,19 @@ test('findFirstVisible reports selector name and current URL when nothing is vis
       return true;
     },
   );
+});
+
+test('live supplier search selectors prioritize the structural form controls', () => {
+  assert.deepEqual(SPEEDGO_SELECTORS.searchInput[0], {
+    kind: 'css',
+    value: 'input[name="sw"]',
+  });
+  assert.deepEqual(SPEEDGO_SELECTORS.searchSubmit[0], {
+    kind: 'css',
+    value: '#search_list button[type="submit"]',
+  });
+  assert.deepEqual(SPEEDGO_SELECTORS.searchModeInput[0], {
+    kind: 'css',
+    value: '#search_list input[name="sf"]',
+  });
 });
