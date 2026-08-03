@@ -21,6 +21,7 @@ if str(PROJECT_ROOT) not in sys.path:
 
 from local_env import load_env  # noqa: E402
 from application_engine import ApplicationEngine  # noqa: E402
+from telegram_bot import TelegramCommandLoop  # noqa: E402
 from toss_api import TossApiError  # noqa: E402
 from web_gui.web_auth import WebAuth  # noqa: E402
 
@@ -143,7 +144,16 @@ class WebHandler(BaseHTTPRequestHandler):
                 payload = body.get("payload")
                 if not isinstance(payload, dict):
                     raise ValueError("엔진 명령 payload는 객체여야 합니다.")
-                if command in {"order.submit", "order.cancel", "auto.start", "auto.stop", "api.update"}:
+                if command in {
+                    "order.submit",
+                    "order.cancel",
+                    "order.reregister",
+                    "order.retry_failed",
+                    "order.retry_failed_price",
+                    "auto.start",
+                    "auto.stop",
+                    "api.update",
+                }:
                     self.auth.validate(
                         self.headers.get("Cookie"),
                         self.headers.get("X-Mumae-CSRF"),
@@ -250,6 +260,7 @@ def run(
     server = ThreadingHTTPServer((host, port), WebHandler)
     stopped = threading.Event()
     scheduler = None
+    telegram_loop = None
     if WebHandler.auth.configured and WebHandler.auth.live_enabled:
         scheduler = threading.Thread(
             target=_auto_loop,
@@ -258,6 +269,8 @@ def run(
             daemon=True,
         )
         scheduler.start()
+        telegram_loop = TelegramCommandLoop(WebHandler.service, WebHandler.service.telegram)
+        telegram_loop.start()
     url = f"http://127.0.0.1:{port}/"
     print(f"Mumae Web GUI: {url}")
     print(_live_status_message(WebHandler.auth))
@@ -269,6 +282,8 @@ def run(
         pass
     finally:
         stopped.set()
+        if telegram_loop is not None:
+            telegram_loop.stop()
         server.server_close()
 
 

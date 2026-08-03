@@ -148,6 +148,23 @@ class WebLiveHttpTests(unittest.TestCase):
         self.assertFalse(payload["auto_enabled"])
         self.assertEqual(self.service.calls[-1][0], "auto.stop")
 
+    def test_generic_retry_commands_require_live_actions(self):
+        original_auth = WebHandler.auth
+        try:
+            with patch.dict(os.environ, {"MUMAE_WEB_LIVE_ACTIONS": ""}, clear=False):
+                WebHandler.auth = WebAuth()
+                headers = self._login()
+                for command in ("order.retry_failed", "order.retry_failed_price"):
+                    with self.subTest(command=command):
+                        status, payload, _ = self._post("/api/command", {
+                            "command": command,
+                            "payload": {"client_order_id": "default-SOXL-20260803-star-buy", "price": "65.25"},
+                        }, headers)
+                        self.assertEqual(status, 403)
+                        self.assertFalse(payload["ok"])
+        finally:
+            WebHandler.auth = original_auth
+
 
 class AutoSchedulerTests(unittest.TestCase):
     def test_live_status_message_reflects_runtime_auth_setting(self):

@@ -157,12 +157,36 @@ class DashboardServiceTests(unittest.TestCase):
                 "orderId": "real-order-1", "side": planned["side"].upper(),
                 "quantity": planned["quantity"], "price": planned["price"], "status": "PENDING",
             }]
+            runtime = service.runtime_store.load()
+            runtime.broker_order_ids[planned["id"]] = "real-order-1"
+            service.runtime_store.save(runtime)
 
             refreshed = service.refresh_account("TQQQ")
 
             matched = next(order for order in refreshed["orders"] if order["id"] == planned["id"])
             self.assertEqual(matched["status"], "PENDING")
             self.assertTrue(refreshed["orders_synced"])
+
+    def test_same_price_broker_order_without_persisted_id_stays_broker_only(self):
+        class StatusBroker(FakeBroker):
+            open_orders = []
+            closed_orders = []
+
+        with tempfile.TemporaryDirectory() as temp:
+            service = DashboardService(temp, broker_factory=StatusBroker, credentials_loader=credentials)
+            first = service.refresh_account("TQQQ")
+            planned = first["orders"][0]
+            StatusBroker.open_orders = [{
+                "orderId": "manual-order-1", "side": planned["side"].upper(),
+                "quantity": planned["quantity"], "price": planned["price"], "status": "PENDING",
+            }]
+
+            refreshed = service.refresh_account("TQQQ")
+
+            strategy = next(order for order in refreshed["orders"] if order["id"] == planned["id"])
+            broker_only = next(order for order in refreshed["orders"] if order.get("broker_only"))
+            self.assertEqual(strategy["status"], "PLANNED")
+            self.assertEqual(broker_only["status"], "PENDING")
 
     def test_emergency_update_persists_the_selected_etf_state(self):
         with tempfile.TemporaryDirectory() as temp:
@@ -371,6 +395,21 @@ class EngineCommandGateHttpTests(unittest.TestCase):
 
         self.assertEqual(status, 200)
         self.assertTrue(body["ok"])
+
+    def test_retry_commands_require_the_live_actions_gate(self):
+        headers = self._login()
+
+        for command, payload in (
+            ("order.retry_failed", {"client_order_id": "default-SOXL-20260803-star-buy"}),
+            ("order.retry_failed_price", {"client_order_id": "default-SOXL-20260803-star-buy", "price": "65.25"}),
+        ):
+            with self.subTest(command=command):
+                status, body, _ = self._post("/api/command", {
+                    "command": command,
+                    "payload": payload,
+                }, headers)
+                self.assertEqual(status, 401)
+                self.assertFalse(body["ok"])
 
 
 class DryRunBroker(FakeBroker):

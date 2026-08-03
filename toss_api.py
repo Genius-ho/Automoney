@@ -22,6 +22,17 @@ BASE_URL = "https://openapi.tossinvest.com"
 LIVE_ACKNOWLEDGEMENT = "I_UNDERSTAND_LIVE_TRADING"
 
 
+def order_time_in_force(order: OrderIntent) -> str:
+    """Return the broker time-in-force used for a strategy order.
+
+    The final take-profit is a regular DAY limit sell; all other strategy
+    orders, including buys and the quarter sell, remain LOC/CLS orders.
+    Keeping this policy in one helper lets auto_tick schedule the two sell
+    legs without drifting from the actual broker payload.
+    """
+    return "DAY" if order.reason.startswith("Final take-profit") else "CLS"
+
+
 class TossApiError(RuntimeError):
     def __init__(
         self,
@@ -255,7 +266,7 @@ class TossBroker:
             return {"status": "DRY_RUN", "client_order_id": order.client_order_id, "reason": order.reason}
         if not self.live_ack:
             raise PermissionError("Set MUMAE_LIVE_TRADING_ACK=I_UNDERSTAND_LIVE_TRADING in .env before live trading.")
-        time_in_force = "DAY" if order.reason.startswith("Final take-profit") else "CLS"
+        time_in_force = order_time_in_force(order)
         match = re.search(r"-(" + "|".join(ETF_UNIVERSE) + r")-\d{8}-", order.client_order_id)
         if match is None:
             raise ValueError("Cannot determine the ticker from the client order ID.")

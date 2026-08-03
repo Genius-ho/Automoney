@@ -3,9 +3,10 @@ from __future__ import annotations
 
 import json
 import os
+import re
 import uuid
 from dataclasses import asdict, dataclass, field, fields
-from datetime import datetime, timezone
+from datetime import date, datetime, timedelta, timezone
 from pathlib import Path
 from typing import Any
 
@@ -55,11 +56,16 @@ class RuntimeStatus:
     # auto-tick buy submission, gated by auto_order_delay_minutes after the
     # regular session opens.
     auto_attempt_keys: dict[str, str] = field(default_factory=dict)
+    # Per-symbol dedup key for the early day-market DAY sell submission.
+    # This is separate from auto_sell_attempt_keys, which tracks the later
+    # close (CLS) sell submission.
+    auto_day_sell_attempt_keys: dict[str, str] = field(default_factory=dict)
     # Same idea but for sell-side orders, which submit as soon as pre-market
-    # opens (immediate-sell orders shouldn't wait for the regular-session
-    # delay -- a pre-market pop that fades by the open would otherwise be
-    # missed).
+    # opens (the CLS sell is intentionally held for the close).
     auto_sell_attempt_keys: dict[str, str] = field(default_factory=dict)
+    # Telegram long-polling state. The offset prevents a process restart from
+    # executing the same /retry command twice.
+    telegram_update_offset: int = 0
     # Persisted, restart-surviving record of every order a human has hand-
     # edited (via edit_failed_price or reregister_order): the fixed facts
     # (symbol/side/quantity/price/reason) needed to identify it as a "custom
@@ -72,6 +78,68 @@ class RuntimeStatus:
     # lock: a given original order may only ever be reregistered once.
     custom_order_history: dict[str, dict] = field(default_factory=dict)
     updated_at: str = ""
+
+
+_ORDER_DATE_PATTERN = re.compile(r"-(\d{8})-")
+
+
+def _tracked_order_date(client_order_id: str) -> date | None:
+    match = _ORDER_DATE_PATTERN.search(str(client_order_id))
+    if match is None:
+        return None
+    try:
+        return datetime.strptime(match.group(1), "%Y%m%d").date()
+    except ValueError:
+        return None
+
+
+def prune_order_tracking(
+    status: RuntimeStatus,
+    *,
+    today: date | None = None,
+    active_days: int = 14,
+    history_days: int = 30,
+) -> bool:
+    """Bound strategy-order bookkeeping without touching custom/unresolved data.
+
+    Strategy orders are DAY/CLS orders and cannot still be live weeks later.
+    Custom orders are retained because their edit/reregister history is a user
+    record rather than disposable scheduler bookkeeping.
+    """
+    today = today or date.today()
+    active_cutoff = today - timedelta(days=active_days)
+    history_cutoff = today - timedelta(days=history_days)
+    protected = set(status.custom_order_ledger) | set(status.custom_order_history)
+
+    def stale(client_order_id: str, cutoff: date) -> bool:
+        order_date = _tracked_order_date(client_order_id)
+        return client_order_id not in protected and order_date is not None and order_date < cutoff
+
+    before = (
+        len(status.active_order_ids),
+        len(status.skipped_order_ids),
+        len(status.broker_client_order_ids),
+        len(status.broker_order_ids),
+        len(status.order_price_overrides),
+    )
+    status.active_order_ids = [item for item in status.active_order_ids if not stale(item, active_cutoff)]
+    status.skipped_order_ids = [item for item in status.skipped_order_ids if not stale(item, active_cutoff)]
+    for mapping in (
+        status.broker_client_order_ids,
+        status.broker_order_ids,
+        status.order_price_overrides,
+    ):
+        for client_order_id in list(mapping):
+            if stale(client_order_id, history_cutoff):
+                mapping.pop(client_order_id, None)
+    after = (
+        len(status.active_order_ids),
+        len(status.skipped_order_ids),
+        len(status.broker_client_order_ids),
+        len(status.broker_order_ids),
+        len(status.order_price_overrides),
+    )
+    return before != after
 
 
 class RuntimeStore:

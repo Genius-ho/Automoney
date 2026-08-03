@@ -281,6 +281,13 @@ class ApplicationEngine(TradingWebService):
                 str(payload.get("confirmation") or ""),
                 confirm_over_remaining=bool(payload.get("confirm_over_remaining")),
             )
+        if command == "order.retry_failed":
+            return self.retry_failed_order(str(payload.get("client_order_id") or ""))
+        if command == "order.retry_failed_price":
+            return self.retry_failed_order_with_price(
+                str(payload.get("client_order_id") or ""),
+                payload.get("price"),
+            )
         if command == "auto.start":
             return self.start_auto(symbol, str(payload.get("confirmation") or ""))
         if command == "auto.stop":

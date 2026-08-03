@@ -1,6 +1,7 @@
 """Windows-GUI feature parity services for orders, history, and ETF analysis."""
 from __future__ import annotations
 
+import re
 import sys
 import threading
 import time
@@ -13,13 +14,18 @@ from typing import Any
 from etf_linkage import analyze_etf_pairs
 from etf_long_term import analyze_individual_etfs
 from mumae_core import CENT, OrderIntent, OrderKind, apply_fill, money
-from toss_api import TossApiError
+from telegram_bot import TelegramCommandLoop, TelegramNotifier
+from toss_api import TossApiError, order_time_in_force
 from trade_history import aggregate_daily_trades, summarize_realized_pnl
 from volatility import ETF_UNIVERSE
 from web_gui.web_service import WebService, _json_value
 
 OPEN_STATUSES = {"PENDING", "PARTIAL_FILLED", "PENDING_CANCEL", "PENDING_REPLACE"}
 FAILED_STATUSES = {"REJECTED", "CANCELED", "REPLACE_REJECTED", "CANCEL_REJECTED"}
+# REPLACE_REJECTED/CANCEL_REJECTED can leave the original broker order live.
+# Only definitive terminal states, never-submitted skips, and same-payload
+# idempotent UNSENT retries may create another request.
+RETRYABLE_STATUSES = {"REJECTED", "CANCELED", "UNSENT", "SKIPPED"}
 CONFIRMED_STATUSES = OPEN_STATUSES | {"FILLED"}
 AUTO_REPRICE_SYMBOLS = {"KORU", "SOXL"}
 # Statuses a custom order must be in before "reregister" is offered. Narrower
@@ -50,10 +56,38 @@ class TradingWebService(WebService):
         # live order (see reregister_order).
         self._reregister_locks: dict[str, threading.Lock] = {}
         self._reregister_locks_guard = threading.Lock()
+        self.telegram = TelegramNotifier()
 
-    @staticmethod
-    def _match_key(side: str, quantity: Any, price: Any) -> tuple[str, int, Decimal]:
-        return str(side).upper(), int(Decimal(str(quantity or "0"))), Decimal(str(price or "0")).quantize(Decimal("0.01"))
+    def _active_us_session_date(self, now: datetime | None = None) -> date | None:
+        """Return the US trading date whose Toss session currently spans now."""
+        now = now or datetime.now(timezone.utc)
+        calendar = getattr(self.broker(), "get_us_market_calendar_raw", None)
+        if not callable(calendar):
+            return None
+        for offset in (0, 1):
+            target = (now - timedelta(days=offset)).date().isoformat()
+            try:
+                today = calendar(target).get("result", {}).get("today", {})
+            except (TossApiError, PermissionError, ValueError):
+                continue
+            sessions = [
+                today.get(name) or {}
+                for name in ("dayMarket", "preMarket", "regularMarket", "afterMarket")
+            ]
+            starts = [
+                datetime.fromisoformat(item["startTime"]).astimezone(timezone.utc)
+                for item in sessions if item.get("startTime")
+            ]
+            ends = [
+                datetime.fromisoformat(item["endTime"]).astimezone(timezone.utc)
+                for item in sessions if item.get("endTime")
+            ]
+            if starts and ends and min(starts) <= now <= max(ends):
+                return date.fromisoformat(str(today.get("date") or target))
+        return None
+
+    def refresh_account(self, symbol: str, plan_date: date | None = None) -> dict[str, Any]:
+        return super().refresh_account(symbol, plan_date=plan_date or self._active_us_session_date())
 
     def _apply_new_fills(self, symbol: str, rows: list[dict[str, Any]]) -> None:
         state = self.store.load(symbol)
@@ -149,9 +183,6 @@ class TradingWebService(WebService):
         for order in planned:
             actual_id = self.runtime.broker_order_ids.get(order.client_order_id)
             match = next((index for index in reversed(range(len(rows))) if index in unused and actual_id and str(rows[index].get("orderId") or "") == actual_id), None)
-            if match is None:
-                expected = self._match_key(order.side, order.quantity, order.limit_price)
-                match = next((index for index in reversed(range(len(rows))) if index in unused and self._match_key(rows[index].get("side"), rows[index].get("quantity"), rows[index].get("price")) == expected), None)
             status = "UNSENT"
             if match is not None:
                 unused.remove(match)
@@ -165,6 +196,7 @@ class TradingWebService(WebService):
                 status = "SKIPPED"
             elif order.client_order_id in self.runtime.active_order_ids:
                 status = "UNCONFIRMED"
+            statuses[order.client_order_id] = status
             result.append(self._order_payload(symbol, order, status))
         for item_id, row in unmatched.items():
             result.append({
@@ -389,12 +421,23 @@ class TradingWebService(WebService):
             return order
         return replace(order, limit_price=guarded, reason=order.reason + " · automatic volatility guard")
 
-    def _submit_one(self, symbol: str, order: OrderIntent) -> tuple[OrderIntent, dict[str, Any]]:
+    def _submit_one(
+        self,
+        symbol: str,
+        order: OrderIntent,
+        *,
+        allow_auto_reprice: bool = True,
+    ) -> tuple[OrderIntent, dict[str, Any]]:
         client_id = self._broker_client_id(order)
         try:
             return order, self.broker().submit_order(order, client_id)
         except TossApiError as error:
-            if error.code != "price-out-of-range" or symbol not in AUTO_REPRICE_SYMBOLS or order.reason.startswith("Final take-profit"):
+            if (
+                not allow_auto_reprice
+                or error.code != "price-out-of-range"
+                or symbol not in AUTO_REPRICE_SYMBOLS
+                or order.reason.startswith("Final take-profit")
+            ):
                 raise
             quotes = self.broker().get_prices_raw([symbol]).get("result", [])
             if not quotes or quotes[0].get("lastPrice") is None:
@@ -606,6 +649,67 @@ class TradingWebService(WebService):
             self.runtime.last_auto_error.pop(symbol, None)
         self.runtime_store.save(self.runtime)
 
+    def _telegram_send(self, text: str, reply_markup: dict[str, Any] | None = None) -> None:
+        if not self.telegram.enabled:
+            return
+        try:
+            if reply_markup is None:
+                self.telegram.send_message(text)
+            else:
+                self.telegram.send_message(text, reply_markup=reply_markup)
+        except Exception as error:
+            # Notification failure must never interrupt a broker order or the
+            # background auto-tick loop.
+            print(f"Telegram 알림 실패: {error}", file=sys.stderr)
+
+    def _notify_auto_failure(self, symbol: str, item_ids: list[str], error: object) -> None:
+        lines = [f"❌ 자동주문 실패: {symbol}", str(error)]
+        for item_id in item_ids:
+            lines.append(f"재시도: /retry {item_id}")
+        self._telegram_send("\n".join(lines), TelegramCommandLoop.retry_keyboard(item_ids))
+
+    def _notify_auto_result(
+        self,
+        symbol: str,
+        result: dict[str, Any],
+        item_ids: list[str] | None = None,
+    ) -> None:
+        submitted = result.get("submitted") or []
+        errors = result.get("errors") or []
+        if not submitted and not errors:
+            return
+        lines = [f"🤖 자동주문 결과: {symbol}"]
+        retry_ids: list[str] = []
+        submitted_ids: set[str] = set()
+        for item in submitted:
+            client_id = str(item.get("id") or "")
+            submitted_ids.add(client_id)
+            status = self.order_statuses.get(symbol, {}).get(client_id, "UNKNOWN")
+            if status in CONFIRMED_STATUSES:
+                lines.append(
+                    f"✅ 접수 성공 · {client_id} · {item.get('quantity', '')}주 @ ${item.get('price', '')} · {status}"
+                )
+            else:
+                label = "⏳ 접수 확인 대기" if status == "UNCONFIRMED" else "❌ 접수 실패"
+                lines.append(f"{label} · {client_id} · 토스 상태: {status}")
+                if status == "REJECTED":
+                    lines.append("상세 거절 사유는 토스 주문 목록 API에서 제공되지 않습니다. 토스 앱의 주문 내역을 확인하세요.")
+                if status in RETRYABLE_STATUSES:
+                    lines.append(f"재시도: /retry {client_id}")
+                    retry_ids.append(client_id)
+        for error in errors:
+            lines.append(f"❌ {error}")
+        if errors:
+            retry_ids.extend(
+                client_id for client_id in (item_ids or [])
+                if client_id not in submitted_ids and client_id not in retry_ids
+            )
+            for client_id in retry_ids:
+                if f"재시도: /retry {client_id}" not in lines:
+                    lines.append(f"재시도: /retry {client_id}")
+        markup = TelegramCommandLoop.retry_keyboard(retry_ids) if retry_ids else None
+        self._telegram_send("\n".join(lines), markup)
+
     def clear_last_error(self, symbol: str) -> dict[str, Any]:
         """Dismiss a symbol's last new-order error from the dashboard (e.g. a
         stale message left over from a since-fixed decoding bug)."""
@@ -614,7 +718,16 @@ class TradingWebService(WebService):
         self.runtime_store.save(self.runtime)
         return {"symbol": symbol, "last_error": ""}
 
-    def submit_orders(self, symbol: str, item_ids: list[str], confirmation: str, *, all_pending: bool = False) -> dict[str, Any]:
+    def submit_orders(
+        self,
+        symbol: str,
+        item_ids: list[str],
+        confirmation: str,
+        *,
+        all_pending: bool = False,
+        notify: bool = False,
+        allow_auto_reprice: bool = True,
+    ) -> dict[str, Any]:
         """The single entry point for all new-order submission (manual, auto-tick,
         start_auto's initial batch, and the rejected-order/price-guard replacement
         retries inside _submit_one). A symbol with new orders paused (not in
@@ -623,15 +736,127 @@ class TradingWebService(WebService):
         if symbol not in self.runtime.active_symbols:
             raise PermissionError(f"{symbol}: 신규 주문이 중지된 ETF입니다. 먼저 '시작'을 눌러 재개하세요.")
         try:
-            result = self._submit_orders_unguarded(symbol, item_ids, confirmation, all_pending=all_pending)
+            result = self._submit_orders_unguarded(
+                symbol,
+                item_ids,
+                confirmation,
+                all_pending=all_pending,
+                allow_auto_reprice=allow_auto_reprice,
+            )
         except Exception as error:
             self._record_new_order_attempt(symbol, error=str(error))
+            if notify:
+                self._notify_auto_failure(symbol, item_ids, error)
             raise
         errors = result.get("errors") or []
         self._record_new_order_attempt(symbol, error="; ".join(errors) if errors else None)
+        if notify:
+            self._notify_auto_result(symbol, result, item_ids)
         return result
 
-    def _submit_orders_unguarded(self, symbol: str, item_ids: list[str], confirmation: str, *, all_pending: bool = False) -> dict[str, Any]:
+    def _symbol_for_order_id(self, client_order_id: str) -> str:
+        for symbol in ETF_UNIVERSE:
+            if any(order.client_order_id == client_order_id for order in self.plan_cache.get(symbol, [])):
+                return symbol
+        for symbol in ETF_UNIVERSE:
+            if f"-{symbol}-" in client_order_id:
+                return symbol
+        raise ValueError("지원하는 ETF의 주문 ID가 아닙니다.")
+
+    def _retry_order_context(self, client_order_id: str) -> tuple[str, OrderIntent, str]:
+        client_order_id = str(client_order_id or "").strip()
+        if not client_order_id or not re.fullmatch(r"[A-Za-z0-9_.-]+", client_order_id):
+            raise ValueError("유효한 주문 ID가 필요합니다.")
+        symbol = self._symbol_for_order_id(client_order_id)
+        if not self.plan_cache.get(symbol):
+            self.refresh_account(symbol)
+        self.sync_orders(symbol)
+        order = next((item for item in self.plan_cache.get(symbol, []) if item.client_order_id == client_order_id), None)
+        if order is None:
+            raise ValueError("현재 전략계획에 없는 주문입니다. 먼저 계획을 새로 고치세요.")
+        status = self.order_statuses.get(symbol, {}).get(client_order_id)
+        if status not in RETRYABLE_STATUSES:
+            raise ValueError(f"실패·취소·미접수 주문만 재시도할 수 있습니다. (현재 상태: {status or '미접수'})")
+        if symbol not in self.runtime.active_symbols:
+            raise PermissionError(f"{symbol}: 신규 주문이 중지된 ETF입니다. 먼저 '시작'을 눌러 재개하세요.")
+        return symbol, order, str(status)
+
+    def retry_failed_order(self, client_order_id: str) -> dict[str, Any]:
+        """Retry one failed strategy leg after a fresh broker sync.
+
+        The original broker order is never canceled or deleted. The retry
+        receives a fresh broker client id and is still subject to all normal
+        active-symbol, cash, and unmatched-open-order guards.
+        """
+        client_order_id = str(client_order_id or "").strip()
+        symbol, _order, status = self._retry_order_context(client_order_id)
+        self.runtime.active_order_ids = [item for item in self.runtime.active_order_ids if item != client_order_id]
+        self.runtime.skipped_order_ids = [item for item in self.runtime.skipped_order_ids if item != client_order_id]
+        if status in {"REJECTED", "CANCELED"}:
+            self.runtime.broker_client_order_ids.pop(client_order_id, None)
+        self.runtime_store.save(self.runtime)
+        result = self.submit_orders(
+            symbol,
+            [client_order_id],
+            f"SUBMIT {symbol} 1",
+            allow_auto_reprice=False,
+        )
+        return {"retried": client_order_id, **result}
+
+    def retry_failed_order_with_price(self, client_order_id: str, price: Any) -> dict[str, Any]:
+        """Change a failed strategy leg's limit price and submit it immediately.
+
+        This intentionally disables the automatic price guard: the price in the
+        Telegram command is the user's explicit replacement price. A fresh
+        client order id is used by submit_orders while the strategy leg id stays
+        stable for future status reconciliation.
+        """
+        client_order_id = str(client_order_id or "").strip()
+        symbol, order, status = self._retry_order_context(client_order_id)
+        if status == "UNSENT":
+            raise ValueError("미확인 주문은 기존 지정가로만 멱등 재시도할 수 있습니다. 먼저 토스 주문 상태를 확인하세요.")
+        try:
+            requested_price = Decimal(str(price))
+        except (InvalidOperation, ValueError):
+            raise ValueError("지정가는 0보다 큰 유효한 소수여야 합니다.")
+        if requested_price <= 0:
+            raise ValueError("지정가는 0보다 커야 합니다.")
+        normalized_price = money(requested_price)
+        if normalized_price != requested_price:
+            raise ValueError(f"지정가는 {CENT} 단위(호가 단위)여야 합니다.")
+
+        self.runtime.order_price_overrides[client_order_id] = str(normalized_price)
+        self.plan_cache[symbol] = [
+            replace(
+                item,
+                limit_price=normalized_price,
+                reason=item.reason + " · Telegram 가격 수정",
+            )
+            if item.client_order_id == client_order_id else item
+            for item in self.plan_cache[symbol]
+        ]
+        self.runtime.active_order_ids = [item for item in self.runtime.active_order_ids if item != client_order_id]
+        self.runtime.skipped_order_ids = [item for item in self.runtime.skipped_order_ids if item != client_order_id]
+        if status in {"REJECTED", "CANCELED"}:
+            self.runtime.broker_client_order_ids.pop(client_order_id, None)
+        self.runtime_store.save(self.runtime)
+        result = self.submit_orders(
+            symbol,
+            [client_order_id],
+            f"SUBMIT {symbol} 1",
+            allow_auto_reprice=False,
+        )
+        return {"retried": client_order_id, "price": str(normalized_price), **result}
+
+    def _submit_orders_unguarded(
+        self,
+        symbol: str,
+        item_ids: list[str],
+        confirmation: str,
+        *,
+        all_pending: bool = False,
+        allow_auto_reprice: bool = True,
+    ) -> dict[str, Any]:
         symbol = symbol.upper()
         broker = self.broker()
         if broker.mode != "LIVE" or not broker.live_ack:
@@ -678,7 +903,7 @@ class TradingWebService(WebService):
             errors.append(f"매수 가능 금액 초과로 {len(trimmed_ids)}건 주문을 건너뛰었습니다: {', '.join(trimmed_ids)}")
         for order in pending:
             try:
-                actual, response = self._submit_one(symbol, order)
+                actual, response = self._submit_one(symbol, order, allow_auto_reprice=allow_auto_reprice)
                 result = response.get("result") if isinstance(response, dict) else {}
                 broker_order_id = str((result or {}).get("orderId") or "")
                 if broker_order_id:
@@ -686,7 +911,12 @@ class TradingWebService(WebService):
                 if order.client_order_id not in self.runtime.active_order_ids:
                     self.runtime.active_order_ids.append(order.client_order_id)
                 self.runtime_store.save(self.runtime)
-                submitted.append({"id": actual.client_order_id, "price": str(actual.limit_price), "broker_order_id": broker_order_id})
+                submitted.append({
+                    "id": actual.client_order_id,
+                    "quantity": actual.quantity,
+                    "price": str(actual.limit_price),
+                    "broker_order_id": broker_order_id,
+                })
             except (TossApiError, PermissionError, ValueError) as error:
                 errors.append(f"{order.client_order_id}: {error}")
         if submitted:
@@ -694,10 +924,12 @@ class TradingWebService(WebService):
         synced = self.sync_orders(symbol)
         confirmed = sum(1 for item in submitted if self.order_statuses.get(symbol, {}).get(item["id"]) in CONFIRMED_STATUSES)
         if submitted and confirmed == 0:
-            submitted_ids = {item["id"] for item in submitted}
-            self.runtime.active_order_ids = [item for item in self.runtime.active_order_ids if item not in submitted_ids]
-            self.runtime_store.save(self.runtime)
-            errors.append("토스 실제 OPEN/체결 주문이 확인되지 않아 자동매수를 시작하지 않았습니다.")
+            submitted_statuses = {
+                self.order_statuses.get(symbol, {}).get(item["id"], "UNCONFIRMED")
+                for item in submitted
+            }
+            if "UNCONFIRMED" in submitted_statuses:
+                errors.append("토스 주문 ID는 발급됐지만 OPEN/체결 조회 반영을 기다리는 중입니다. 중복 방지를 위해 재전송하지 않습니다.")
         return {"submitted": submitted, "confirmed": confirmed, "errors": errors, **synced}
 
     def start_auto(self, symbol: str, confirmation: str) -> dict[str, Any]:
@@ -749,18 +981,15 @@ class TradingWebService(WebService):
     def auto_tick(self) -> None:
         """Background tick: sync (account/position/order-status/fills) keeps
         running every tick for every known symbol regardless of run state.
-        New-order submission runs once per market session for active
-        (RUNNING) symbols, split by side: sell orders are immediate-sell
-        limit orders, so they go out as soon as pre-market opens (a
-        pre-market pop that fades by the regular open would otherwise be
-        missed); buy orders are LOC and unaffected by timing within the day,
-        so they keep waiting for auto_order_delay_minutes after the regular
-        session opens."""
+        New-order submission runs once per market phase for active (RUNNING)
+        symbols: DAY limit sells go out at day-market start, the CLS sell goes
+        out at the existing later pre-market phase, and LOC buys wait for
+        auto_order_delay_minutes after the regular session opens."""
         if not self.runtime.known_symbols and not self.runtime.active_symbols:
             return
         now = datetime.now(timezone.utc)
         session_key = None
-        regular_start = regular_end = None
+        day_market_start = cls_sell_start = regular_start = regular_end = None
         for offset in (0, 1):
             target = (now - timedelta(days=offset)).date().isoformat()
             today = self.broker().get_us_market_calendar_raw(target).get("result", {}).get("today", {})
@@ -769,13 +998,22 @@ class TradingWebService(WebService):
                 continue
             start = datetime.fromisoformat(regular["startTime"]).astimezone(timezone.utc)
             end = datetime.fromisoformat(regular["endTime"]).astimezone(timezone.utc)
+            day_market = today.get("dayMarket") or {}
             pre_market = today.get("preMarket") or {}
-            session_start = (
-                datetime.fromisoformat(pre_market["startTime"]).astimezone(timezone.utc)
-                if pre_market.get("startTime") else start
+            day_start = (
+                datetime.fromisoformat(day_market["startTime"]).astimezone(timezone.utc)
+                if day_market.get("startTime") else None
             )
+            pre_start = (
+                datetime.fromisoformat(pre_market["startTime"]).astimezone(timezone.utc)
+                if pre_market.get("startTime") else None
+            )
+            session_starts = [value for value in (day_start, pre_start, start) if value is not None]
+            session_start = min(session_starts)
             if session_start <= now <= end:
                 regular_start, regular_end = start, end
+                day_market_start = day_start or session_start
+                cls_sell_start = pre_start or start
                 session_key = start.date().isoformat()
                 break
         if not session_key:
@@ -783,29 +1021,58 @@ class TradingWebService(WebService):
         known_symbols = sorted(set(self.runtime.known_symbols) | set(self.runtime.active_symbols))
         for symbol in known_symbols:
             try:
-                self.refresh_account(symbol)
+                self.refresh_account(symbol, plan_date=date.fromisoformat(session_key))
                 self.sync_orders(symbol)
             except (TossApiError, PermissionError, ValueError) as error:
                 print(f"Auto-tick sync skipped {symbol}: {error}", file=sys.stderr)
+        day_sell_ready = day_market_start is not None and day_market_start <= now
+        cls_sell_ready = cls_sell_start is not None and cls_sell_start <= now
         buy_ready = regular_start + timedelta(minutes=self.runtime.auto_order_delay_minutes) <= now
         for symbol in tuple(self.runtime.active_symbols):
             planned = self.plan_cache.get(symbol, [])
-            sell_ids = [item.client_order_id for item in planned if item.side == "sell"]
+            day_sell_ids = [
+                item.client_order_id
+                for item in planned
+                if item.side == "sell" and order_time_in_force(item) == "DAY"
+            ]
+            cls_sell_ids = [
+                item.client_order_id
+                for item in planned
+                if item.side == "sell" and order_time_in_force(item) == "CLS"
+            ]
             buy_ids = [item.client_order_id for item in planned if item.side == "buy"]
 
-            if self.runtime.auto_sell_attempt_keys.get(symbol) != session_key:
+            if day_sell_ready and day_sell_ids and self.runtime.auto_day_sell_attempt_keys.get(symbol) != session_key:
+                self.runtime.auto_day_sell_attempt_keys[symbol] = session_key
+                self.runtime_store.save(self.runtime)
+                try:
+                    self.submit_orders(
+                        symbol,
+                        day_sell_ids,
+                        f"SUBMIT {symbol} {len(day_sell_ids)}",
+                        notify=True,
+                    )
+                except (TossApiError, PermissionError, ValueError) as error:
+                    print(f"Auto-tick DAY sell skipped {symbol}: {error}", file=sys.stderr)
+
+            if cls_sell_ready and cls_sell_ids and self.runtime.auto_sell_attempt_keys.get(symbol) != session_key:
                 self.runtime.auto_sell_attempt_keys[symbol] = session_key
                 self.runtime_store.save(self.runtime)
                 try:
-                    self.submit_orders(symbol, sell_ids, f"SUBMIT {symbol} {len(sell_ids)}")
+                    self.submit_orders(
+                        symbol,
+                        cls_sell_ids,
+                        f"SUBMIT {symbol} {len(cls_sell_ids)}",
+                        notify=True,
+                    )
                 except (TossApiError, PermissionError, ValueError) as error:
-                    print(f"Auto-tick sell skipped {symbol}: {error}", file=sys.stderr)
+                    print(f"Auto-tick CLS sell skipped {symbol}: {error}", file=sys.stderr)
 
             if buy_ready and self.runtime.auto_attempt_keys.get(symbol) != session_key:
                 self.runtime.auto_attempt_keys[symbol] = session_key
                 self.runtime_store.save(self.runtime)
                 try:
-                    self.submit_orders(symbol, buy_ids, f"SUBMIT {symbol} {len(buy_ids)}")
+                    self.submit_orders(symbol, buy_ids, f"SUBMIT {symbol} {len(buy_ids)}", notify=True)
                 except (TossApiError, PermissionError, ValueError) as error:
                     print(f"Auto-tick skipped {symbol}: {error}", file=sys.stderr)
                     continue

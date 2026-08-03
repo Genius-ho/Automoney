@@ -26,6 +26,7 @@ if str(PROJECT_ROOT) not in sys.path:
 
 from application_engine import ApplicationEngine, LiveActionsRequiredError  # noqa: E402
 from local_env import load_env  # noqa: E402
+from telegram_bot import TelegramCommandLoop  # noqa: E402
 from toss_api import TossApiError  # noqa: E402
 from web_gui.dashboard.service import DashboardService, EngineDashboardService  # noqa: E402
 
@@ -192,7 +193,16 @@ class Handler(BaseHTTPRequestHandler):
                 payload = body.get("payload")
                 if not isinstance(payload, dict):
                     raise ValueError("엔진 명령 payload는 객체여야 합니다.")
-                if command in {"order.submit", "order.cancel", "order.reregister", "auto.start", "auto.stop", "api.update"} and os.getenv(
+                if command in {
+                    "order.submit",
+                    "order.cancel",
+                    "order.reregister",
+                    "order.retry_failed",
+                    "order.retry_failed_price",
+                    "auto.start",
+                    "auto.stop",
+                    "api.update",
+                } and os.getenv(
                     "MUMAE_WEB_LIVE_ACTIONS", ""
                 ) != "I_UNDERSTAND_WEB_LIVE_TRADING":
                     raise PermissionError("MUMAE_WEB_LIVE_ACTIONS 실주문 허용값이 필요합니다.")
@@ -255,6 +265,7 @@ def run(
     server = ThreadingHTTPServer((host, port), Handler)
     stopped = threading.Event()
     scheduler = None
+    telegram_loop = None
     live_enabled = os.getenv("MUMAE_WEB_LIVE_ACTIONS", "") == "I_UNDERSTAND_WEB_LIVE_TRADING"
     if active_engine is not None and Handler.auth.password and live_enabled:
         scheduler = threading.Thread(
@@ -264,6 +275,8 @@ def run(
             daemon=True,
         )
         scheduler.start()
+        telegram_loop = TelegramCommandLoop(active_engine, active_engine.telegram)
+        telegram_loop.start()
     url = f"http://127.0.0.1:{port}/"
     print(f"Mumae CLI Engine + Emergency Dashboard: {url}")
     print(f"Shared data: {Handler.service.data_dir}")
@@ -276,6 +289,8 @@ def run(
         pass
     finally:
         stopped.set()
+        if telegram_loop is not None:
+            telegram_loop.stop()
         server.server_close()
 
 

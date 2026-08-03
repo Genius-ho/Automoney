@@ -10,7 +10,7 @@ from typing import Any, Callable
 
 from etf_info import ETF_INFO
 from mumae_core import ETF_UNIVERSE, Mode, OrderIntent, StrategyState, attempt_amount, build_big_number_plan, build_plan, normalize_down_ladder_levels, star_price, symbol_profile
-from runtime_store import RuntimeStore
+from runtime_store import RuntimeStore, prune_order_tracking
 from state_store import StateStore
 from toss_api import TossBroker
 
@@ -67,6 +67,8 @@ class WebService:
         self.store = StateStore(self.data_dir / "state.json")
         self.runtime_store = RuntimeStore(self.data_dir / "runtime.json")
         self.runtime = self.runtime_store.load()
+        if prune_order_tracking(self.runtime):
+            self.runtime_store.save(self.runtime)
         self._reconcile_known_symbols()
         self.broker_factory = broker_factory
         self._broker: TossBroker | None = None
@@ -147,6 +149,7 @@ class WebService:
         current_price: Decimal | None = None,
         previous_close: Decimal | None = None,
         holdings: list[dict[str, Any]] | None = None,
+        plan_date: date | None = None,
     ) -> dict[str, Any]:
         orders: list[dict[str, Any]] = []
         warnings: list[str] = []
@@ -157,6 +160,7 @@ class WebService:
             plan = build_plan(
                 state,
                 current_price,
+                today=plan_date,
                 previous_close=previous_close or current_price,
             )
             warnings = list(plan.warnings)
@@ -268,7 +272,7 @@ class WebService:
             raise ValueError("현재가는 0보다 커야 합니다.")
         return self.dashboard(state, current, previous)
 
-    def refresh_account(self, symbol: str) -> dict[str, Any]:
+    def refresh_account(self, symbol: str, plan_date: date | None = None) -> dict[str, Any]:
         symbol = symbol.upper()
         broker = self.broker()
         holding_rows = {
@@ -327,7 +331,7 @@ class WebService:
 
         selected_price = _find_decimal(price_rows.get(symbol, {}), ("lastPrice", "price", "currentPrice"))
         previous = selected_previous_close if selected_previous_close is not None else selected_price
-        result = self.dashboard(selected, selected_price, previous, holdings)
+        result = self.dashboard(selected, selected_price, previous, holdings, plan_date=plan_date)
         result["api_connected"] = True
         result["broker_mode"] = broker.mode
         return result

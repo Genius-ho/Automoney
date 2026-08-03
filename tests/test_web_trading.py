@@ -54,6 +54,42 @@ class LiveTradingBroker(FakeTradingBroker):
         return {"status": "CANCELED"}
 
 
+class DelayedVisibilityBroker(LiveTradingBroker):
+    """Accept an order but do not expose it in list queries immediately."""
+
+    def submit_order(self, order, client_order_id):
+        self.submitted.append(order.client_order_id)
+        return {"result": {"orderId": "accepted-but-not-listed"}}
+
+
+class FirstRequestFailsBroker(LiveTradingBroker):
+    def __init__(self):
+        super().__init__()
+        self.client_ids = []
+
+    def submit_order(self, order, client_order_id):
+        from toss_api import TossApiError
+        self.client_ids.append(client_order_id)
+        if len(self.client_ids) == 1:
+            raise TossApiError("temporary transport failure")
+        return super().submit_order(order, client_order_id)
+
+
+class RejectedAfterAcceptanceBroker(LiveTradingBroker):
+    def submit_order(self, order, client_order_id):
+        self.submitted.append(order.client_order_id)
+        broker_order_id = "rejected-order"
+        self.closed_orders.append({
+            "orderId": broker_order_id,
+            "symbol": order.client_order_id.split("-")[1],
+            "side": order.side.upper(),
+            "quantity": str(order.quantity),
+            "price": str(order.limit_price),
+            "status": "REJECTED",
+        })
+        return {"result": {"orderId": broker_order_id}}
+
+
 class AutoTickBroker(LiveTradingBroker):
     """Full-featured fake for auto_tick: market calendar + account + orders."""
 
@@ -85,6 +121,41 @@ class AutoTickBroker(LiveTradingBroker):
             from toss_api import TossApiError
             raise TossApiError("price-out-of-range", code="price-out-of-range")
         return super().submit_order(order, client_order_id)
+
+
+class SplitSessionAutoTickBroker(AutoTickBroker):
+    """Expose separate day-market and pre-market windows for auto_tick tests."""
+
+    def __init__(self):
+        super().__init__()
+        self.phase = "day"
+        self._regular_start = None
+
+    def get_us_market_calendar_raw(self, date_str):
+        now = datetime.now(timezone.utc)
+        if self._regular_start is None:
+            self._regular_start = now + timedelta(minutes=30)
+        regular_start = self._regular_start
+        day_start = regular_start - timedelta(hours=12)
+        pre_start = now + timedelta(minutes=20) if self.phase == "day" else now - timedelta(minutes=10)
+        return {"result": {"today": {
+            "dayMarket": {"startTime": day_start.isoformat(), "endTime": pre_start.isoformat()},
+            "preMarket": {"startTime": pre_start.isoformat(), "endTime": regular_start.isoformat()},
+            "regularMarket": {"startTime": regular_start.isoformat(), "endTime": (regular_start + timedelta(hours=5)).isoformat()},
+        }}}
+
+
+class OvernightSessionBroker(AutoTickBroker):
+    """The US 2026-08-03 session is still open after Korea reaches Aug 4."""
+
+    def get_us_market_calendar_raw(self, date_str):
+        now = datetime.now(timezone.utc)
+        return {"result": {"today": {
+            "date": "2026-08-03",
+            "dayMarket": {"startTime": (now - timedelta(hours=12)).isoformat(), "endTime": (now - timedelta(hours=6)).isoformat()},
+            "preMarket": {"startTime": (now - timedelta(hours=6)).isoformat(), "endTime": (now - timedelta(hours=1)).isoformat()},
+            "regularMarket": {"startTime": (now - timedelta(hours=1)).isoformat(), "endTime": (now + timedelta(hours=5)).isoformat()},
+        }}}
 
 
 class TradingWebServiceTests(unittest.TestCase):
@@ -125,11 +196,92 @@ class TradingWebServiceTests(unittest.TestCase):
                 "price": str(order.limit_price),
                 "status": "PENDING",
             }]
+            service.runtime.broker_order_ids[order.client_order_id] = "real-1"
+            service.runtime_store.save(service.runtime)
 
             result = service.sync_orders("TQQQ")
 
             self.assertEqual(result["orders"][0]["status"], "PENDING")
             self.assertEqual(result["unmatched_count"], 0)
+
+    def test_historical_same_price_order_is_not_matched_to_todays_plan_without_broker_id(self):
+        with tempfile.TemporaryDirectory() as temp:
+            broker = FakeTradingBroker()
+            service = self._service(temp, broker)
+            order = service.plan_cache["TQQQ"][0]
+            broker.closed_orders = [{
+                "orderId": "old-order",
+                "symbol": "TQQQ",
+                "side": order.side.upper(),
+                "quantity": str(order.quantity),
+                "price": str(order.limit_price),
+                "status": "FILLED",
+                "orderedAt": "2026-07-20T22:30:00+09:00",
+            }]
+
+            result = service.sync_orders("TQQQ")
+
+            self.assertEqual(result["orders"][0]["status"], "UNSENT")
+
+    def test_broker_accepted_but_not_listed_order_stays_unconfirmed_and_cannot_retry(self):
+        with tempfile.TemporaryDirectory() as temp:
+            broker = DelayedVisibilityBroker()
+            service = self._service(temp, broker)
+            order = service.plan_cache["TQQQ"][0]
+            service.sync_orders("TQQQ")
+            service.runtime.active_symbols.append("TQQQ")
+            service.runtime.known_symbols.append("TQQQ")
+            service.runtime_store.save(service.runtime)
+
+            result = service.submit_orders("TQQQ", [order.client_order_id], "SUBMIT TQQQ 1")
+
+            self.assertEqual(result["confirmed"], 0)
+            self.assertEqual(service.order_statuses["TQQQ"][order.client_order_id], "UNCONFIRMED")
+            self.assertIn(order.client_order_id, service.runtime.active_order_ids)
+            with self.assertRaisesRegex(ValueError, "UNCONFIRMED"):
+                service.retry_failed_order(order.client_order_id)
+
+    def test_unsent_retry_reuses_the_same_broker_client_id(self):
+        with tempfile.TemporaryDirectory() as temp:
+            broker = FirstRequestFailsBroker()
+            service = self._service(temp, broker)
+            order = service.plan_cache["TQQQ"][0]
+            service.sync_orders("TQQQ")
+            self._activate(service, "TQQQ")
+
+            first = service.submit_orders("TQQQ", [order.client_order_id], "SUBMIT TQQQ 1")
+            retried = service.retry_failed_order(order.client_order_id)
+
+            self.assertEqual(first["confirmed"], 0)
+            self.assertEqual(retried["confirmed"], 1)
+            self.assertEqual(len(broker.client_ids), 2)
+            self.assertEqual(broker.client_ids[0], broker.client_ids[1])
+
+    def test_auto_tick_keeps_order_ids_on_the_us_session_date_after_korea_midnight(self):
+        with tempfile.TemporaryDirectory() as temp:
+            broker = OvernightSessionBroker()
+            service = TradingWebService(Path(temp), broker_factory=lambda: broker)
+            service.plan({
+                "symbol": "TQQQ", "current_price": "84.5", "previous_close": "82",
+                "cash_usd": "5000", "position_qty": 8, "avg_cost": "75",
+                "t_value": "3", "base_buy_qty": 2, "mode": "GENERAL",
+            })
+            self._activate(service, "TQQQ")
+
+            service.auto_tick()
+
+            self.assertTrue(service.plan_cache["TQQQ"])
+            self.assertTrue(all("-20260803-" in order.client_order_id for order in service.plan_cache["TQQQ"]))
+
+    def test_dashboard_refresh_keeps_the_same_us_session_date_after_korea_midnight(self):
+        with tempfile.TemporaryDirectory() as temp:
+            broker = OvernightSessionBroker()
+            service = TradingWebService(Path(temp), broker_factory=lambda: broker)
+
+            service.refresh_account("TQQQ")
+
+            self.assertTrue(service.plan_cache["TQQQ"])
+            self.assertTrue(all("-20260803-" in order.client_order_id for order in service.plan_cache["TQQQ"]))
 
     def test_trade_history_uses_the_shared_aggregation(self):
         with tempfile.TemporaryDirectory() as temp:
@@ -558,6 +710,149 @@ class AutoTickTests(unittest.TestCase):
             buy_ids = [cid for cid in broker.submitted if "buy" in cid]
             self.assertTrue(sell_ids, "sell legs should submit immediately, unblocked by the buy delay")
             self.assertEqual(buy_ids, [])
+
+    def test_auto_tick_splits_day_limit_sell_from_late_cls_sell(self):
+        with tempfile.TemporaryDirectory() as temp:
+            broker = SplitSessionAutoTickBroker()
+            broker.get_holdings_raw = lambda: {"result": {"holdings": [
+                {"symbol": "TQQQ", "quantity": "8", "averagePrice": "75"},
+            ]}}
+            service = TradingWebService(Path(temp), broker_factory=lambda: broker)
+            service.plan({
+                "symbol": "TQQQ", "current_price": "84.5", "previous_close": "82",
+                "cash_usd": "5000", "position_qty": 8, "avg_cost": "75",
+                "t_value": "3", "base_buy_qty": 2, "mode": "GENERAL",
+            })
+            service.sync_orders("TQQQ")
+            service.runtime.active_symbols.append("TQQQ")
+            service.runtime.known_symbols.append("TQQQ")
+            service.runtime.auto_order_delay_minutes = 60
+            service.runtime_store.save(service.runtime)
+
+            service.auto_tick()
+
+            today_prefix = f"default-TQQQ-{broker._regular_start.date():%Y%m%d}"
+            self.assertIn(today_prefix + "-take-profit", broker.submitted)
+            self.assertNotIn(today_prefix + "-quarter-sell", broker.submitted)
+
+            broker.phase = "late"
+            service.auto_tick()
+
+            self.assertIn(today_prefix + "-quarter-sell", broker.submitted)
+            self.assertEqual(broker.submitted.count(today_prefix + "-take-profit"), 1)
+
+    def test_retry_failed_order_submits_the_same_strategy_leg(self):
+        with tempfile.TemporaryDirectory() as temp:
+            broker = LiveTradingBroker()
+            service = TradingWebService(Path(temp), broker_factory=lambda: broker)
+            service.plan({
+                "symbol": "TQQQ", "current_price": "84.5", "previous_close": "82",
+                "cash_usd": "5000", "position_qty": 8, "avg_cost": "75",
+                "t_value": "3", "base_buy_qty": 2, "mode": "GENERAL",
+            })
+            order = next(item for item in service.plan_cache["TQQQ"] if item.client_order_id.endswith("-take-profit"))
+            broker.closed_orders = [{
+                "orderId": "old-canceled", "symbol": "TQQQ", "side": "SELL",
+                "quantity": str(order.quantity), "price": str(order.limit_price), "status": "CANCELED",
+            }]
+            service.runtime.active_symbols.append("TQQQ")
+            service.runtime.known_symbols.append("TQQQ")
+            service.runtime.broker_order_ids[order.client_order_id] = "old-canceled"
+            service.runtime_store.save(service.runtime)
+            service.sync_orders("TQQQ")
+
+            result = service.retry_failed_order(order.client_order_id)
+
+            self.assertEqual(result["retried"], order.client_order_id)
+            self.assertEqual(broker.submitted, [order.client_order_id])
+            self.assertEqual(result["confirmed"], 1)
+
+    def test_retry_failed_order_with_price_submits_the_changed_limit(self):
+        with tempfile.TemporaryDirectory() as temp:
+            broker = LiveTradingBroker()
+            service = TradingWebService(Path(temp), broker_factory=lambda: broker)
+            service.plan({
+                "symbol": "TQQQ", "current_price": "84.5", "previous_close": "82",
+                "cash_usd": "5000", "position_qty": 8, "avg_cost": "75",
+                "t_value": "3", "base_buy_qty": 2, "mode": "GENERAL",
+            })
+            order = next(item for item in service.plan_cache["TQQQ"] if item.client_order_id.endswith("-take-profit"))
+            broker.closed_orders = [{
+                "orderId": "old-canceled", "symbol": "TQQQ", "side": "SELL",
+                "quantity": str(order.quantity), "price": str(order.limit_price), "status": "CANCELED",
+            }]
+            service.runtime.active_symbols.append("TQQQ")
+            service.runtime.known_symbols.append("TQQQ")
+            service.runtime.broker_order_ids[order.client_order_id] = "old-canceled"
+            service.runtime_store.save(service.runtime)
+            service.sync_orders("TQQQ")
+
+            result = service.retry_failed_order_with_price(order.client_order_id, "65.25")
+
+            self.assertEqual(result["retried"], order.client_order_id)
+            self.assertEqual(result["price"], "65.25")
+            self.assertEqual(result["confirmed"], 1)
+            self.assertEqual(broker.open_orders[-1]["price"], "65.25")
+
+    def test_notify_flag_reports_confirmed_auto_submission(self):
+        class Telegram:
+            enabled = True
+
+            def __init__(self):
+                self.messages = []
+
+            def send_message(self, text):
+                self.messages.append(text)
+
+        with tempfile.TemporaryDirectory() as temp:
+            broker = LiveTradingBroker()
+            service = TradingWebService(Path(temp), broker_factory=lambda: broker)
+            service.telegram = Telegram()
+            service.plan({
+                "symbol": "TQQQ", "current_price": "84.5", "previous_close": "82",
+                "cash_usd": "5000", "position_qty": 0, "avg_cost": "0",
+                "t_value": "0", "base_buy_qty": 2, "mode": "GENERAL",
+            })
+            service.sync_orders("TQQQ")
+            service.runtime.active_symbols.append("TQQQ")
+            service.runtime.known_symbols.append("TQQQ")
+            service.runtime_store.save(service.runtime)
+            order = service.plan_cache["TQQQ"][0]
+
+            service.submit_orders("TQQQ", [order.client_order_id], "SUBMIT TQQQ 1", notify=True)
+
+            self.assertEqual(len(service.telegram.messages), 1)
+            self.assertIn("접수 성공", service.telegram.messages[0])
+
+    def test_rejected_status_notification_explains_that_toss_list_has_no_reason(self):
+        class Telegram:
+            enabled = True
+
+            def __init__(self):
+                self.messages = []
+
+            def send_message(self, text, **kwargs):
+                self.messages.append(text)
+
+        with tempfile.TemporaryDirectory() as temp:
+            broker = RejectedAfterAcceptanceBroker()
+            service = TradingWebService(Path(temp), broker_factory=lambda: broker)
+            service.telegram = Telegram()
+            service.plan({
+                "symbol": "TQQQ", "current_price": "84.5", "previous_close": "82",
+                "cash_usd": "5000", "position_qty": 0, "avg_cost": "0",
+                "t_value": "0", "base_buy_qty": 2, "mode": "GENERAL",
+            })
+            service.sync_orders("TQQQ")
+            service.runtime.active_symbols.append("TQQQ")
+            service.runtime.known_symbols.append("TQQQ")
+            service.runtime_store.save(service.runtime)
+            order = service.plan_cache["TQQQ"][0]
+
+            service.submit_orders("TQQQ", [order.client_order_id], "SUBMIT TQQQ 1", notify=True)
+
+            self.assertIn("상세 거절 사유", service.telegram.messages[-1])
+            self.assertIn("토스 앱", service.telegram.messages[-1])
 
     def test_pending_order_count_reflects_open_statuses(self):
         with tempfile.TemporaryDirectory() as temp:

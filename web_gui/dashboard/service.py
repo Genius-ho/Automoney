@@ -154,14 +154,6 @@ class DashboardService:
             for order in plan.orders
         ]
         return orders, list(plan.warnings)
-    @staticmethod
-    def _order_match_key(side: Any, quantity: Any, price: Any) -> tuple[str, int, Decimal]:
-        return (
-            str(side or "").upper(),
-            int(_decimal(quantity)),
-            _decimal(price).quantize(Decimal("0.01")),
-        )
-
     def _sync_order_statuses(
         self,
         broker: TossBroker,
@@ -195,15 +187,6 @@ class DashboardService:
                  if index in unused and actual_id and str(rows[index].get("orderId") or "") == actual_id),
                 None,
             )
-            if match is None:
-                expected = self._order_match_key(order["side"], order["quantity"], order["price"])
-                match = next(
-                    (index for index in reversed(range(len(rows)))
-                     if index in unused and self._order_match_key(
-                         rows[index].get("side"), rows[index].get("quantity"), rows[index].get("price")
-                     ) == expected),
-                    None,
-                )
             status = "PLANNED"
             if match is not None:
                 unused.remove(match)

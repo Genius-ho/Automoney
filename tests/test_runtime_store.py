@@ -1,9 +1,10 @@
 import json
 import tempfile
 import unittest
+from datetime import date
 from pathlib import Path
 
-from runtime_store import RuntimeStatus, RuntimeStore, normalize_delay_minutes
+from runtime_store import RuntimeStatus, RuntimeStore, normalize_delay_minutes, prune_order_tracking
 
 
 class RuntimeStoreTests(unittest.TestCase):
@@ -14,6 +15,30 @@ class RuntimeStoreTests(unittest.TestCase):
             store.save(status)
             self.assertEqual(store.load(), status)
 
+    def test_prunes_old_strategy_tracking_but_preserves_recent_and_custom_orders(self):
+        old = "default-SOXL-20260601-star-buy"
+        recent = "default-SOXL-20260803-star-buy"
+        custom = "default-SOXL-20260601-custom-1"
+        status = RuntimeStatus(
+            active_order_ids=[old, recent, custom],
+            skipped_order_ids=[old, recent],
+            broker_client_order_ids={old: "old-client", recent: "recent-client", custom: "custom-client"},
+            broker_order_ids={old: "old-order", recent: "recent-order", custom: "custom-order"},
+            order_price_overrides={old: "10.00", recent: "20.00", custom: "30.00"},
+            custom_order_ledger={custom: {"symbol": "SOXL"}},
+        )
+
+        changed = prune_order_tracking(status, today=date(2026, 8, 4))
+
+        self.assertTrue(changed)
+        self.assertEqual(status.active_order_ids, [recent, custom])
+        self.assertEqual(status.skipped_order_ids, [recent])
+        self.assertNotIn(old, status.broker_client_order_ids)
+        self.assertNotIn(old, status.broker_order_ids)
+        self.assertNotIn(old, status.order_price_overrides)
+        self.assertIn(recent, status.broker_order_ids)
+        self.assertIn(custom, status.broker_order_ids)
+
 
 class NewOrderControlFieldsTests(unittest.TestCase):
     def test_defaults_are_backward_compatible(self):
@@ -22,6 +47,8 @@ class NewOrderControlFieldsTests(unittest.TestCase):
         self.assertEqual(status.last_auto_attempt_at, {})
         self.assertEqual(status.last_auto_error, {})
         self.assertEqual(status.auto_order_delay_minutes, 15)
+        self.assertEqual(status.auto_day_sell_attempt_keys, {})
+        self.assertEqual(status.telegram_update_offset, 0)
 
     def test_new_fields_round_trip(self):
         with tempfile.TemporaryDirectory() as directory:
