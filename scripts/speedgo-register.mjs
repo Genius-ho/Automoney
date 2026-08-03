@@ -77,27 +77,15 @@ function compactOutputKey(key) {
 }
 
 function isSensitiveOutputKey(key) {
-  return /password|secret|token|authorization|cookie/i.test(compactOutputKey(key));
+  return /password|secret|token|auth|cookie|apikey|accesskey|privatekey/i.test(compactOutputKey(key));
 }
 
 function isRawBodyOutputKey(key) {
   const compact = compactOutputKey(key);
-  return new Set([
-    'body',
-    'bodypreview',
-    'rawbody',
-    'rawapibody',
-    'apibody',
-    'requestbody',
-    'responsebody',
-    'rawrequestbody',
-    'rawresponsebody',
-    'rawrequest',
-    'rawresponse',
-    'requestpayload',
-    'responsepayload',
-    'rawpayload',
-  ]).has(compact);
+  if (/^body(?:preview|payload|json)?$/.test(compact)) return true;
+  const hasTransportMarker = /raw|api|request|response/.test(compact);
+  const endsWithBodyLikeField = /(?:body|payload|preview|request|response)(?:json)?$/.test(compact);
+  return hasTransportMarker && endsWithBodyLikeField;
 }
 
 function sanitizeCliOutput(value, key = '') {

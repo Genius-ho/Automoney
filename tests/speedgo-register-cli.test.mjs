@@ -177,6 +177,14 @@ test('runSpeedgoRegisterCli omits raw bodies and recursively redacts serialized 
       rawApiBody: { originProductNo: 'raw-777', clientSecret: 'raw-secret' },
       responseBody: JSON.stringify({ originProductNo: 'raw-888', token: 'raw-token' }),
       bodyPreview: JSON.stringify({ message: 'raw response body' }),
+      responsePreview: 'raw response preview',
+      requestPreview: 'raw request preview',
+      apiResponsePreview: 'raw API response preview',
+      rawResponse: { secret: 'raw response secret' },
+      requestBody: { token: 'raw request token' },
+      responseCode: 200,
+      requestId: 'request-123',
+      ordinaryPreview: 'retain this useful field',
       diagnostics: JSON.stringify({
         clientSecret: 'serialized-secret',
         token: 'serialized-token',
@@ -193,6 +201,9 @@ test('runSpeedgoRegisterCli omits raw bodies and recursively redacts serialized 
   assert.deepEqual(result, {
     status: 'completed',
     originProductNo: '777',
+    responseCode: 200,
+    requestId: 'request-123',
+    ordinaryPreview: 'retain this useful field',
     diagnostics: JSON.stringify({
       clientSecret: '[REDACTED]',
       token: '[REDACTED]',
@@ -201,7 +212,51 @@ test('runSpeedgoRegisterCli omits raw bodies and recursively redacts serialized 
       safe: 'retained',
     }),
   });
-  assert.doesNotMatch(output, /raw-777|raw-888|raw-secret|raw-token|raw response body|serialized-secret|serialized-token|serialized-cookie|serialized-auth/);
+  assert.doesNotMatch(output, /raw-777|raw-888|raw-secret|raw-token|raw response body|raw response preview|raw request preview|raw API response preview|raw response secret|raw request token|serialized-secret|serialized-token|serialized-cookie|serialized-auth/);
+});
+
+test('runSpeedgoRegisterCli redacts API, access, private, and auth key aliases', async () => {
+  const deps = validDependencies({
+    runRegistrationImpl: async () => ({
+      apiKey: 'api-key-literal',
+      api_key: 'api-underscore-literal',
+      'API-Key': 'api-header-literal',
+      accessKey: 'access-key-literal',
+      access_key: 'access-underscore-literal',
+      privateKey: 'private-key-literal',
+      private_key: 'private-underscore-literal',
+      auth: 'auth-literal',
+      diagnostics: JSON.stringify({
+        apiKey: 'serialized-api-key',
+        access_key: 'serialized-access-key',
+        privateKey: 'serialized-private-key',
+        authorization: 'serialized-authorization',
+        safe: 'retained',
+      }),
+    }),
+  });
+
+  assert.equal(await runSpeedgoRegisterCli(['501'], deps), 0);
+  const output = deps.stdout.chunks.join('');
+  const result = JSON.parse(output);
+  assert.deepEqual(result, {
+    apiKey: '[REDACTED]',
+    api_key: '[REDACTED]',
+    'API-Key': '[REDACTED]',
+    accessKey: '[REDACTED]',
+    access_key: '[REDACTED]',
+    privateKey: '[REDACTED]',
+    private_key: '[REDACTED]',
+    auth: '[REDACTED]',
+    diagnostics: JSON.stringify({
+      apiKey: '[REDACTED]',
+      access_key: '[REDACTED]',
+      privateKey: '[REDACTED]',
+      authorization: '[REDACTED]',
+      safe: 'retained',
+    }),
+  });
+  assert.doesNotMatch(output, /api-key-literal|api-underscore-literal|api-header-literal|access-key-literal|access-underscore-literal|private-key-literal|private-underscore-literal|auth-literal|serialized-api-key|serialized-access-key|serialized-private-key|serialized-authorization/);
 });
 
 test('runSpeedgoRegisterCli maps runtime failures to exit 1 with compact coded stderr', async () => {
