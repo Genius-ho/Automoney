@@ -8,6 +8,7 @@ data/*
 node_modules/
 artifacts/
 .playwright-profile/
+.worktrees/
 workers/python/tessdata/
 workers/python/.venv/
 __pycache__/
