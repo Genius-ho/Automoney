@@ -1,3 +1,4 @@
+import { Buffer } from 'node:buffer';
 import { existsSync } from 'node:fs';
 import { readFile } from 'node:fs/promises';
 import { fileURLToPath } from 'node:url';
@@ -7,9 +8,20 @@ import { findFirstVisible, SPEEDGO_SELECTORS } from './speedgo-selectors.mjs';
 
 const SPEEDGO_HOME_URL = 'https://domemedb.domeggook.com/index/';
 const MAX_RESPONSE_BYTES = 1024 * 1024;
+const MAX_IMAGE_BYTES = 25 * 1024 * 1024;
 const SUBMISSION_TIMEOUT_MS = 15_000;
 const IDENTIFIER_MARKER = /originProductNo|channelProductNo|원상품\s*번호|채널상품\s*번호/i;
 const RELEVANT_RESPONSE_URL = /speedgo|naver|smartstore|register|registration|product/i;
+const SUPPORTED_IMAGE_TYPES = new Map([
+  ['image/jpeg', { mimeType: 'image/jpeg', extension: 'jpg' }],
+  ['image/jpg', { mimeType: 'image/jpeg', extension: 'jpg' }],
+  ['image/pjpeg', { mimeType: 'image/jpeg', extension: 'jpg' }],
+  ['image/png', { mimeType: 'image/png', extension: 'png' }],
+  ['image/x-png', { mimeType: 'image/png', extension: 'png' }],
+  ['image/webp', { mimeType: 'image/webp', extension: 'webp' }],
+  ['image/gif', { mimeType: 'image/gif', extension: 'gif' }],
+  ['image/bmp', { mimeType: 'image/bmp', extension: 'bmp' }],
+]);
 
 function speedgoError(code, message, page, extra = {}) {
   let url = 'unknown';
@@ -116,6 +128,70 @@ function resolvedFilePath(rootDir, value) {
   return join(rootDir, stringValue.replace(/^[/\\]+/, ''));
 }
 
+function remoteImageError(message) {
+  return Object.assign(new Error(message), { code: 'SPEEDGO_FORM_VALIDATION_FAILED' });
+}
+
+function responseHeader(response, name) {
+  if (typeof response?.headers?.get === 'function') return response.headers.get(name);
+  const headers = response?.headers || {};
+  return headers[name] ?? headers[name.toLowerCase()] ?? headers[name.toUpperCase()] ?? null;
+}
+
+async function readBoundedImageBody(response) {
+  if (typeof response?.body?.getReader !== 'function') {
+    throw remoteImageError('Remote image response did not expose a readable body');
+  }
+
+  const reader = response.body.getReader();
+  const chunks = [];
+  let byteLength = 0;
+  try {
+    while (true) {
+      const { done, value } = await reader.read();
+      if (done) break;
+      byteLength += value.byteLength;
+      if (byteLength > MAX_IMAGE_BYTES) {
+        await reader.cancel().catch(() => {});
+        throw remoteImageError('Remote image exceeded the maximum allowed size');
+      }
+      chunks.push(Buffer.from(value));
+    }
+  } finally {
+    reader.releaseLock();
+  }
+
+  if (byteLength === 0) throw remoteImageError('Remote image was empty');
+  return Buffer.concat(chunks, byteLength);
+}
+
+async function materializeImageInput(rootDir, value, { fetchImpl, kind, index }) {
+  const stringValue = String(value);
+  if (!/^https?:\/\//i.test(stringValue)) return resolvedFilePath(rootDir, stringValue);
+  if (typeof fetchImpl !== 'function') throw remoteImageError('Remote image fetching is unavailable');
+
+  const response = await fetchImpl(stringValue);
+  if (!response?.ok) throw remoteImageError('Remote image request was not successful');
+
+  const contentType = String(responseHeader(response, 'content-type') || '')
+    .split(';', 1)[0]
+    .trim()
+    .toLowerCase();
+  const imageType = SUPPORTED_IMAGE_TYPES.get(contentType);
+  if (!imageType) throw remoteImageError('Remote image content type is not supported');
+
+  const declaredLength = Number(responseHeader(response, 'content-length'));
+  if (Number.isFinite(declaredLength) && declaredLength > MAX_IMAGE_BYTES) {
+    throw remoteImageError('Remote image exceeded the maximum allowed size');
+  }
+
+  return {
+    name: `${kind}-image-${index + 1}.${imageType.extension}`,
+    mimeType: imageType.mimeType,
+    buffer: await readBoundedImageBody(response),
+  };
+}
+
 async function readLocatorValue(locator) {
   if (typeof locator.inputValue === 'function') {
     try {
@@ -180,6 +256,7 @@ async function waitForSuccessEvidence(page, isCancelled) {
 export function createSpeedgoBrowser({
   chromiumImpl,
   rootDir,
+  fetchImpl = globalThis.fetch,
   headless = false,
   profileDir = join(rootDir, '.playwright-profile'),
   sessionStatePath = join(profileDir, '.session-state.json'),
@@ -328,12 +405,26 @@ export function createSpeedgoBrowser({
 
     async fillNaverForm(input) {
       try {
+        const mainImage = await materializeImageInput(rootDir, input.mainImageUrl, {
+          fetchImpl,
+          kind: 'main',
+          index: 0,
+        });
+        const detailImages = [];
+        for (let index = 0; index < input.detailImageUrls.length; index += 1) {
+          detailImages.push(await materializeImageInput(rootDir, input.detailImageUrls[index], {
+            fetchImpl,
+            kind: 'detail',
+            index,
+          }));
+        }
+
         await fillAndVerify(page, 'productNameInput', input.productName);
         await fillAndVerify(page, 'salePriceInput', input.salePrice);
         await fillAndVerify(page, 'deliveryFeeInput', input.deliveryFee);
         await fillAndVerify(page, 'detailContentInput', input.detailContent);
-        await setFilesAndVerify(page, 'mainImageInput', resolvedFilePath(rootDir, input.mainImageUrl));
-        await setFilesAndVerify(page, 'detailImageInput', input.detailImageUrls.map((value) => resolvedFilePath(rootDir, value)));
+        await setFilesAndVerify(page, 'mainImageInput', mainImage);
+        await setFilesAndVerify(page, 'detailImageInput', detailImages);
 
         const options = input.options || [];
         if (options.length > 1) {

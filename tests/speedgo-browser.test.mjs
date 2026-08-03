@@ -1,4 +1,5 @@
 import assert from 'node:assert/strict';
+import { Buffer } from 'node:buffer';
 import { mkdtemp, mkdir, readFile, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
@@ -22,6 +23,7 @@ function fakeBrowserHarness({
 } = {}) {
   const responseListeners = new Set();
   const values = new Map();
+  const uploadedFiles = new Map();
   const calls = [];
   let submitClicks = 0;
   let cookiesAdded = null;
@@ -94,8 +96,13 @@ function fakeBrowserHarness({
       textContent: async () => concept === 'success' ? successText : values.get(valueKey) || '',
       setInputFiles: async (paths) => {
         const files = Array.isArray(paths) ? paths : [paths];
-        calls.push(`files:${concept}:${files.join(',')}`);
-        values.set(valueKey, files.length ? `C:\\fakepath\\${files[0].split(/[\\/]/).at(-1)}` : '');
+        uploadedFiles.set(concept, files);
+        const displayFiles = files.map((file) => typeof file === 'string' ? file : file.name);
+        calls.push(`files:${concept}:${displayFiles.join(',')}`);
+        const firstName = typeof files[0] === 'string'
+          ? files[0].split(/[\\/]/).at(-1)
+          : files[0]?.name;
+        values.set(valueKey, firstName ? `C:\\fakepath\\${firstName}` : '');
       },
       click: async () => {
         calls.push(`click:${concept}`);
@@ -168,10 +175,32 @@ function fakeBrowserHarness({
   return {
     chromium,
     calls,
+    uploadedFiles,
     get submitClicks() { return submitClicks; },
     get cookiesAdded() { return cookiesAdded; },
     get storageStatePath() { return storageStatePath; },
     get contextClosed() { return contextClosed; },
+  };
+}
+
+function imageResponse(content, {
+  status = 200,
+  contentType = 'image/jpeg',
+  contentLength,
+} = {}) {
+  const buffer = Buffer.from(content);
+  const headers = new Map([['content-type', contentType]]);
+  if (contentLength !== undefined) headers.set('content-length', String(contentLength));
+  return {
+    ok: status >= 200 && status < 300,
+    status,
+    headers: { get: (name) => headers.get(String(name).toLowerCase()) || null },
+    body: new ReadableStream({
+      start(controller) {
+        if (buffer.length) controller.enqueue(buffer);
+        controller.close();
+      },
+    }),
   };
 }
 
@@ -298,6 +327,114 @@ test('fillNaverForm fills and verifies required values and maps readback failure
   await badBrowser.open();
   await assert.rejects(badBrowser.fillNaverForm(input), { code: 'SPEEDGO_FORM_VALIDATION_FAILED' });
   await badBrowser.close();
+});
+
+test('fillNaverForm materializes remote images as ordered safe Playwright file payloads', async (t) => {
+  const remoteImages = new Map([
+    ['https://images.test/main-source?token=main-secret', imageResponse('main-bytes', { contentType: 'image/jpeg' })],
+    ['http://images.test/detail-one.png?token=detail-secret', imageResponse('detail-one', { contentType: 'image/png' })],
+    ['https://images.test/detail-two.webp', imageResponse('detail-two', { contentType: 'image/webp' })],
+  ]);
+  const harness = fakeBrowserHarness();
+  const browser = createSpeedgoBrowser({
+    chromiumImpl: harness.chromium,
+    rootDir: 'C:/repo',
+    fetchImpl: async (url) => remoteImages.get(url),
+  });
+  t.after(() => browser.close());
+  await browser.open();
+
+  await browser.fillNaverForm({
+    productName: 'test product',
+    salePrice: 19800,
+    deliveryFee: 3000,
+    detailContent: '<p>detail</p>',
+    mainImageUrl: 'https://images.test/main-source?token=main-secret',
+    detailImageUrls: [
+      'http://images.test/detail-one.png?token=detail-secret',
+      'https://images.test/detail-two.webp',
+    ],
+    options: [],
+  });
+
+  assert.deepEqual(harness.uploadedFiles.get('mainImage'), [{
+    name: 'main-image-1.jpg',
+    mimeType: 'image/jpeg',
+    buffer: Buffer.from('main-bytes'),
+  }]);
+  assert.deepEqual(harness.uploadedFiles.get('detailImage'), [
+    { name: 'detail-image-1.png', mimeType: 'image/png', buffer: Buffer.from('detail-one') },
+    { name: 'detail-image-2.webp', mimeType: 'image/webp', buffer: Buffer.from('detail-two') },
+  ]);
+  assert.equal(
+    [...harness.uploadedFiles.values()].flat().some((file) => typeof file === 'string' && /https?:/i.test(file)),
+    false,
+  );
+});
+
+test('fillNaverForm preserves absolute, root-relative, and file URL image paths', async (t) => {
+  const harness = fakeBrowserHarness();
+  const browser = createSpeedgoBrowser({ chromiumImpl: harness.chromium, rootDir: 'C:/repo' });
+  t.after(() => browser.close());
+  await browser.open();
+
+  await browser.fillNaverForm({
+    productName: 'test product',
+    salePrice: 19800,
+    deliveryFee: 3000,
+    detailContent: '<p>detail</p>',
+    mainImageUrl: 'C:/assets/main.jpg',
+    detailImageUrls: ['/generated/detail.jpg', 'file:///C:/assets/detail.jpg'],
+    options: [],
+  });
+
+  assert.deepEqual(harness.uploadedFiles.get('mainImage'), ['C:/assets/main.jpg']);
+  assert.deepEqual(harness.uploadedFiles.get('detailImage'), [
+    'C:\\repo\\generated\\detail.jpg',
+    'C:\\assets\\detail.jpg',
+  ]);
+});
+
+test('fillNaverForm safely rejects invalid or oversized remote images before submit', async (t) => {
+  const secretUrl = 'https://user:password@images.test/private.jpg?token=query-secret';
+  const cases = [
+    ['unsuccessful response', imageResponse('secret-response-body', { status: 403 })],
+    ['non-image content type', imageResponse('secret-response-body', { contentType: 'text/plain' })],
+    ['empty body', imageResponse('', { contentType: 'image/jpeg' })],
+    ['declared oversized body', imageResponse('not-read', { contentLength: 25 * 1024 * 1024 + 1 })],
+    ['streamed oversized body', imageResponse(Buffer.alloc(25 * 1024 * 1024 + 1), { contentType: 'image/png' })],
+  ];
+
+  for (const [name, response] of cases) {
+    await t.test(name, async () => {
+      const harness = fakeBrowserHarness();
+      const browser = createSpeedgoBrowser({
+        chromiumImpl: harness.chromium,
+        rootDir: 'C:/repo',
+        fetchImpl: async () => response,
+      });
+      t.after(() => browser.close());
+      await browser.open();
+
+      let serializedError = '';
+      await assert.rejects(browser.fillNaverForm({
+        productName: 'test product',
+        salePrice: 19800,
+        deliveryFee: 3000,
+        detailContent: '<p>detail</p>',
+        mainImageUrl: secretUrl,
+        detailImageUrls: ['/generated/detail.jpg'],
+        options: [],
+      }), (error) => {
+        serializedError = JSON.stringify({ message: error.message, ...error });
+        return error.code === 'SPEEDGO_FORM_VALIDATION_FAILED';
+      });
+
+      assert.doesNotMatch(serializedError, /password|query-secret|secret-response-body|not-read/);
+      assert.equal(harness.submitClicks, 0);
+      assert.equal(harness.uploadedFiles.has('mainImage'), false);
+    });
+  }
 });
 
 test('fillNaverForm addresses every option row from the unscoped locator collection', async (t) => {
