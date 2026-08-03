@@ -384,15 +384,23 @@ test('submitAndResolveIds ignores an earlier relevant response without ids', asy
   assert.equal(harness.submitClicks, 1);
 });
 
-test('submitAndResolveIds rejects an incomplete identifier result', async (t) => {
+test('submitAndResolveIds accepts an origin-only response before a later complete response', async (t) => {
   const harness = fakeBrowserHarness({
-    submitResponse: jsonResponse({ data: { originProductNo: '777' } }),
+    successText: '',
+    successUrlTransition: false,
+    submitResponses: [
+      { response: jsonResponse({ data: { originProductNo: '777' } }), delayMs: 0 },
+      {
+        response: jsonResponse({ data: { originProductNo: '777', channelProductNo: '888' } }),
+        delayMs: 10,
+      },
+    ],
   });
   const browser = createSpeedgoBrowser({ chromiumImpl: harness.chromium, rootDir: 'C:/repo' });
   t.after(() => browser.close());
   await browser.open();
 
-  await assert.rejects(browser.submitAndResolveIds(), { code: 'UNRESOLVED_EXTERNAL_RESULT' });
+  assert.deepEqual(await browser.submitAndResolveIds(), { originProductNo: '777' });
   assert.equal(harness.submitClicks, 1);
 });
 
@@ -457,6 +465,19 @@ test('recoverRegistration resolves result links without clicking final submit', 
   const result = await browser.recoverRegistration({ supplierProductNo: '49168396', productName: '테스트 상품' });
 
   assert.deepEqual(result, { originProductNo: '777', channelProductNo: '888' });
+  assert.equal(harness.submitClicks, 0);
+});
+
+test('recoverRegistration accepts an origin-only result link', async (t) => {
+  const harness = fakeBrowserHarness({
+    successText: '',
+    resultLinks: ['https://sell.smartstore.naver.com/products/777'],
+  });
+  const browser = createSpeedgoBrowser({ chromiumImpl: harness.chromium, rootDir: 'C:/repo' });
+  t.after(() => browser.close());
+  await browser.open();
+
+  assert.deepEqual(await browser.recoverRegistration({}), { originProductNo: '777' });
   assert.equal(harness.submitClicks, 0);
 });
 
