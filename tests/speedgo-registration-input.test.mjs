@@ -55,6 +55,41 @@ test('rejects a missing title, price, or main image with DRAFT_NOT_READY', () =>
   }
 });
 
+test('rejects blank detail HTML and missing detail images with DRAFT_NOT_READY', () => {
+  for (const draft of [
+    { ...validDraft, detailContent: '' },
+    { ...validDraft, detailContent: '   ' },
+    { ...validDraft, approvedAiDetailImages: [], detailImages: [], detailSliceImages: [] },
+  ]) {
+    assert.throws(() => buildSpeedgoRegistrationInput(draft, { draftId: 501 }), { code: 'DRAFT_NOT_READY' });
+  }
+});
+
+test('rejects invalid delivery fee, option price, and explicit stock quantity', () => {
+  for (const draft of [
+    { ...validDraft, deliveryFee: 'not-a-number' },
+    { ...validDraft, deliveryFee: -1 },
+    { ...validDraft, options: [{ ...validDraft.options[0], price: 'not-a-number' }] },
+    { ...validDraft, options: [{ ...validDraft.options[0], price: -1 }] },
+    { ...validDraft, options: [{ ...validDraft.options[0], stockQuantity: 'not-a-number' }] },
+    { ...validDraft, options: [{ ...validDraft.options[0], stockQuantity: -1 }] },
+  ]) {
+    assert.throws(() => buildSpeedgoRegistrationInput(draft, { draftId: 501 }), { code: 'DRAFT_NOT_READY' });
+  }
+});
+
+test('preserves explicit zero delivery fee, option price, and stock quantity', () => {
+  const input = buildSpeedgoRegistrationInput({
+    ...validDraft,
+    deliveryFee: 0,
+    options: [{ ...validDraft.options[0], price: 0, stockQuantity: 0 }],
+  }, { draftId: 501 });
+
+  assert.equal(input.deliveryFee, 0);
+  assert.equal(input.options[0].additionalPrice, 0);
+  assert.equal(input.options[0].stockQuantity, 0);
+});
+
 test('rejects a missing draft with DRAFT_NOT_FOUND', () => {
   assert.throws(() => buildSpeedgoRegistrationInput(null, { draftId: 501 }), { code: 'DRAFT_NOT_FOUND' });
 });
