@@ -24,11 +24,11 @@ export function buildSpeedgoRegistrationInput(draft, { draftId } = {}) {
       ? [...draft.detailImages]
       : [...(draft.detailSliceImages || [])];
   const detailContent = String(draft.detailContent || '');
-  const deliveryFee = Number(draft.deliveryFee || 0);
+  const deliveryFee = Number(draft.deliveryFee ?? 0);
   const options = (draft.options || []).map((option) => ({
     groupName: option.groupName || '옵션',
     optionName: option.optionName,
-    additionalPrice: Number(option.price || 0),
+    additionalPrice: Number(option.price ?? 0),
     stockQuantity: Number(option.stockQuantity ?? 999),
   }));
   const hasValidNumbers = Number.isFinite(deliveryFee) && deliveryFee >= 0

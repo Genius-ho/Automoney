@@ -78,6 +78,16 @@ test('rejects invalid delivery fee, option price, and explicit stock quantity', 
   }
 });
 
+test('rejects explicit NaN delivery fee, option price, and stock quantity', () => {
+  for (const draft of [
+    { ...validDraft, deliveryFee: Number.NaN },
+    { ...validDraft, options: [{ ...validDraft.options[0], price: Number.NaN }] },
+    { ...validDraft, options: [{ ...validDraft.options[0], stockQuantity: Number.NaN }] },
+  ]) {
+    assert.throws(() => buildSpeedgoRegistrationInput(draft, { draftId: 501 }), { code: 'DRAFT_NOT_READY' });
+  }
+});
+
 test('preserves explicit zero delivery fee, option price, and stock quantity', () => {
   const input = buildSpeedgoRegistrationInput({
     ...validDraft,
