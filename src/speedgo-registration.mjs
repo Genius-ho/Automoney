@@ -69,20 +69,28 @@ function channelProductNoFromLiveProduct(product) {
   return null;
 }
 
-function currentUrl(browser) {
+function fallbackBrowserPage(browser) {
   try {
-    return browser?.page?.url?.() || null;
+    return browser?.page || null;
   } catch {
     return null;
   }
 }
 
-function compactFailure(error, stage, browser) {
+function currentUrl(page, browser) {
+  try {
+    return (page || fallbackBrowserPage(browser))?.url?.() || null;
+  } catch {
+    return null;
+  }
+}
+
+function compactFailure(error, stage, page, browser) {
   return redactSpeedgoValue({
     code: error?.code || 'SPEEDGO_SUBMIT_FAILED',
     message: error?.message || 'Speedgo registration failed',
     stage,
-    url: currentUrl(browser),
+    url: currentUrl(page, browser),
     selectorName: error?.selectorName,
     operation: error?.operation,
     status: error?.status,
@@ -110,6 +118,7 @@ export async function runSpeedgoNaverRegistration(db, rootDir, draftId, options 
   } = options;
 
   let browser = null;
+  let page = null;
   let journal = null;
   let screenshotSequence = 0;
   let stage = 'draft_loaded';
@@ -139,9 +148,9 @@ export async function runSpeedgoNaverRegistration(db, rootDir, draftId, options 
     } catch (error) {
       throw mapError(error, 'SPEEDGO_SUBMIT_FAILED', `Speedgo screenshot failed: ${step}`);
     }
-    await recordStep(step, { url: currentUrl(browser) });
+    await recordStep(step, { url: currentUrl(page, browser) });
     try {
-      await journal.setScreenshot(step, screenshot, { url: currentUrl(browser) });
+      await journal.setScreenshot(step, screenshot, { url: currentUrl(page, browser) });
     } catch (error) {
       throw mapError(error, 'PERSISTENCE_FAILED', 'Speedgo screenshot metadata could not be persisted');
     }
@@ -179,14 +188,17 @@ export async function runSpeedgoNaverRegistration(db, rootDir, draftId, options 
       throw mapError(error, 'SPEEDGO_SUBMIT_FAILED', 'Speedgo browser could not be created');
     }
 
-    await recordBrowserStage('open', () => browser.open());
+    await recordBrowserStage('open', async () => {
+      const openedPage = await browser.open();
+      page = openedPage || fallbackBrowserPage(browser);
+    });
     await recordBrowserStage('session_verified', () => browser.assertAuthenticated());
     await recordBrowserStage('supplier_product_found', () => browser.findSupplierProduct(input));
     await recordBrowserStage('speedgo_transfer_opened', () => browser.openSpeedgoTransfer());
     await recordBrowserStage('naver_form_selected', () => browser.selectNaverMarket());
     await recordBrowserStage('fields_filled', () => browser.fillNaverForm(input));
 
-    if (!confirm) {
+    if (confirm !== true) {
       await recordBrowserStage('preview', () => browser.preview());
       result = {
         status: 'dry_run',
@@ -318,12 +330,7 @@ export async function runSpeedgoNaverRegistration(db, rootDir, draftId, options 
     primaryError = error;
   } finally {
     if (browser) {
-      let pageAvailable = false;
-      try {
-        pageAvailable = Boolean(browser.page);
-      } catch {
-        pageAvailable = false;
-      }
+      const pageAvailable = Boolean(page || fallbackBrowserPage(browser));
 
       if (pageAvailable && journal) {
         screenshotSequence += 1;
@@ -331,16 +338,38 @@ export async function runSpeedgoNaverRegistration(db, rootDir, draftId, options 
           journal.artifactDir,
           `${String(screenshotSequence).padStart(2, '0')}-terminal.png`,
         );
+        let terminalScreenshotCaptured = false;
         try {
           await browser.screenshot(terminalPath);
-          await journal.recordStep('terminal', { url: currentUrl(browser) });
-          await journal.setScreenshot('terminal', terminalPath, { url: currentUrl(browser) });
+          terminalScreenshotCaptured = true;
         } catch (error) {
           if (!primaryError) {
-            primaryError = error?.message?.includes('journal')
-              ? mapError(error, 'PERSISTENCE_FAILED', 'Terminal screenshot metadata could not be persisted')
-              : mapError(error, 'SPEEDGO_SUBMIT_FAILED', 'Terminal screenshot could not be captured');
+            primaryError = mapError(error, 'SPEEDGO_SUBMIT_FAILED', 'Terminal screenshot could not be captured');
             stage = 'terminal';
+          }
+        }
+
+        if (terminalScreenshotCaptured) {
+          let terminalStepRecorded = false;
+          try {
+            await journal.recordStep('terminal', { url: currentUrl(page, browser) });
+            terminalStepRecorded = true;
+          } catch (error) {
+            if (!primaryError) {
+              primaryError = mapError(error, 'PERSISTENCE_FAILED', 'Terminal journal step could not be persisted');
+              stage = 'terminal';
+            }
+          }
+
+          if (terminalStepRecorded) {
+            try {
+              await journal.setScreenshot('terminal', terminalPath, { url: currentUrl(page, browser) });
+            } catch (error) {
+              if (!primaryError) {
+                primaryError = mapError(error, 'PERSISTENCE_FAILED', 'Terminal screenshot metadata could not be persisted');
+                stage = 'terminal';
+              }
+            }
           }
         }
       }
@@ -359,7 +388,7 @@ export async function runSpeedgoNaverRegistration(db, rootDir, draftId, options 
   if (primaryError) {
     if (journal) {
       try {
-        await journal.recordFailure(compactFailure(primaryError, stage, browser));
+        await journal.recordFailure(compactFailure(primaryError, stage, page, browser));
       } catch {
         // Artifact cleanup must never replace the operation's primary error.
       }
@@ -372,7 +401,7 @@ export async function runSpeedgoNaverRegistration(db, rootDir, draftId, options 
   } catch (error) {
     const finishError = mapError(error, 'PERSISTENCE_FAILED', 'Speedgo run journal could not be finalized');
     try {
-      await journal.recordFailure(compactFailure(finishError, 'finish', browser));
+      await journal.recordFailure(compactFailure(finishError, 'finish', page, browser));
     } catch {
       // Retain the journal finalization error.
     }

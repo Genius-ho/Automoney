@@ -32,6 +32,9 @@ function makeHarness({
   screenshotError,
   closeError,
   failureJournalError,
+  terminalJournalError,
+  exposeBrowserPage = true,
+  openReturnsPage = false,
 } = {}) {
   const calls = [];
   const journalStages = [];
@@ -43,8 +46,11 @@ function makeHarness({
     if (stageError?.stage === stage) throw stageError.error;
   };
   const browser = {
-    page,
-    async open() { calls.push('open'); maybeFail('open'); },
+    async open() {
+      calls.push('open');
+      maybeFail('open');
+      return openReturnsPage ? page : undefined;
+    },
     async assertAuthenticated() { calls.push('auth'); maybeFail('auth'); },
     async findSupplierProduct(value) { assert.equal(value, input); calls.push('find'); maybeFail('find'); },
     async openSpeedgoTransfer() { calls.push('transfer'); maybeFail('transfer'); },
@@ -65,15 +71,22 @@ function makeHarness({
       if (closeError) throw closeError;
     },
   };
+  if (exposeBrowserPage) browser.page = page;
 
   const journal = {
     artifactDir: 'C:/artifacts/task-6',
     async recordStep(stage, details) {
       calls.push(`journal:${stage}`);
+      if (stage === 'terminal' && terminalJournalError?.method === 'recordStep') {
+        throw terminalJournalError.error;
+      }
       journalStages.push({ stage, details });
     },
     async setScreenshot(stage, path) {
       calls.push(`attach:${stage}`);
+      if (stage === 'terminal' && terminalJournalError?.method === 'setScreenshot') {
+        throw terminalJournalError.error;
+      }
       assert.equal(basename(path), screenshots.at(-1));
     },
     async recordFailure(failure) {
@@ -189,6 +202,17 @@ test('dry-run follows the exact browser and screenshot sequence with zero mutati
     assert.equal(count(harness.calls, forbidden), 0, `${forbidden} must not run in dry-run`);
   }
   assert.equal(count(harness.calls, 'close'), 1);
+});
+
+test('a truthy non-boolean confirm value remains a dry-run with zero reserve or submit side effects', async () => {
+  const harness = makeHarness({ confirm: 'false' });
+
+  const result = await runSpeedgoNaverRegistration({}, 'C:/repo', 501, harness.deps);
+
+  assert.equal(result.dryRun, true);
+  assert.equal(count(harness.calls, 'preview'), 1);
+  assert.equal(count(harness.calls, 'reserve'), 0);
+  assert.equal(count(harness.calls, 'submit'), 0);
 });
 
 test('a new confirmed reservation occurs immediately before exactly one submit, then verifies, completes, and post-processes', async () => {
@@ -331,6 +355,44 @@ test('an unclassified screenshot failure is coded and redacted while the browser
 
   assert.equal(count(harness.calls, 'close'), 1);
   assert.doesNotMatch(JSON.stringify(harness.failures), /shot-secret/);
+});
+
+test('terminal screenshot and journal failures are classified by their failing boundary', async (t) => {
+  await t.test('terminal screenshot', async () => {
+    const harness = makeHarness({ screenshotError: (name) => name.endsWith('-terminal.png') });
+    await assert.rejects(
+      runSpeedgoNaverRegistration({}, 'C:/repo', 501, harness.deps),
+      (error) => error.code === 'SPEEDGO_SUBMIT_FAILED',
+    );
+    assert.equal(count(harness.calls, 'close'), 1);
+  });
+
+  for (const method of ['recordStep', 'setScreenshot']) {
+    await t.test(`terminal journal ${method}`, async () => {
+      const harness = makeHarness({
+        terminalJournalError: { method, error: new Error('disk full') },
+      });
+      await assert.rejects(
+        runSpeedgoNaverRegistration({}, 'C:/repo', 501, harness.deps),
+        (error) => error.code === 'PERSISTENCE_FAILED',
+      );
+      assert.equal(count(harness.calls, 'close'), 1);
+    });
+  }
+});
+
+test('the page returned by open drives URLs and terminal screenshot when the adapter exposes no page property', async () => {
+  const harness = makeHarness({ exposeBrowserPage: false, openReturnsPage: true, confirm: false });
+
+  const result = await runSpeedgoNaverRegistration({}, 'C:/repo', 501, harness.deps);
+
+  assert.equal(result.dryRun, true);
+  assert.equal('page' in harness.browser, false);
+  assert.equal(harness.screenshots.at(-1), '08-terminal.png');
+  const browserStageUrls = harness.journalStages
+    .filter(({ stage }) => stage !== 'draft_loaded')
+    .map(({ details }) => details.url);
+  assert.deepEqual(browserStageUrls, Array(8).fill('https://speedgo.example/form'));
 });
 
 test('a Naver read failure maps to NAVER_VERIFY_FAILED and blocks completion and post-processing', async () => {
