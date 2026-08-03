@@ -3,6 +3,8 @@ import { join, resolve } from 'node:path';
 
 const REDACTED = '[REDACTED]';
 const SENSITIVE_KEY = /password|secret|token|authorization|cookie/i;
+const SENSITIVE_ASSIGNMENT = /(password|secret|token|cookie)\s*([=:])\s*[^\s;,]+/gi;
+const AUTHORIZATION_HEADER = /(authorization\s*[:=]\s*)(?:[^\s;,]+(?:\s+[^\s;,]+)?)/gi;
 
 export function redactSpeedgoValue(value) {
   if (Array.isArray(value)) return value.map(redactSpeedgoValue);
@@ -14,7 +16,11 @@ export function redactSpeedgoValue(value) {
       ]),
     );
   }
-  return typeof value === 'string' ? value.replace(/Bearer\s+\S+/gi, 'Bearer [REDACTED]') : value;
+  if (typeof value !== 'string') return value;
+  return value
+    .replace(SENSITIVE_ASSIGNMENT, '$1$2[REDACTED]')
+    .replace(AUTHORIZATION_HEADER, '$1[REDACTED]')
+    .replace(/Bearer\s+\S+/gi, 'Bearer [REDACTED]');
 }
 
 function asIsoTimestamp(now) {

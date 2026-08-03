@@ -24,6 +24,17 @@ test('redactSpeedgoValue removes nested credentials and bearer tokens', () => {
   });
 });
 
+test('redactSpeedgoValue removes free-form credential assignments and authorization headers', () => {
+  const value = redactSpeedgoValue(
+    'safe prefix cookie=sid=abc password=secret token=abc secret=abc Authorization: Basic abc Bearer abc safe suffix',
+  );
+
+  assert.equal(
+    value,
+    'safe prefix cookie=[REDACTED] password=[REDACTED] token=[REDACTED] secret=[REDACTED] Authorization: [REDACTED] Bearer [REDACTED] safe suffix',
+  );
+});
+
 test('journal writes ordered stages and a terminal result JSON', async () => {
   const dir = await mkdtemp(join(tmpdir(), 'speedgo-journal-'));
   try {
@@ -67,7 +78,7 @@ test('journal records redacted failures and screenshot metadata on the current s
     });
     assert.deepEqual(saved.failure, {
       code: 'SPEEDGO_FAILED',
-      message: 'cookie=sid=abc Bearer [REDACTED]',
+      message: 'cookie=[REDACTED] Bearer [REDACTED]',
     });
   } finally {
     await rm(dir, { recursive: true, force: true });
