@@ -2,6 +2,7 @@ import assert from 'node:assert/strict';
 import test from 'node:test';
 
 import { createNaverDirectRegistration, buildNaverRegistrationPreview, pickBestNaverCategory, pickOriginAreaCode, uploadImagesToNaver } from '../src/naver-registration-flow.mjs';
+import { buildNaverPriceUpdatePayload } from '../src/naver-registration-post-process.mjs';
 import { PROTECTED_DRAFT_ID } from '../src/coupang-registration-flow.mjs';
 
 function makeDb() {
@@ -59,6 +60,23 @@ function commonPreviewDeps(overrides = {}) {
     ...overrides,
   };
 }
+
+test('extracted Naver price helper preserves the admin update-price payload contract', () => {
+  const optionCombinations = [{ id: 11, optionName1: '화이트', stockQuantity: 7 }];
+  const optionStandards = [{ id: 21, optionGroupName: '색상' }];
+  const payload = buildNaverPriceUpdatePayload({
+    originProduct: {
+      detailAttribute: {
+        optionInfo: { optionCombinations, optionStandards, useStockManagement: true },
+      },
+    },
+  }, 23900);
+
+  assert.deepEqual(payload, {
+    productSalePrice: { salePrice: 23900 },
+    optionInfo: { optionCombinations, optionStandards, useStockManagement: true },
+  });
+});
 
 test('pickBestNaverCategory picks the longest (most specific) leaf category name found in the product title', () => {
   const categories = [
