@@ -15,6 +15,7 @@ function fakeBrowserHarness({
   formReadbackMismatch = false,
   submitError = null,
   submitResponse = null,
+  submitResponses = null,
   successText = '상품 등록 완료',
   resultLinks = [],
   successUrlTransition,
@@ -27,6 +28,9 @@ function fakeBrowserHarness({
   let storageStatePath = null;
   let contextClosed = false;
   const hasSuccessUrlTransition = successUrlTransition ?? Boolean(successText);
+  const responsesAfterSubmit = submitResponses || (submitResponse
+    ? [{ response: submitResponse, delayMs: 0 }]
+    : []);
 
   const classify = ({ css, role, name, text, label }) => {
     const semanticText = String(name?.source || name || text?.source || text || label?.source || label || '');
@@ -98,8 +102,12 @@ function fakeBrowserHarness({
         if (concept === 'submit') {
           submitClicks += 1;
           if (submitError) throw submitError;
-          if (submitResponse) {
-            for (const listener of responseListeners) listener(submitResponse);
+          for (const { response, delayMs = 0 } of responsesAfterSubmit) {
+            const emit = () => {
+              for (const listener of responseListeners) listener(response);
+            };
+            if (delayMs > 0) setTimeout(emit, delayMs);
+            else emit();
           }
         }
       },
@@ -343,26 +351,61 @@ test('submitAndResolveIds captures nested JSON ids and clicks the final candidat
 test('submitAndResolveIds accepts a captured identifier response without a success URL transition', async (t) => {
   const harness = fakeBrowserHarness({
     successText: '',
+    submitResponse: jsonResponse({ data: { originProductNo: '777', channelProductNo: '888' } }),
+  });
+  const browser = createSpeedgoBrowser({ chromiumImpl: harness.chromium, rootDir: 'C:/repo' });
+  t.after(() => browser.close());
+  await browser.open();
+
+  assert.deepEqual(await browser.submitAndResolveIds(), { originProductNo: '777', channelProductNo: '888' });
+  assert.equal(harness.submitClicks, 1);
+});
+
+test('submitAndResolveIds ignores an earlier relevant response without ids', async (t) => {
+  const harness = fakeBrowserHarness({
+    successText: '',
+    successUrlTransition: false,
+    submitResponses: [
+      { response: jsonResponse({ accepted: true }), delayMs: 0 },
+      {
+        response: jsonResponse({ data: { originProductNo: '777', channelProductNo: '888' } }),
+        delayMs: 10,
+      },
+    ],
+  });
+  const browser = createSpeedgoBrowser({ chromiumImpl: harness.chromium, rootDir: 'C:/repo' });
+  t.after(() => browser.close());
+  await browser.open();
+
+  assert.deepEqual(await browser.submitAndResolveIds(), {
+    originProductNo: '777',
+    channelProductNo: '888',
+  });
+  assert.equal(harness.submitClicks, 1);
+});
+
+test('submitAndResolveIds rejects an incomplete identifier result', async (t) => {
+  const harness = fakeBrowserHarness({
     submitResponse: jsonResponse({ data: { originProductNo: '777' } }),
   });
   const browser = createSpeedgoBrowser({ chromiumImpl: harness.chromium, rootDir: 'C:/repo' });
   t.after(() => browser.close());
   await browser.open();
 
-  assert.deepEqual(await browser.submitAndResolveIds(), { originProductNo: '777' });
+  await assert.rejects(browser.submitAndResolveIds(), { code: 'UNRESOLVED_EXTERNAL_RESULT' });
   assert.equal(harness.submitClicks, 1);
 });
 
 test('submitAndResolveIds accepts a visible success transition on the same URL', async (t) => {
   const harness = fakeBrowserHarness({
-    successText: '상품 등록 완료 원상품번호: 777',
+    successText: '상품 등록 완료 원상품번호: 777 / 채널상품번호: 888',
     successUrlTransition: false,
   });
   const browser = createSpeedgoBrowser({ chromiumImpl: harness.chromium, rootDir: 'C:/repo' });
   t.after(() => browser.close());
   await browser.open();
 
-  assert.deepEqual(await browser.submitAndResolveIds(), { originProductNo: '777' });
+  assert.deepEqual(await browser.submitAndResolveIds(), { originProductNo: '777', channelProductNo: '888' });
   assert.equal(harness.submitClicks, 1);
 });
 

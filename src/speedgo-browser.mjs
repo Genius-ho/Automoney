@@ -33,6 +33,10 @@ function primitiveId(value) {
   return undefined;
 }
 
+function hasCompleteNaverRegistrationIds(ids) {
+  return Boolean(ids?.originProductNo && ids?.channelProductNo);
+}
+
 function idsFromString(value) {
   const text = String(value);
   const originPatterns = [
@@ -153,7 +157,7 @@ async function collectResultLinkIds(page) {
   for (let index = 0; index < count; index += 1) {
     const href = await links.nth(index).getAttribute('href').catch(() => null);
     const ids = extractNaverRegistrationIds(href);
-    if (ids.originProductNo) return ids;
+    if (hasCompleteNaverRegistrationIds(ids)) return ids;
   }
   return {};
 }
@@ -221,7 +225,7 @@ export function createSpeedgoBrowser({
       urlIds: extractNaverRegistrationIds(url),
     };
     capturedResponses.push(entry);
-    signalResponse(entry);
+    if (entry.jsonIds.originProductNo || entry.urlIds.originProductNo) signalResponse(entry);
   };
 
   const startResponseCapture = () => {
@@ -406,43 +410,50 @@ export function createSpeedgoBrowser({
 
       await responseCaptureTail;
       for (const captured of capturedResponses.slice(captureStart)) {
-        if (captured.jsonIds.originProductNo) return captured.jsonIds;
+        if (hasCompleteNaverRegistrationIds(captured.jsonIds)) return captured.jsonIds;
       }
       for (const captured of capturedResponses.slice(captureStart)) {
-        if (captured.urlIds.originProductNo) return captured.urlIds;
+        if (hasCompleteNaverRegistrationIds(captured.urlIds)) return captured.urlIds;
+      }
+      for (const captured of capturedResponses.slice(captureStart)) {
+        const combinedIds = {
+          originProductNo: captured.jsonIds.originProductNo || captured.urlIds.originProductNo,
+          channelProductNo: captured.jsonIds.channelProductNo || captured.urlIds.channelProductNo,
+        };
+        if (hasCompleteNaverRegistrationIds(combinedIds)) return combinedIds;
       }
 
       const urlIds = extractNaverRegistrationIds(page.url());
-      if (urlIds.originProductNo) return urlIds;
+      if (hasCompleteNaverRegistrationIds(urlIds)) return urlIds;
 
       try {
         const success = await findFirstVisible(page, 'successEvidence', SPEEDGO_SELECTORS.successEvidence);
         const successIds = extractNaverRegistrationIds(await success.textContent());
-        if (successIds.originProductNo) return successIds;
+        if (hasCompleteNaverRegistrationIds(successIds)) return successIds;
       } catch {
         // A URL transition can be the success evidence even without a status node.
       }
 
       const linkIds = await collectResultLinkIds(page);
-      if (linkIds.originProductNo) return linkIds;
-      throw speedgoError('UNRESOLVED_EXTERNAL_RESULT', 'Speedgo appeared to submit but no Naver origin product number was verified', page);
+      if (hasCompleteNaverRegistrationIds(linkIds)) return linkIds;
+      throw speedgoError('UNRESOLVED_EXTERNAL_RESULT', 'Speedgo appeared to submit but both Naver product identifiers were not verified', page);
     },
 
     async recoverRegistration() {
       const urlIds = extractNaverRegistrationIds(page.url());
-      if (urlIds.originProductNo) return urlIds;
+      if (hasCompleteNaverRegistrationIds(urlIds)) return urlIds;
 
       try {
         const success = await findFirstVisible(page, 'successEvidence', SPEEDGO_SELECTORS.successEvidence);
         const successIds = extractNaverRegistrationIds(await success.textContent());
-        if (successIds.originProductNo) return successIds;
+        if (hasCompleteNaverRegistrationIds(successIds)) return successIds;
       } catch {
         // Recovery also supports result pages that expose identifiers only in links.
       }
 
       const linkIds = await collectResultLinkIds(page);
-      if (linkIds.originProductNo) return linkIds;
-      throw speedgoError('UNRESOLVED_EXTERNAL_RESULT', 'No verified Naver origin product number was found during recovery', page);
+      if (hasCompleteNaverRegistrationIds(linkIds)) return linkIds;
+      throw speedgoError('UNRESOLVED_EXTERNAL_RESULT', 'Both Naver product identifiers could not be verified during recovery', page);
     },
 
     async screenshot(path) {
