@@ -185,6 +185,7 @@ test('runSpeedgoRegisterCli omits raw bodies and recursively redacts serialized 
       responseCode: 200,
       requestId: 'request-123',
       ordinaryPreview: 'retain this useful field',
+      userResponse: 'retain this user-facing response',
       diagnostics: JSON.stringify({
         clientSecret: 'serialized-secret',
         token: 'serialized-token',
@@ -204,6 +205,7 @@ test('runSpeedgoRegisterCli omits raw bodies and recursively redacts serialized 
     responseCode: 200,
     requestId: 'request-123',
     ordinaryPreview: 'retain this useful field',
+    userResponse: 'retain this user-facing response',
     diagnostics: JSON.stringify({
       clientSecret: '[REDACTED]',
       token: '[REDACTED]',
@@ -226,11 +228,19 @@ test('runSpeedgoRegisterCli redacts API, access, private, and auth key aliases',
       privateKey: 'private-key-literal',
       private_key: 'private-underscore-literal',
       auth: 'auth-literal',
+      credential: 'credential-literal',
+      csrfToken: 'csrf-token-literal',
+      authorName: 'Ada Author',
+      authority: 'trusted-authority',
       diagnostics: JSON.stringify({
         apiKey: 'serialized-api-key',
         access_key: 'serialized-access-key',
         privateKey: 'serialized-private-key',
+        credential: 'serialized-credential',
+        csrfToken: 'serialized-csrf-token',
         authorization: 'serialized-authorization',
+        authorName: 'Serialized Author',
+        authority: 'serialized-authority',
         safe: 'retained',
       }),
     }),
@@ -248,15 +258,23 @@ test('runSpeedgoRegisterCli redacts API, access, private, and auth key aliases',
     privateKey: '[REDACTED]',
     private_key: '[REDACTED]',
     auth: '[REDACTED]',
+    credential: '[REDACTED]',
+    csrfToken: '[REDACTED]',
+    authorName: 'Ada Author',
+    authority: 'trusted-authority',
     diagnostics: JSON.stringify({
       apiKey: '[REDACTED]',
       access_key: '[REDACTED]',
       privateKey: '[REDACTED]',
+      credential: '[REDACTED]',
+      csrfToken: '[REDACTED]',
       authorization: '[REDACTED]',
+      authorName: 'Serialized Author',
+      authority: 'serialized-authority',
       safe: 'retained',
     }),
   });
-  assert.doesNotMatch(output, /api-key-literal|api-underscore-literal|api-header-literal|access-key-literal|access-underscore-literal|private-key-literal|private-underscore-literal|auth-literal|serialized-api-key|serialized-access-key|serialized-private-key|serialized-authorization/);
+  assert.doesNotMatch(output, /api-key-literal|api-underscore-literal|api-header-literal|access-key-literal|access-underscore-literal|private-key-literal|private-underscore-literal|auth-literal|credential-literal|csrf-token-literal|serialized-api-key|serialized-access-key|serialized-private-key|serialized-credential|serialized-csrf-token|serialized-authorization/);
 });
 
 test('runSpeedgoRegisterCli maps runtime failures to exit 1 with compact coded stderr', async () => {

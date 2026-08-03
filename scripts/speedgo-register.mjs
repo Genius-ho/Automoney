@@ -77,15 +77,19 @@ function compactOutputKey(key) {
 }
 
 function isSensitiveOutputKey(key) {
-  return /password|secret|token|auth|cookie|apikey|accesskey|privatekey/i.test(compactOutputKey(key));
+  const compact = compactOutputKey(key);
+  if (/(?:password|secret|cookie|credential)/.test(compact)) return true;
+  if (compact.endsWith('token')) return true;
+  if (compact === 'auth' || compact.endsWith('authorization') || /^auth(?:token|key|value|header|credential)$/.test(compact)) {
+    return true;
+  }
+  return /(?:api|access|private)key(?:id|value|secret)?$/.test(compact);
 }
 
 function isRawBodyOutputKey(key) {
   const compact = compactOutputKey(key);
   if (/^body(?:preview|payload|json)?$/.test(compact)) return true;
-  const hasTransportMarker = /raw|api|request|response/.test(compact);
-  const endsWithBodyLikeField = /(?:body|payload|preview|request|response)(?:json)?$/.test(compact);
-  return hasTransportMarker && endsWithBodyLikeField;
+  return /^(?:raw|api|request|response)(?:api)?(?:request|response|body|payload|preview)(?:body|preview|payload|json)?$/.test(compact);
 }
 
 function sanitizeCliOutput(value, key = '') {
