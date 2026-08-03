@@ -41,7 +41,7 @@ export function parseSpeedgoRegisterArgs(argv) {
     if (arg === '--artifact-dir') {
       if (artifactDir !== undefined) throw new SpeedgoRegisterArgumentError('duplicate --artifact-dir flag');
       const value = argv[index + 1];
-      if (!value || value.startsWith('-')) {
+      if (typeof value !== 'string' || !value || value.startsWith('-')) {
         throw new SpeedgoRegisterArgumentError('--artifact-dir requires a value');
       }
       artifactDir = value;
@@ -68,6 +68,67 @@ export function parseSpeedgoRegisterArgs(argv) {
 
 function writeLine(stream, value) {
   stream.write(`${value}\n`);
+}
+
+const OMIT_OUTPUT_FIELD = Symbol('omit-output-field');
+
+function compactOutputKey(key) {
+  return String(key).replace(/[^a-z]/gi, '').toLowerCase();
+}
+
+function isSensitiveOutputKey(key) {
+  return /password|secret|token|authorization|cookie/i.test(compactOutputKey(key));
+}
+
+function isRawBodyOutputKey(key) {
+  const compact = compactOutputKey(key);
+  return new Set([
+    'body',
+    'bodypreview',
+    'rawbody',
+    'rawapibody',
+    'apibody',
+    'requestbody',
+    'responsebody',
+    'rawrequestbody',
+    'rawresponsebody',
+    'rawrequest',
+    'rawresponse',
+    'requestpayload',
+    'responsepayload',
+    'rawpayload',
+  ]).has(compact);
+}
+
+function sanitizeCliOutput(value, key = '') {
+  if (key && isRawBodyOutputKey(key)) return OMIT_OUTPUT_FIELD;
+  if (key && isSensitiveOutputKey(key)) return '[REDACTED]';
+  if (Array.isArray(value)) {
+    return value
+      .map((item) => sanitizeCliOutput(item))
+      .filter((item) => item !== OMIT_OUTPUT_FIELD);
+  }
+  if (value && typeof value === 'object') {
+    const sanitized = {};
+    for (const [childKey, childValue] of Object.entries(value)) {
+      const result = sanitizeCliOutput(childValue, childKey);
+      if (result !== OMIT_OUTPUT_FIELD) sanitized[childKey] = result;
+    }
+    return sanitized;
+  }
+  if (typeof value === 'string') {
+    try {
+      const parsed = JSON.parse(value);
+      if (parsed && typeof parsed === 'object') {
+        const sanitized = sanitizeCliOutput(parsed);
+        return JSON.stringify(sanitized);
+      }
+    } catch {
+      // Preserve useful non-JSON text while still masking bearer credentials.
+    }
+    return value.replace(/Bearer\s+\S+/gi, 'Bearer [REDACTED]');
+  }
+  return value;
 }
 
 function safeRuntimeCode(error) {
@@ -102,6 +163,7 @@ export async function runSpeedgoRegisterCli(argv = process.argv.slice(2), depend
   let db = null;
   let phase = 'config';
   let exitCode = 0;
+  let serializedResult;
 
   try {
     const databaseUrl = await loadDatabaseUrlImpl(rootDir);
@@ -114,8 +176,9 @@ export async function runSpeedgoRegisterCli(argv = process.argv.slice(2), depend
       artifactDir: args.artifactDir,
       naverConfig,
     });
-    const redactedResult = redactImpl(result);
-    writeLine(stdout, JSON.stringify(redactedResult === undefined ? null : redactedResult));
+    const sanitizedResult = sanitizeCliOutput(result);
+    const redactedResult = sanitizeCliOutput(redactImpl(sanitizedResult));
+    serializedResult = JSON.stringify(redactedResult === undefined ? null : redactedResult);
   } catch (error) {
     exitCode = phase === 'config' ? 2 : 1;
     writeFailure(stderr, phase === 'config' ? 'SPEEDGO_CONFIG_ERROR' : safeRuntimeCode(error));
@@ -132,6 +195,7 @@ export async function runSpeedgoRegisterCli(argv = process.argv.slice(2), depend
     }
   }
 
+  if (exitCode === 0) writeLine(stdout, serializedResult ?? 'null');
   return exitCode;
 }
 

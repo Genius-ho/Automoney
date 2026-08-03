@@ -5,6 +5,7 @@ import test from 'node:test';
 import {
   parseSpeedgoRegisterArgs,
   runSpeedgoRegisterCli,
+  SpeedgoRegisterArgumentError,
 } from '../scripts/speedgo-register.mjs';
 
 function captureStream() {
@@ -129,6 +130,80 @@ test('runSpeedgoRegisterCli prints one redacted JSON success and closes the pool
   });
 });
 
+test('runSpeedgoRegisterCli emits success only after the database closes cleanly', async () => {
+  const events = [];
+  const deps = validDependencies({
+    stdout: {
+      write(value) {
+        events.push(`stdout:${value.trim()}`);
+        return true;
+      },
+    },
+    createPgPoolImpl: async () => ({
+      async end() {
+        events.push('db.end');
+      },
+    }),
+    runRegistrationImpl: async () => {
+      events.push('runner');
+      return { status: 'completed' };
+    },
+  });
+
+  assert.equal(await runSpeedgoRegisterCli(['501'], deps), 0);
+  assert.deepEqual(events, ['runner', 'db.end', 'stdout:{"status":"completed"}']);
+});
+
+test('runSpeedgoRegisterCli suppresses success output when database cleanup fails', async () => {
+  const deps = validDependencies({
+    createPgPoolImpl: async () => ({
+      async end() {
+        throw new Error('connection close failed');
+      },
+    }),
+  });
+
+  assert.equal(await runSpeedgoRegisterCli(['501'], deps), 1);
+  assert.equal(deps.stdout.chunks.length, 0);
+  assert.equal(deps.stderr.chunks.length, 1);
+  assert.match(deps.stderr.chunks[0], /^SPEEDGO_DB_CLOSE_FAILED: registration failed\n$/);
+});
+
+test('runSpeedgoRegisterCli omits raw bodies and recursively redacts serialized JSON', async () => {
+  const deps = validDependencies({
+    runRegistrationImpl: async () => ({
+      status: 'completed',
+      originProductNo: '777',
+      rawApiBody: { originProductNo: 'raw-777', clientSecret: 'raw-secret' },
+      responseBody: JSON.stringify({ originProductNo: 'raw-888', token: 'raw-token' }),
+      bodyPreview: JSON.stringify({ message: 'raw response body' }),
+      diagnostics: JSON.stringify({
+        clientSecret: 'serialized-secret',
+        token: 'serialized-token',
+        cookie: 'serialized-cookie',
+        authorization: 'Bearer serialized-auth',
+        safe: 'retained',
+      }),
+    }),
+  });
+
+  assert.equal(await runSpeedgoRegisterCli(['501'], deps), 0);
+  const output = deps.stdout.chunks.join('');
+  const result = JSON.parse(output);
+  assert.deepEqual(result, {
+    status: 'completed',
+    originProductNo: '777',
+    diagnostics: JSON.stringify({
+      clientSecret: '[REDACTED]',
+      token: '[REDACTED]',
+      cookie: '[REDACTED]',
+      authorization: '[REDACTED]',
+      safe: 'retained',
+    }),
+  });
+  assert.doesNotMatch(output, /raw-777|raw-888|raw-secret|raw-token|raw response body|serialized-secret|serialized-token|serialized-cookie|serialized-auth/);
+});
+
 test('runSpeedgoRegisterCli maps runtime failures to exit 1 with compact coded stderr', async () => {
   const deps = validDependencies({
     runRegistrationImpl: async () => {
@@ -162,6 +237,13 @@ test('runSpeedgoRegisterCli maps argument and config failures to exit 2', async 
   assert.equal(await runSpeedgoRegisterCli(['501'], configDeps), 2);
   assert.equal(configDeps.db.ended, 0);
   assert.match(configDeps.stderr.chunks[0], /SPEEDGO_CONFIG_ERROR/);
+});
+
+test('parseSpeedgoRegisterArgs rejects a non-string artifact directory value', () => {
+  assert.throws(
+    () => parseSpeedgoRegisterArgs(['501', '--artifact-dir', 123]),
+    (error) => error instanceof SpeedgoRegisterArgumentError && /requires a value/.test(error.message),
+  );
 });
 
 test('importing the CLI module does not execute it', () => {
