@@ -89,7 +89,7 @@ function isSensitiveOutputKey(key) {
 function isRawBodyOutputKey(key) {
   const compact = compactOutputKey(key);
   if (/^body(?:preview|payload|json)?$/.test(compact)) return true;
-  return /^(?:raw|api|request|response)(?:api)?(?:request|response|body|payload|preview)(?:body|preview|payload|json)?$/.test(compact);
+  return /^(?:raw|api|request|response)(?:api)?(?:request|response|body|payload|preview|json)(?:body|preview|payload|json)?$/.test(compact);
 }
 
 function sanitizeCliOutput(value, key = '') {

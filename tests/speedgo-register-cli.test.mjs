@@ -182,6 +182,12 @@ test('runSpeedgoRegisterCli omits raw bodies and recursively redacts serialized 
       apiResponsePreview: 'raw API response preview',
       rawResponse: { secret: 'raw response secret' },
       requestBody: { token: 'raw request token' },
+      responseJson: 'raw response JSON',
+      request_json: 'raw request JSON',
+      'API-Response-JSON': 'raw API response JSON',
+      api_request_json: 'raw API request JSON',
+      rawResponseJson: 'raw response JSON alias',
+      raw_request_json: 'raw request JSON alias',
       responseCode: 200,
       requestId: 'request-123',
       ordinaryPreview: 'retain this useful field',
@@ -214,7 +220,7 @@ test('runSpeedgoRegisterCli omits raw bodies and recursively redacts serialized 
       safe: 'retained',
     }),
   });
-  assert.doesNotMatch(output, /raw-777|raw-888|raw-secret|raw-token|raw response body|raw response preview|raw request preview|raw API response preview|raw response secret|raw request token|serialized-secret|serialized-token|serialized-cookie|serialized-auth/);
+  assert.doesNotMatch(output, /raw-777|raw-888|raw-secret|raw-token|raw response body|raw response preview|raw request preview|raw API response preview|raw response secret|raw request token|raw response JSON|raw API response JSON|raw API request JSON|raw response JSON alias|raw request JSON alias|serialized-secret|serialized-token|serialized-cookie|serialized-auth/);
 });
 
 test('runSpeedgoRegisterCli redacts API, access, private, and auth key aliases', async () => {
