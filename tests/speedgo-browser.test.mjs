@@ -20,6 +20,7 @@ function fakeBrowserHarness({
   successText = '상품 등록 완료',
   resultLinks = [],
   exactProductVisibility,
+  searchModeHidden = false,
   successUrlTransition,
 } = {}) {
   const responseListeners = new Set();
@@ -97,8 +98,18 @@ function fakeBrowserHarness({
       },
       fill: async (value) => {
         if (invalid) throw new Error('locator resolved to no elements');
+        if (concept === 'searchMode' && searchModeHidden) {
+          calls.push(`fillAttempt:${concept}:${value}`);
+          throw new Error('Element is not actionable because it is hidden');
+        }
         calls.push(`fill:${concept}:${value}`);
         values.set(valueKey, String(value));
+      },
+      evaluate: async (_callback, value) => {
+        calls.push(`evaluate:${concept}:${value}`);
+        values.set(valueKey, String(value));
+        calls.push(`event:input:${concept}`);
+        calls.push(`event:change:${concept}`);
       },
       inputValue: async () => {
         if (formReadbackMismatch && concept === 'productName') return 'wrong value';
@@ -338,7 +349,9 @@ test('findSupplierProduct follows the live product-number form and matching card
   const searchSubmitIndex = harness.calls.indexOf('click:searchSubmit');
   assert.equal(harness.calls.filter((call) => call === 'click:searchSubmit').length, 1);
   assert.ok(harness.calls.includes('fill:search:49168396'));
-  assert.ok(harness.calls.includes('fill:searchMode:no'));
+  assert.ok(harness.calls.includes('evaluate:searchMode:no'));
+  assert.ok(harness.calls.includes('event:input:searchMode'));
+  assert.ok(harness.calls.includes('event:change:searchMode'));
   assert.ok(harness.calls.some((call) => String(call).startsWith('waitForURL:') && String(call).includes('supplyList')));
   assert.ok(harness.calls.indexOf('click:cardTrigger') > searchSubmitIndex);
   assert.ok(harness.calls.includes('waitFor:cardTransfer'));
@@ -347,6 +360,25 @@ test('findSupplierProduct follows the live product-number form and matching card
   await browser.openSpeedgoTransfer();
   assert.equal(harness.calls.includes('click:cardTransfer'), true);
   assert.equal(harness.calls.includes('click:globalSpeedgo'), false);
+  await browser.close();
+});
+
+test('findSupplierProduct sets the hidden search mode through DOM semantics', async () => {
+  const harness = fakeBrowserHarness({
+    exactProductMatches: 1,
+    searchModeHidden: true,
+  });
+  const browser = createSpeedgoBrowser({ chromiumImpl: harness.chromium, rootDir: 'C:/repo' });
+  await browser.open();
+
+  await browser.findSupplierProduct({ supplierProductNo: '49168396' });
+
+  assert.ok(harness.calls.includes('evaluate:searchMode:no'));
+  assert.ok(harness.calls.includes('event:input:searchMode'));
+  assert.ok(harness.calls.includes('event:change:searchMode'));
+  assert.equal(harness.calls.some((call) => String(call).startsWith('fillAttempt:searchMode:')), false);
+  assert.equal(harness.calls.includes('click:searchMode'), false);
+  assert.equal(harness.calls.filter((call) => call === 'click:searchSubmit').length, 1);
   await browser.close();
 });
 

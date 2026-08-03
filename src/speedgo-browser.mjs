@@ -267,6 +267,14 @@ async function findFirstPresent(page, selectorName, candidates) {
   throw speedgoError('SPEEDGO_SELECTOR_NOT_FOUND', `No Speedgo locator found for ${selectorName}`, page, { selectorName });
 }
 
+async function setSearchMode(locator, value) {
+  await locator.evaluate((element, nextValue) => {
+    element.value = nextValue;
+    element.dispatchEvent(new Event('input', { bubbles: true }));
+    element.dispatchEvent(new Event('change', { bubbles: true }));
+  }, String(value));
+}
+
 async function waitForSupplierSearchResults(page) {
   if (typeof page.waitForURL === 'function') {
     await page.waitForURL(/\/index\/item\/supplyList\.php(?:\?|$)/i, {
@@ -390,7 +398,7 @@ export function createSpeedgoBrowser({
         const search = await findFirstVisible(page, 'searchInput', SPEEDGO_SELECTORS.searchInput);
         const searchMode = await findFirstPresent(page, 'searchModeInput', SPEEDGO_SELECTORS.searchModeInput);
         const searchSubmit = await findFirstVisible(page, 'searchSubmit', SPEEDGO_SELECTORS.searchSubmit);
-        await searchMode.fill('no');
+        await setSearchMode(searchMode, 'no');
         await search.fill(supplierProductNo);
         const resultWait = waitForSupplierSearchResults(page);
         await Promise.all([resultWait, searchSubmit.click()]);
