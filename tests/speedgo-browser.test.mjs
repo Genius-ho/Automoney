@@ -21,6 +21,7 @@ function fakeBrowserHarness({
   resultLinks = [],
   exactProductVisibility,
   searchModeHidden = false,
+  cardTriggerPointerIntercepted = false,
   successUrlTransition,
 } = {}) {
   const responseListeners = new Set();
@@ -31,6 +32,7 @@ function fakeBrowserHarness({
   let cookiesAdded = null;
   let storageStatePath = null;
   let contextClosed = false;
+  let cardActivated = false;
   let searchSubmitted = false;
   const searchWaiters = [];
   const hasSuccessUrlTransition = successUrlTransition ?? Boolean(successText);
@@ -69,7 +71,8 @@ function fakeBrowserHarness({
   };
 
   const visible = (concept) => {
-    if (['searchMode', 'searchSubmit', 'cardTrigger', 'cardTransfer', 'globalSpeedgo'].includes(concept)) return true;
+    if (['searchMode', 'searchSubmit', 'cardTrigger', 'globalSpeedgo'].includes(concept)) return true;
+    if (concept === 'cardTransfer') return cardActivated;
     if (concept === 'login') return authenticated;
     if (concept === 'success') return Boolean(successText);
     return ['search', 'transfer', 'naver', 'productName', 'salePrice', 'deliveryFee', 'detailContent', 'mainImage', 'detailImage', 'addOption', 'optionGroup', 'optionName', 'optionPrice', 'optionStock', 'submit', 'links'].includes(concept);
@@ -107,9 +110,14 @@ function fakeBrowserHarness({
       },
       evaluate: async (_callback, value) => {
         calls.push(`evaluate:${concept}:${value}`);
+        if (concept === 'cardTrigger') {
+          await _callback({ click: () => { cardActivated = true; } }, value);
+        }
         values.set(valueKey, String(value));
-        calls.push(`event:input:${concept}`);
-        calls.push(`event:change:${concept}`);
+        if (concept === 'searchMode') {
+          calls.push(`event:input:${concept}`);
+          calls.push(`event:change:${concept}`);
+        }
       },
       inputValue: async () => {
         if (formReadbackMismatch && concept === 'productName') return 'wrong value';
@@ -128,6 +136,10 @@ function fakeBrowserHarness({
       },
       click: async () => {
         calls.push(`click:${concept}`);
+        if (concept === 'cardTrigger') {
+          if (cardTriggerPointerIntercepted) throw new Error('pointer event intercepted by hover overlay');
+          cardActivated = true;
+        }
         if (concept === 'searchSubmit') {
           searchSubmitted = true;
           while (searchWaiters.length) searchWaiters.shift()();
@@ -353,7 +365,8 @@ test('findSupplierProduct follows the live product-number form and matching card
   assert.ok(harness.calls.includes('event:input:searchMode'));
   assert.ok(harness.calls.includes('event:change:searchMode'));
   assert.ok(harness.calls.some((call) => String(call).startsWith('waitForURL:') && String(call).includes('supplyList')));
-  assert.ok(harness.calls.indexOf('click:cardTrigger') > searchSubmitIndex);
+  assert.ok(harness.calls.indexOf('evaluate:cardTrigger:undefined') > searchSubmitIndex);
+  assert.equal(harness.calls.includes('click:cardTrigger'), false);
   assert.ok(harness.calls.includes('waitFor:cardTransfer'));
   assert.equal(harness.calls.includes('click:product'), false);
 
@@ -379,6 +392,22 @@ test('findSupplierProduct sets the hidden search mode through DOM semantics', as
   assert.equal(harness.calls.some((call) => String(call).startsWith('fillAttempt:searchMode:')), false);
   assert.equal(harness.calls.includes('click:searchMode'), false);
   assert.equal(harness.calls.filter((call) => call === 'click:searchSubmit').length, 1);
+  await browser.close();
+});
+
+test('findSupplierProduct activates the exact card through DOM click when pointer events are intercepted', async () => {
+  const harness = fakeBrowserHarness({
+    exactProductMatches: 1,
+    cardTriggerPointerIntercepted: true,
+  });
+  const browser = createSpeedgoBrowser({ chromiumImpl: harness.chromium, rootDir: 'C:/repo' });
+  await browser.open();
+
+  await browser.findSupplierProduct({ supplierProductNo: '49168396' });
+
+  assert.ok(harness.calls.includes('evaluate:cardTrigger:undefined'));
+  assert.equal(harness.calls.includes('click:cardTrigger'), false);
+  assert.ok(harness.calls.includes('waitFor:cardTransfer'));
   await browser.close();
 });
 

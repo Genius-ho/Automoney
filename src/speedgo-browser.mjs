@@ -430,7 +430,7 @@ export function createSpeedgoBrowser({
         if (cardTriggers.length === 0) {
           throw speedgoError('SPEEDGO_SUPPLIER_PRODUCT_NOT_FOUND', 'The matching Speedgo supplier product card trigger was not visible', page);
         }
-        await cardTriggers[0].click();
+        await cardTriggers[0].evaluate((element) => element.click());
         const transfer = await findFirstVisible(page, 'transferButton', SPEEDGO_SELECTORS.transferButton);
         if (typeof transfer.waitFor === 'function') await transfer.waitFor({ state: 'visible' });
         return true;
