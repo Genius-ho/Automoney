@@ -22,6 +22,10 @@ function fakeBrowserHarness({
   exactProductVisibility,
   searchModeHidden = false,
   cardTriggerPointerIntercepted = false,
+  cardTriggerVisibility,
+  cardTransferAvailable = true,
+  semanticTransferAvailable = true,
+  globalSpeedgoLink = true,
   successUrlTransition,
 } = {}) {
   const responseListeners = new Set();
@@ -71,11 +75,13 @@ function fakeBrowserHarness({
   };
 
   const visible = (concept) => {
-    if (['searchMode', 'searchSubmit', 'cardTrigger', 'globalSpeedgo'].includes(concept)) return true;
-    if (concept === 'cardTransfer') return cardActivated;
+    if (['searchMode', 'searchSubmit', 'cardTrigger'].includes(concept)) return true;
+    if (concept === 'globalSpeedgo') return globalSpeedgoLink;
+    if (concept === 'cardTransfer') return cardActivated && cardTransferAvailable;
     if (concept === 'login') return authenticated;
     if (concept === 'success') return Boolean(successText);
-    return ['search', 'transfer', 'naver', 'productName', 'salePrice', 'deliveryFee', 'detailContent', 'mainImage', 'detailImage', 'addOption', 'optionGroup', 'optionName', 'optionPrice', 'optionStock', 'submit', 'links'].includes(concept);
+    if (concept === 'transfer') return semanticTransferAvailable;
+    return ['search', 'naver', 'productName', 'salePrice', 'deliveryFee', 'detailContent', 'mainImage', 'detailImage', 'addOption', 'optionGroup', 'optionName', 'optionPrice', 'optionStock', 'submit', 'links'].includes(concept);
   };
 
   const makeLocator = (descriptor, item = null, fixedIndex = undefined, invalid = false) => {
@@ -179,7 +185,19 @@ function fakeBrowserHarness({
     nth: () => cardLocator,
     isVisible: async () => true,
     filter: () => cardLocator,
-    locator: (css) => makeLocator({ css }),
+    locator: (css) => {
+      if (css !== '.bane_brd1[onclick*="itemInfo("]') return makeLocator({ css });
+      const visibility = cardTriggerVisibility || [true];
+      const triggerLocator = {
+        count: async () => visibility.length,
+        nth: (index) => {
+          const locator = makeLocator({ css }, null, index);
+          locator.isVisible = async () => Boolean(visibility[index]);
+          return locator;
+        },
+      };
+      return triggerLocator;
+    },
   };
 
   const page = {
@@ -408,6 +426,55 @@ test('findSupplierProduct activates the exact card through DOM click when pointe
   assert.ok(harness.calls.includes('evaluate:cardTrigger:undefined'));
   assert.equal(harness.calls.includes('click:cardTrigger'), false);
   assert.ok(harness.calls.includes('waitFor:cardTransfer'));
+  await browser.close();
+});
+
+test('findSupplierProduct rejects zero or multiple visible exact card triggers', async () => {
+  for (const [cardTriggerVisibility, code] of [
+    [[false], 'SPEEDGO_SUPPLIER_PRODUCT_NOT_FOUND'],
+    [[true, true], 'SPEEDGO_AMBIGUOUS_PRODUCT'],
+  ]) {
+    const harness = fakeBrowserHarness({ cardTriggerVisibility });
+    const browser = createSpeedgoBrowser({ chromiumImpl: harness.chromium, rootDir: 'C:/repo' });
+    await browser.open();
+
+    await assert.rejects(
+      browser.findSupplierProduct({ supplierProductNo: '49168396' }),
+      { code },
+    );
+    assert.equal(harness.calls.includes('evaluate:cardTrigger:undefined'), false);
+    await browser.close();
+  }
+});
+
+test('findSupplierProduct does not use the global Speedgo link when the exact transfer control is absent', async () => {
+  const harness = fakeBrowserHarness({
+    cardTransferAvailable: false,
+    semanticTransferAvailable: false,
+    globalSpeedgoLink: true,
+  });
+  const browser = createSpeedgoBrowser({ chromiumImpl: harness.chromium, rootDir: 'C:/repo' });
+  await browser.open();
+
+  await assert.rejects(
+    browser.findSupplierProduct({ supplierProductNo: '49168396' }),
+    { code: 'SPEEDGO_TRANSFER_UI_NOT_FOUND' },
+  );
+  assert.equal(harness.calls.includes('click:globalSpeedgo'), false);
+  await browser.close();
+});
+
+test('openSpeedgoTransfer does not use the global Speedgo link when the exact transfer control is absent', async () => {
+  const harness = fakeBrowserHarness({
+    cardTransferAvailable: false,
+    semanticTransferAvailable: false,
+    globalSpeedgoLink: true,
+  });
+  const browser = createSpeedgoBrowser({ chromiumImpl: harness.chromium, rootDir: 'C:/repo' });
+  await browser.open();
+
+  await assert.rejects(browser.openSpeedgoTransfer(), { code: 'SPEEDGO_TRANSFER_UI_NOT_FOUND' });
+  assert.equal(harness.calls.includes('click:globalSpeedgo'), false);
   await browser.close();
 });
 

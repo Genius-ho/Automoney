@@ -99,7 +99,6 @@ export const SPEEDGO_SELECTORS = Object.freeze({
     { kind: 'css', value: '[data-action="speedgo-transfer"], [data-action*="speedgo" i]' },
     { kind: 'role', role: 'button', name: /^스피드고\s*전송$/ },
     { kind: 'text', value: /^스피드고\s*전송$/ },
-    { kind: 'css', value: 'a[href*="speedgo" i]' },
   ],
   naverMarket: [
     { kind: 'css', value: 'input[name*="naver" i], input[value*="naver" i]' },

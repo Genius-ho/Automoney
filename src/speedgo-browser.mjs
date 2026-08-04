@@ -430,12 +430,20 @@ export function createSpeedgoBrowser({
         if (cardTriggers.length === 0) {
           throw speedgoError('SPEEDGO_SUPPLIER_PRODUCT_NOT_FOUND', 'The matching Speedgo supplier product card trigger was not visible', page);
         }
+        if (cardTriggers.length > 1) {
+          throw speedgoError('SPEEDGO_AMBIGUOUS_PRODUCT', 'More than one matching Speedgo supplier product card trigger was visible', page);
+        }
         await cardTriggers[0].evaluate((element) => element.click());
-        const transfer = await findFirstVisible(page, 'transferButton', SPEEDGO_SELECTORS.transferButton);
+        let transfer;
+        try {
+          transfer = await findFirstVisible(page, 'transferButton', SPEEDGO_SELECTORS.transferButton);
+        } catch (error) {
+          throw keepCodeOrMap(error, 'SPEEDGO_TRANSFER_UI_NOT_FOUND', 'The exact Speedgo product transfer action is unavailable', page);
+        }
         if (typeof transfer.waitFor === 'function') await transfer.waitFor({ state: 'visible' });
         return true;
       } catch (error) {
-        if (error?.code === 'SPEEDGO_AMBIGUOUS_PRODUCT') throw error;
+        if (error?.code === 'SPEEDGO_AMBIGUOUS_PRODUCT' || error?.code === 'SPEEDGO_TRANSFER_UI_NOT_FOUND') throw error;
         throw keepCodeOrMap(error, 'SPEEDGO_SUPPLIER_PRODUCT_NOT_FOUND', 'The Speedgo supplier product could not be selected', page);
       }
     },
