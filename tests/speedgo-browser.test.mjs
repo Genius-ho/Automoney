@@ -22,6 +22,7 @@ function fakeBrowserHarness({
   exactProductVisibility,
   searchModeHidden = false,
   cardTriggerPointerIntercepted = false,
+  cardTransferDelayMs = 0,
   cardTriggerVisibility,
   cardTransferAvailable = true,
   semanticTransferAvailable = true,
@@ -38,6 +39,7 @@ function fakeBrowserHarness({
   let storageStatePath = null;
   let contextClosed = false;
   let cardActivated = false;
+  let cardTransferReadyAt = 0;
   let searchSubmitted = false;
   const searchWaiters = [];
   const hasSuccessUrlTransition = successUrlTransition ?? Boolean(successText);
@@ -80,7 +82,7 @@ function fakeBrowserHarness({
     if (['searchMode', 'searchSubmit', 'cardTrigger'].includes(concept)) return true;
     if (concept === 'globalSpeedgo') return globalSpeedgoLink;
     if (concept === 'globalDataAction') return globalDataActionControl;
-    if (concept === 'cardTransfer') return cardActivated && cardTransferAvailable;
+    if (concept === 'cardTransfer') return cardActivated && cardTransferAvailable && Date.now() >= cardTransferReadyAt;
     if (concept === 'login') return authenticated;
     if (concept === 'success') return Boolean(successText);
     if (concept === 'transfer') return semanticTransferAvailable;
@@ -104,8 +106,12 @@ function fakeBrowserHarness({
           ? 2
           : 1,
       isVisible: async () => !invalid && visible(concept),
-      waitFor: async () => {
-        if (invalid || !visible(concept)) throw new Error('not visible');
+      waitFor: async ({ timeout = 0 } = {}) => {
+        const deadline = Date.now() + timeout;
+        while (invalid || !visible(concept)) {
+          if (timeout <= 0 || Date.now() >= deadline) throw new Error('not visible');
+          await new Promise((resolve) => setTimeout(resolve, Math.min(5, deadline - Date.now())));
+        }
         calls.push(`waitFor:${concept}`);
       },
       fill: async (value) => {
@@ -120,7 +126,10 @@ function fakeBrowserHarness({
       evaluate: async (_callback, value) => {
         calls.push(`evaluate:${concept}:${value}`);
         if (concept === 'cardTrigger') {
-          await _callback({ click: () => { cardActivated = true; } }, value);
+          await _callback({ click: () => {
+            cardActivated = true;
+            cardTransferReadyAt = Date.now() + cardTransferDelayMs;
+          } }, value);
         }
         values.set(valueKey, String(value));
         if (concept === 'searchMode') {
@@ -148,6 +157,7 @@ function fakeBrowserHarness({
         if (concept === 'cardTrigger') {
           if (cardTriggerPointerIntercepted) throw new Error('pointer event intercepted by hover overlay');
           cardActivated = true;
+          cardTransferReadyAt = Date.now() + cardTransferDelayMs;
         }
         if (concept === 'searchSubmit') {
           searchSubmitted = true;
@@ -429,6 +439,23 @@ test('findSupplierProduct activates the exact card through DOM click when pointe
   assert.ok(harness.calls.includes('evaluate:cardTrigger:undefined'));
   assert.equal(harness.calls.includes('click:cardTrigger'), false);
   assert.ok(harness.calls.includes('waitFor:cardTransfer'));
+  await browser.close();
+});
+
+test('findSupplierProduct waits for the exact transfer control after delayed menu rendering', async () => {
+  const harness = fakeBrowserHarness({
+    exactProductMatches: 1,
+    cardTransferDelayMs: 50,
+  });
+  const browser = createSpeedgoBrowser({ chromiumImpl: harness.chromium, rootDir: 'C:/repo' });
+  await browser.open();
+
+  await browser.findSupplierProduct({ supplierProductNo: '49168396' });
+
+  assert.ok(harness.calls.includes('evaluate:cardTrigger:undefined'));
+  assert.ok(harness.calls.includes('waitFor:cardTransfer'));
+  assert.equal(harness.calls.includes('click:cardTransfer'), false);
+  assert.equal(harness.calls.includes('click:globalSpeedgo'), false);
   await browser.close();
 });
 

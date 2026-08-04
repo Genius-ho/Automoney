@@ -10,6 +10,7 @@ const SPEEDGO_HOME_URL = 'https://domemedb.domeggook.com/index/';
 const MAX_RESPONSE_BYTES = 1024 * 1024;
 const MAX_IMAGE_BYTES = 25 * 1024 * 1024;
 const SUBMISSION_TIMEOUT_MS = 15_000;
+const TRANSFER_UI_TIMEOUT_MS = 5_000;
 const IDENTIFIER_MARKER = /originProductNo|channelProductNo|원상품\s*번호|채널상품\s*번호/i;
 const RELEVANT_RESPONSE_URL = /speedgo|naver|smartstore|register|registration|product/i;
 const SUPPORTED_IMAGE_TYPES = new Map([
@@ -286,6 +287,23 @@ async function waitForSupplierSearchResults(page) {
   if (typeof page.waitForTimeout === 'function') await page.waitForTimeout(100);
 }
 
+async function waitForExactTransferButton(page) {
+  const exactCandidate = SPEEDGO_SELECTORS.transferButton[0];
+  try {
+    let transfer = page.locator(exactCandidate.value);
+    if (typeof transfer.first === 'function') transfer = transfer.first();
+    await transfer.waitFor({ state: 'visible', timeout: TRANSFER_UI_TIMEOUT_MS });
+    return transfer;
+  } catch (error) {
+    throw speedgoError(
+      'SPEEDGO_TRANSFER_UI_NOT_FOUND',
+      'The exact Speedgo product transfer action is unavailable',
+      page,
+      { selectorName: 'transferButton' },
+    );
+  }
+}
+
 async function visibleLocators(locator) {
   const count = typeof locator.count === 'function' ? await locator.count() : 1;
   const visible = [];
@@ -434,13 +452,7 @@ export function createSpeedgoBrowser({
           throw speedgoError('SPEEDGO_AMBIGUOUS_PRODUCT', 'More than one matching Speedgo supplier product card trigger was visible', page);
         }
         await cardTriggers[0].evaluate((element) => element.click());
-        let transfer;
-        try {
-          transfer = await findFirstVisible(page, 'transferButton', SPEEDGO_SELECTORS.transferButton);
-        } catch (error) {
-          throw keepCodeOrMap(error, 'SPEEDGO_TRANSFER_UI_NOT_FOUND', 'The exact Speedgo product transfer action is unavailable', page);
-        }
-        if (typeof transfer.waitFor === 'function') await transfer.waitFor({ state: 'visible' });
+        await waitForExactTransferButton(page);
         return true;
       } catch (error) {
         if (error?.code === 'SPEEDGO_AMBIGUOUS_PRODUCT' || error?.code === 'SPEEDGO_TRANSFER_UI_NOT_FOUND') throw error;
