@@ -97,6 +97,39 @@ export const SPEEDGO_SELECTORS = Object.freeze({
   transferButton: [
     { kind: 'css', value: '.main_cont_btn1[onclick*="speedGoSend("]' },
   ],
+  popupProductForm: [
+    { kind: 'css', value: '#mkForm' },
+  ],
+  liveMarketCheckboxes: [
+    { kind: 'css', value: '#mkForm input[type="checkbox"][id^="we"]' },
+  ],
+  liveProductNameInput: [
+    { kind: 'css', value: '#ss_title' },
+  ],
+  liveRateInput: [
+    { kind: 'css', value: '#ss_rate' },
+  ],
+  liveFeeInput: [
+    { kind: 'css', value: '#ss_fee' },
+  ],
+  liveAddPriceInput: [
+    { kind: 'css', value: '#ss_addPrice' },
+  ],
+  liveDeliveryPriceInput: [
+    { kind: 'css', value: '#ss_delPrice' },
+  ],
+  liveSellerDiscountInput: [
+    { kind: 'css', value: '#ss_sellerDiscount' },
+  ],
+  livePriceOutputs: [
+    { kind: 'css', value: '#ss_storePrice' },
+    { kind: 'css', value: '#ss_disPrice' },
+    { kind: 'css', value: '#ss_realPrice' },
+    { kind: 'css', value: '#ss_discountPrice' },
+  ],
+  liveFinalSubmit: [
+    { kind: 'css', value: '#sendBtn button.cont_btn1[onclick*="goProduct("]' },
+  ],
   naverMarket: [
     { kind: 'css', value: 'input[name*="naver" i], input[value*="naver" i]' },
     { kind: 'role', role: 'checkbox', name: /^네이버\s*스마트스토어$/ },

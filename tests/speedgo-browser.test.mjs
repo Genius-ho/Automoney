@@ -29,6 +29,18 @@ function fakeBrowserHarness({
   globalSpeedgoLink = true,
   globalDataActionControl = false,
   successUrlTransition,
+  popupFrameAvailable = true,
+  popupFrameUrlDelayTicks = 0,
+  popupFormDelayTicks = 0,
+  popupFormAction = 'mkt_marketIng.php',
+  popupBasePrice = 9500,
+  popupPrecheckedMarkets = ['we1'],
+  popupHiddenPriceOverride = null,
+  popupVisiblePriceText = null,
+  popupSuccessText = '',
+  popupResultLinks = [],
+  popupSuccessUrlTransition = false,
+  popupExactSubmitAvailable = true,
 } = {}) {
   const responseListeners = new Set();
   const values = new Map();
@@ -41,11 +53,35 @@ function fakeBrowserHarness({
   let cardActivated = false;
   let cardTransferReadyAt = 0;
   let searchSubmitted = false;
+  let popupStarted = false;
+  let popupTicks = 0;
   const searchWaiters = [];
+  const popupValues = new Map();
+  const checkedMarkets = new Set(popupPrecheckedMarkets);
+  const popupChangeEvents = [];
+  const popupEvaluations = [];
+  const popupEvaluationResults = [];
   const hasSuccessUrlTransition = successUrlTransition ?? Boolean(successText);
   const responsesAfterSubmit = submitResponses || (submitResponse
     ? [{ response: submitResponse, delayMs: 0 }]
     : []);
+
+  const popupFormReady = () => popupStarted && popupTicks >= popupFormDelayTicks;
+  const popupFrameUrl = () => popupStarted && popupTicks >= popupFrameUrlDelayTicks
+    ? 'https://speedgo.domeggook.com/popup_market/popup_setProduct.php?itemNo=53209521&mode=send'
+    : 'https://speedgo.domeggook.com/popup_market/popup_trans.php?itemNo=53209521';
+  const updatePopupPrices = () => {
+    const rate = Number(popupValues.get('ss_rate'));
+    const fee = Number(popupValues.get('ss_fee'));
+    const add = Number(popupValues.get('ss_addPrice'));
+    const delivery = Number(popupValues.get('ss_delPrice'));
+    const discount = Number(popupValues.get('ss_sellerDiscount'));
+    if (![rate, fee, add, delivery, discount].every(Number.isFinite)) return;
+    const computed = popupBasePrice * rate + fee + add + delivery - discount;
+    for (const id of ['ss_storePrice', 'ss_disPrice', 'ss_realPrice', 'ss_discountPrice']) {
+      popupValues.set(id, String(popupHiddenPriceOverride ?? computed));
+    }
+  };
 
   const classify = ({ css, role, name, text, label }) => {
     const semanticText = String(name?.source || name || text?.source || text || label?.source || label || '');
@@ -54,6 +90,19 @@ function fakeBrowserHarness({
     if (css === '#search_list button[type="submit"]') return 'searchSubmit';
     if (css === '.bane_brd1[onclick*="itemInfo("]') return 'cardTrigger';
     if (css === '.main_cont_btn1[onclick*="speedGoSend("]') return 'cardTransfer';
+    if (css === '#mkForm') return 'popupForm';
+    if (css === '#mkForm input[type="checkbox"][id^="we"]') return 'popupMarkets';
+    if (css === '#ss_title') return 'ss_title';
+    if (css === '#ss_rate') return 'ss_rate';
+    if (css === '#ss_fee') return 'ss_fee';
+    if (css === '#ss_addPrice') return 'ss_addPrice';
+    if (css === '#ss_delPrice') return 'ss_delPrice';
+    if (css === '#ss_sellerDiscount') return 'ss_sellerDiscount';
+    if (css === '#ss_storePrice') return 'ss_storePrice';
+    if (css === '#ss_disPrice') return 'ss_disPrice';
+    if (css === '#ss_realPrice') return 'ss_realPrice';
+    if (css === '#ss_discountPrice') return 'ss_discountPrice';
+    if (css === '#sendBtn button.cont_btn1[onclick*="goProduct("]') return 'popupSubmit';
     if (css === '[data-action="speedgo-transfer"], [data-action*="speedgo" i]') return 'globalDataAction';
     if (css === 'a[href*="speedgo" i]') return 'globalSpeedgo';
     if (css === 'input[name="ss"]' || semanticText.includes('검색')) return 'search';
@@ -86,26 +135,46 @@ function fakeBrowserHarness({
     if (concept === 'login') return authenticated;
     if (concept === 'success') return Boolean(successText);
     if (concept === 'transfer') return semanticTransferAvailable;
+    if (concept === 'popupForm') return popupFormReady();
+    if (concept === 'popupMarkets' || concept.startsWith('ss_')) return popupFormReady();
+    if (concept === 'popupSubmit') return popupFormReady() && popupExactSubmitAvailable;
     return ['search', 'naver', 'productName', 'salePrice', 'deliveryFee', 'detailContent', 'mainImage', 'detailImage', 'addOption', 'optionGroup', 'optionName', 'optionPrice', 'optionStock', 'submit', 'links'].includes(concept);
   };
 
-  const makeLocator = (descriptor, item = null, fixedIndex = undefined, invalid = false) => {
+  const makeLocator = (descriptor, item = null, fixedIndex = undefined, invalid = false, scope = 'page') => {
     const concept = classify(descriptor);
+    const marketId = concept === 'popupMarkets'
+      ? (item || ['we1', 'we2', 'we9', 'we10'][fixedIndex])
+      : null;
     const valueKey = fixedIndex === undefined ? concept : `${concept}:${fixedIndex}`;
     const locator = {
       concept,
-      first() { return makeLocator(descriptor, item, fixedIndex ?? 0, invalid); },
+      first() { return makeLocator(descriptor, item, fixedIndex ?? 0, invalid, scope); },
       nth(index) {
-        if (concept === 'links') return makeLocator(descriptor, resultLinks[index]);
-        if (fixedIndex !== undefined) return makeLocator(descriptor, item, fixedIndex, invalid || index !== 0);
-        return makeLocator(descriptor, item, index);
+        if (concept === 'links') {
+          const links = scope === 'popup' ? popupResultLinks : resultLinks;
+          return makeLocator(descriptor, links[index], index, false, scope);
+        }
+        if (concept === 'popupMarkets') {
+          return makeLocator(descriptor, ['we1', 'we2', 'we9', 'we10'][index], index, false, scope);
+        }
+        if (fixedIndex !== undefined) return makeLocator(descriptor, item, fixedIndex, invalid || index !== 0, scope);
+        return makeLocator(descriptor, item, index, false, scope);
       },
       count: async () => concept === 'links'
-        ? resultLinks.length
+        ? (scope === 'popup' ? popupResultLinks.length : resultLinks.length)
+        : concept === 'popupMarkets'
+          ? 4
+          : concept === 'popupForm'
+            ? (popupFormReady() ? 1 : 0)
         : ['optionGroup', 'optionName', 'optionPrice', 'optionStock'].includes(concept)
           ? 2
           : 1,
-      isVisible: async () => !invalid && visible(concept),
+      isVisible: async () => !invalid && (
+        concept === 'success' && scope === 'popup'
+          ? Boolean(popupSuccessText)
+          : visible(concept)
+      ),
       waitFor: async ({ timeout = 0 } = {}) => {
         const deadline = Date.now() + timeout;
         while (invalid || !visible(concept)) {
@@ -120,8 +189,9 @@ function fakeBrowserHarness({
           calls.push(`fillAttempt:${concept}:${value}`);
           throw new Error('Element is not actionable because it is hidden');
         }
-        calls.push(`fill:${concept}:${value}`);
-        values.set(valueKey, String(value));
+        calls.push(scope === 'popup' ? `fill:popup:${concept}:${value}` : `fill:${concept}:${value}`);
+        if (scope === 'popup') popupValues.set(concept, String(value));
+        else values.set(valueKey, String(value));
       },
       evaluate: async (_callback, value) => {
         calls.push(`evaluate:${concept}:${value}`);
@@ -139,9 +209,19 @@ function fakeBrowserHarness({
       },
       inputValue: async () => {
         if (formReadbackMismatch && concept === 'productName') return 'wrong value';
+        if (scope === 'popup') return popupValues.get(concept) || '';
         return values.get(valueKey) || '';
       },
-      textContent: async () => concept === 'success' ? successText : values.get(valueKey) || '',
+      textContent: async () => {
+        if (concept === 'success') return scope === 'popup' ? popupSuccessText : successText;
+        return scope === 'popup' ? popupValues.get(concept) || '' : values.get(valueKey) || '';
+      },
+      innerText: async () => {
+        if (concept !== 'popupForm') return '';
+        if (popupVisiblePriceText !== null) return popupVisiblePriceText;
+        const target = popupValues.get('ss_realPrice');
+        return target ? `판매가 ${Number(target).toLocaleString('ko-KR')}원` : '';
+      },
       setInputFiles: async (paths) => {
         const files = Array.isArray(paths) ? paths : [paths];
         uploadedFiles.set(concept, files);
@@ -153,7 +233,7 @@ function fakeBrowserHarness({
         values.set(valueKey, firstName ? `C:\\fakepath\\${firstName}` : '');
       },
       click: async () => {
-        calls.push(`click:${concept}`);
+        calls.push(scope === 'popup' ? `click:popup:${concept}` : `click:${concept}`);
         if (concept === 'cardTrigger') {
           if (cardTriggerPointerIntercepted) throw new Error('pointer event intercepted by hover overlay');
           cardActivated = true;
@@ -174,11 +254,48 @@ function fakeBrowserHarness({
             else emit();
           }
         }
+        if (concept === 'cardTransfer') popupStarted = true;
+        if (concept === 'popupSubmit') {
+          submitClicks += 1;
+          if (submitError) throw submitError;
+          for (const { response, delayMs = 0 } of responsesAfterSubmit) {
+            const emit = () => {
+              for (const listener of responseListeners) listener(response);
+            };
+            if (delayMs > 0) setTimeout(emit, delayMs);
+            else emit();
+          }
+        }
       },
-      check: async () => calls.push(`check:${concept}`),
-      isChecked: async () => false,
+      check: async () => {
+        if (concept === 'popupMarkets') {
+          calls.push(`check:popupMarket:${marketId}`);
+          checkedMarkets.add(marketId);
+        } else {
+          calls.push(`check:${concept}`);
+        }
+      },
+      uncheck: async () => {
+        if (concept === 'popupMarkets') {
+          calls.push(`uncheck:popupMarket:${marketId}`);
+          checkedMarkets.delete(marketId);
+        } else {
+          calls.push(`uncheck:${concept}`);
+        }
+      },
+      isChecked: async () => concept === 'popupMarkets' ? checkedMarkets.has(marketId) : false,
+      dispatchEvent: async (eventName) => {
+        calls.push(`event:${eventName}:popup:${concept}`);
+        popupChangeEvents.push(concept);
+        if (eventName === 'change') updatePopupPrices();
+      },
       press: async (key) => calls.push(`press:${concept}:${key}`),
-      getAttribute: async (name) => name === 'href' ? item : null,
+      getAttribute: async (name) => {
+        if (name === 'id' && concept === 'popupMarkets') return marketId;
+        if (name === 'action' && concept === 'popupForm') return popupFormAction;
+        if (name === 'href') return item;
+        return null;
+      },
     };
     return locator;
   };
@@ -241,8 +358,28 @@ function fakeBrowserHarness({
       }
       if (!hasSuccessUrlTransition) throw new Error('no success transition');
     },
-    waitForTimeout: async () => {},
+    waitForTimeout: async () => { popupTicks += 1; },
+    frames: () => popupFrameAvailable && popupStarted ? [popupFrame] : [],
     screenshot: async ({ path }) => calls.push(`screenshot:${path}`),
+  };
+
+  const popupFrame = {
+    url: () => popupSuccessUrlTransition
+      ? 'https://speedgo.domeggook.com/popup_market/success.php?originProductNo=777&channelProductNo=888'
+      : popupFrameUrl(),
+    locator: (css) => makeLocator({ css }, null, undefined, false, 'popup'),
+    getByRole: (role, { name } = {}) => makeLocator({ role, name }, null, undefined, false, 'popup'),
+    getByText: (text) => makeLocator({ text }, null, undefined, false, 'popup'),
+    getByLabel: (label) => makeLocator({ label }, null, undefined, false, 'popup'),
+    evaluate: async (callback) => {
+      popupEvaluations.push(String(callback));
+      popupEvaluationResults.push(popupBasePrice);
+      return popupBasePrice;
+    },
+    waitForTimeout: async () => { popupTicks += 1; },
+    waitForURL: async () => {
+      if (!popupSuccessUrlTransition) throw new Error('no popup success transition');
+    },
   };
 
   const context = {
@@ -267,6 +404,12 @@ function fakeBrowserHarness({
     chromium,
     calls,
     uploadedFiles,
+    popupValues,
+    popupChangeEvents,
+    popupEvaluations,
+    popupEvaluationResults,
+    get popupTicks() { return popupTicks; },
+    get checkedMarkets() { return [...checkedMarkets].sort(); },
     get submitClicks() { return submitClicks; },
     get cookiesAdded() { return cookiesAdded; },
     get storageStatePath() { return storageStatePath; },
@@ -306,6 +449,12 @@ function jsonResponse(value, { url = 'https://domemedb.domeggook.com/api/speedgo
     },
     get textReads() { return textReads; },
   };
+}
+
+async function openLivePopup(browser) {
+  await browser.open();
+  await browser.findSupplierProduct({ supplierProductNo: '49168396' });
+  await browser.openSpeedgoTransfer();
 }
 
 test('extractNaverRegistrationIds finds ids in nested response JSON', () => {
@@ -541,6 +690,84 @@ test('openSpeedgoTransfer does not use a broad data-action control when the exac
   await browser.close();
 });
 
+test('openSpeedgoTransfer waits for the delayed exact popup frame and form readiness', async (t) => {
+  const harness = fakeBrowserHarness({
+    successText: '',
+    popupFrameUrlDelayTicks: 2,
+    popupFormDelayTicks: 4,
+    popupPrecheckedMarkets: [],
+  });
+  const browser = createSpeedgoBrowser({ chromiumImpl: harness.chromium, rootDir: 'C:/repo' });
+  t.after(() => browser.close());
+
+  await openLivePopup(browser);
+  await browser.selectNaverMarket();
+
+  assert.equal(harness.calls.filter((call) => call === 'click:cardTransfer').length, 1);
+  assert.equal(harness.calls.filter((call) => call === 'check:popupMarket:we1').length, 1);
+  assert.deepEqual(harness.checkedMarkets, ['we1']);
+});
+
+test('openSpeedgoTransfer fails safely when the exact popup form never becomes ready', async (t) => {
+  const harness = fakeBrowserHarness({
+    successText: '',
+    popupFrameAvailable: false,
+  });
+  const browser = createSpeedgoBrowser({ chromiumImpl: harness.chromium, rootDir: 'C:/repo' });
+  t.after(() => browser.close());
+  await browser.open();
+  await browser.findSupplierProduct({ supplierProductNo: '49168396' });
+
+  await assert.rejects(browser.openSpeedgoTransfer(), (error) => {
+    assert.equal(error.code, 'SPEEDGO_TRANSFER_UI_NOT_FOUND');
+    assert.equal(error.selectorName, 'popupProductForm');
+    assert.match(error.url, /\/index\/item\/supplyList\.php/);
+    return true;
+  });
+
+  assert.equal(harness.calls.filter((call) => call === 'click:cardTransfer').length, 1);
+  assert.equal(harness.submitClicks, 0);
+  assert.equal(harness.popupTicks, 50);
+});
+
+test('openSpeedgoTransfer rejects a popup frame whose form action is not mkt_marketIng.php', async (t) => {
+  const harness = fakeBrowserHarness({ popupFormAction: 'unexpected.php' });
+  const browser = createSpeedgoBrowser({ chromiumImpl: harness.chromium, rootDir: 'C:/repo' });
+  t.after(() => browser.close());
+  await browser.open();
+  await browser.findSupplierProduct({ supplierProductNo: '49168396' });
+
+  await assert.rejects(browser.openSpeedgoTransfer(), {
+    code: 'SPEEDGO_TRANSFER_UI_NOT_FOUND',
+    selectorName: 'popupProductForm',
+  });
+  assert.equal(harness.calls.filter((call) => call === 'click:cardTransfer').length, 1);
+  assert.equal(harness.submitClicks, 0);
+});
+
+test('selectNaverMarket leaves exactly we1 checked through checkbox UI actions', async (t) => {
+  const harness = fakeBrowserHarness({
+    popupPrecheckedMarkets: ['we2', 'we9', 'we10'],
+  });
+  const browser = createSpeedgoBrowser({ chromiumImpl: harness.chromium, rootDir: 'C:/repo' });
+  t.after(() => browser.close());
+  await openLivePopup(browser);
+
+  await browser.selectNaverMarket();
+
+  assert.deepEqual(harness.checkedMarkets, ['we1']);
+  assert.deepEqual(
+    harness.calls.filter((call) => /^(?:uncheck|check):popupMarket:/.test(String(call))),
+    [
+      'uncheck:popupMarket:we2',
+      'uncheck:popupMarket:we9',
+      'uncheck:popupMarket:we10',
+      'check:popupMarket:we1',
+    ],
+  );
+  assert.equal(harness.submitClicks, 0);
+});
+
 test('transfer and market methods expose stable SPEEDGO_TRANSFER_UI_NOT_FOUND errors', async () => {
   const harness = fakeBrowserHarness();
   const browser = createSpeedgoBrowser({ chromiumImpl: harness.chromium, rootDir: 'C:/repo' });
@@ -711,6 +938,231 @@ test('fillNaverForm addresses every option row from the unscoped locator collect
 
   assert.ok(harness.calls.includes('fill:optionName:검정'));
   assert.ok(harness.calls.includes('fill:optionName:흰색'));
+});
+
+test('fillNaverForm uses literal base 9500 and target 39900 in the exact live popup controls', async (t) => {
+  let imageFetches = 0;
+  const harness = fakeBrowserHarness({
+    popupBasePrice: 9500,
+    popupVisiblePriceText: '판매가 39,900원',
+  });
+  const browser = createSpeedgoBrowser({
+    chromiumImpl: harness.chromium,
+    rootDir: 'C:/repo',
+    fetchImpl: async () => {
+      imageFetches += 1;
+      throw new Error('live popup path must not fetch images');
+    },
+  });
+  t.after(() => browser.close());
+  await openLivePopup(browser);
+
+  await browser.fillNaverForm({
+    productName: '드래프트 119 상품',
+    salePrice: 39900,
+    mainImageUrl: 'https://images.test/main.jpg',
+    detailImageUrls: ['https://images.test/detail.jpg'],
+    detailContent: '',
+    options: [{ groupName: '색상', optionName: '검정', additionalPrice: 0, stockQuantity: 10 }],
+  });
+
+  assert.equal(imageFetches, 0);
+  assert.deepEqual(harness.popupEvaluationResults, [9500]);
+  assert.match(harness.popupEvaluations[0], /globalThis\.a/);
+  assert.equal(harness.uploadedFiles.size, 0);
+  assert.equal(harness.calls.some((call) => String(call).startsWith('files:')), false);
+  assert.equal(harness.calls.some((call) => /^fill:(?:detailContent|option)/.test(String(call))), false);
+  assert.equal(harness.calls.includes('click:addOption'), false);
+  assert.deepEqual(
+    Object.fromEntries([
+      'ss_title',
+      'ss_rate',
+      'ss_fee',
+      'ss_addPrice',
+      'ss_delPrice',
+      'ss_sellerDiscount',
+      'ss_storePrice',
+      'ss_disPrice',
+      'ss_realPrice',
+      'ss_discountPrice',
+    ].map((key) => [key, harness.popupValues.get(key)])),
+    {
+      ss_title: '드래프트 119 상품',
+      ss_rate: '1',
+      ss_fee: '0',
+      ss_addPrice: '30400',
+      ss_delPrice: '0',
+      ss_sellerDiscount: '0',
+      ss_storePrice: '39900',
+      ss_disPrice: '39900',
+      ss_realPrice: '39900',
+      ss_discountPrice: '39900',
+    },
+  );
+  assert.deepEqual(harness.popupChangeEvents, [
+    'ss_title',
+    'ss_rate',
+    'ss_fee',
+    'ss_addPrice',
+    'ss_delPrice',
+    'ss_sellerDiscount',
+  ]);
+  assert.deepEqual(
+    harness.calls.filter((call) => String(call).startsWith('fill:popup:ss_')),
+    [
+      'fill:popup:ss_title:드래프트 119 상품',
+      'fill:popup:ss_rate:1',
+      'fill:popup:ss_fee:0',
+      'fill:popup:ss_addPrice:30400',
+      'fill:popup:ss_delPrice:0',
+      'fill:popup:ss_sellerDiscount:0',
+    ],
+  );
+});
+
+test('fillNaverForm rejects invalid live base and target prices without guessing or clamping', async (t) => {
+  for (const [name, popupBasePrice, salePrice, selectorName] of [
+    ['non-finite base', Number.NaN, 39900, 'sourceBasePrice'],
+    ['zero base', 0, 39900, 'sourceBasePrice'],
+    ['negative base', -1, 39900, 'sourceBasePrice'],
+    ['non-finite target', 9500, Number.POSITIVE_INFINITY, 'salePriceInput'],
+    ['target below base', 9500, 9499, 'salePriceInput'],
+  ]) {
+    await t.test(name, async () => {
+      const harness = fakeBrowserHarness({ popupBasePrice });
+      const browser = createSpeedgoBrowser({ chromiumImpl: harness.chromium, rootDir: 'C:/repo' });
+      await openLivePopup(browser);
+
+      await assert.rejects(
+        browser.fillNaverForm({ productName: '드래프트 119 상품', salePrice }),
+        { code: 'SPEEDGO_FORM_VALIDATION_FAILED', selectorName },
+      );
+
+      assert.equal(harness.calls.some((call) => String(call).startsWith('fill:popup:ss_')), false);
+      assert.equal(harness.submitClicks, 0);
+      await browser.close();
+    });
+  }
+});
+
+test('fillNaverForm rejects hidden or visible popup price mismatches', async (t) => {
+  for (const [name, options, selectorName] of [
+    ['hidden outputs', { popupHiddenPriceOverride: 39899 }, 'priceOutputs'],
+    ['visible price text', { popupVisiblePriceText: '판매가 39,899원' }, 'visiblePriceText'],
+    ['visible price missing comma', { popupVisiblePriceText: '판매가 39900원' }, 'visiblePriceText'],
+    ['visible price missing won suffix', { popupVisiblePriceText: '판매가 39,900' }, 'visiblePriceText'],
+  ]) {
+    await t.test(name, async () => {
+      const harness = fakeBrowserHarness(options);
+      const browser = createSpeedgoBrowser({ chromiumImpl: harness.chromium, rootDir: 'C:/repo' });
+      await openLivePopup(browser);
+
+      await assert.rejects(
+        browser.fillNaverForm({ productName: '드래프트 119 상품', salePrice: 39900 }),
+        { code: 'SPEEDGO_FORM_VALIDATION_FAILED', selectorName },
+      );
+
+      assert.equal(harness.submitClicks, 0);
+      await browser.close();
+    });
+  }
+});
+
+test('live popup preview finds only the exact final control and performs zero clicks', async (t) => {
+  const harness = fakeBrowserHarness({ globalDataActionControl: true });
+  const browser = createSpeedgoBrowser({ chromiumImpl: harness.chromium, rootDir: 'C:/repo' });
+  t.after(() => browser.close());
+  await openLivePopup(browser);
+
+  const preview = await browser.preview();
+
+  assert.equal(preview.ready, true);
+  assert.match(preview.url, /popup_setProduct\.php/);
+  assert.equal(harness.submitClicks, 0);
+  assert.equal(harness.calls.some((call) => String(call).startsWith('click:popup:popupSubmit')), false);
+  assert.equal(harness.calls.includes('click:globalDataAction'), false);
+});
+
+test('live popup preview rejects broad final controls when the exact control is absent', async (t) => {
+  const harness = fakeBrowserHarness({ popupExactSubmitAvailable: false });
+  const browser = createSpeedgoBrowser({ chromiumImpl: harness.chromium, rootDir: 'C:/repo' });
+  t.after(() => browser.close());
+  await openLivePopup(browser);
+
+  await assert.rejects(browser.preview(), {
+    code: 'SPEEDGO_SELECTOR_NOT_FOUND',
+    selectorName: 'finalSubmit',
+  });
+
+  assert.equal(harness.submitClicks, 0);
+  assert.equal(harness.calls.some((call) => String(call).startsWith('click:popup:')), false);
+});
+
+test('live popup submit clicks the exact final control once and keeps top-page response capture', async (t) => {
+  const response = jsonResponse({ data: { originProductNo: 777, channelProducts: [{ channelProductNo: 888 }] } });
+  const harness = fakeBrowserHarness({
+    successText: '',
+    submitResponse: response,
+    globalDataActionControl: true,
+  });
+  const browser = createSpeedgoBrowser({ chromiumImpl: harness.chromium, rootDir: 'C:/repo' });
+  t.after(() => browser.close());
+  await openLivePopup(browser);
+
+  const result = await browser.submitAndResolveIds();
+
+  assert.deepEqual(result, { originProductNo: '777', channelProductNo: '888' });
+  assert.equal(harness.submitClicks, 1);
+  assert.equal(harness.calls.filter((call) => call === 'click:popup:popupSubmit').length, 1);
+  assert.equal(harness.calls.includes('click:globalDataAction'), false);
+  assert.equal(response.textReads, 1);
+});
+
+test('live popup submit rejects broad final controls when the exact control is absent', async (t) => {
+  const harness = fakeBrowserHarness({ popupExactSubmitAvailable: false });
+  const browser = createSpeedgoBrowser({ chromiumImpl: harness.chromium, rootDir: 'C:/repo' });
+  t.after(() => browser.close());
+  await openLivePopup(browser);
+
+  await assert.rejects(browser.submitAndResolveIds(), {
+    code: 'SPEEDGO_SUBMIT_FAILED',
+    selectorName: 'finalSubmit',
+  });
+
+  assert.equal(harness.submitClicks, 0);
+  assert.equal(harness.calls.some((call) => String(call).startsWith('click:popup:')), false);
+});
+
+test('live popup success and recovery inspect the active frame while screenshots stay on the top page', async (t) => {
+  const successHarness = fakeBrowserHarness({
+    successText: '',
+    successUrlTransition: false,
+    popupSuccessText: '상품 등록 완료 원상품번호: 777 / 채널상품번호: 888',
+  });
+  const successBrowser = createSpeedgoBrowser({ chromiumImpl: successHarness.chromium, rootDir: 'C:/repo' });
+  await openLivePopup(successBrowser);
+
+  assert.deepEqual(await successBrowser.submitAndResolveIds(), {
+    originProductNo: '777',
+    channelProductNo: '888',
+  });
+  await successBrowser.screenshot('C:/artifacts/live-popup.png');
+  assert.ok(successHarness.calls.includes('screenshot:C:/artifacts/live-popup.png'));
+  await successBrowser.close();
+
+  const recoveryHarness = fakeBrowserHarness({
+    successText: '',
+    popupResultLinks: ['https://sell.smartstore.naver.com/products/777?channelProductNo=888'],
+  });
+  const recoveryBrowser = createSpeedgoBrowser({ chromiumImpl: recoveryHarness.chromium, rootDir: 'C:/repo' });
+  t.after(() => recoveryBrowser.close());
+  await openLivePopup(recoveryBrowser);
+
+  assert.deepEqual(await recoveryBrowser.recoverRegistration({}), {
+    originProductNo: '777',
+    channelProductNo: '888',
+  });
+  assert.equal(recoveryHarness.submitClicks, 0);
 });
 
 test('browser preview never clicks the final submit candidate', async (t) => {

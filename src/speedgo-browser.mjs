@@ -11,6 +11,8 @@ const MAX_RESPONSE_BYTES = 1024 * 1024;
 const MAX_IMAGE_BYTES = 25 * 1024 * 1024;
 const SUBMISSION_TIMEOUT_MS = 15_000;
 const TRANSFER_UI_TIMEOUT_MS = 5_000;
+const TRANSFER_FRAME_POLL_MS = 100;
+const POPUP_PRODUCT_URL = /^https:\/\/speedgo\.domeggook\.com\/popup_market\/popup_setProduct\.php(?:\?|$)/i;
 const IDENTIFIER_MARKER = /originProductNo|channelProductNo|원상품\s*번호|채널상품\s*번호/i;
 const RELEVANT_RESPONSE_URL = /speedgo|naver|smartstore|register|registration|product/i;
 const SUPPORTED_IMAGE_TYPES = new Map([
@@ -304,6 +306,111 @@ async function waitForExactTransferButton(page) {
   }
 }
 
+async function waitForPopupProductForm(page) {
+  const attempts = Math.ceil(TRANSFER_UI_TIMEOUT_MS / TRANSFER_FRAME_POLL_MS) + 1;
+  for (let attempt = 0; attempt < attempts; attempt += 1) {
+    const frames = typeof page.frames === 'function' ? page.frames() : [];
+    for (const frame of frames) {
+      let frameUrl = '';
+      try {
+        frameUrl = frame.url();
+      } catch {
+        continue;
+      }
+      if (!POPUP_PRODUCT_URL.test(frameUrl)) continue;
+
+      try {
+        const form = frame.locator(SPEEDGO_SELECTORS.popupProductForm[0].value);
+        const count = typeof form.count === 'function' ? await form.count() : 1;
+        const visible = count > 0 && (typeof form.isVisible !== 'function' || await form.isVisible());
+        const action = visible && typeof form.getAttribute === 'function'
+          ? await form.getAttribute('action')
+          : null;
+        if (visible && action === 'mkt_marketIng.php') return frame;
+      } catch {
+        // The matching frame can exist before its form is ready; keep polling.
+      }
+    }
+
+    if (attempt === attempts - 1) break;
+    if (typeof page.waitForTimeout === 'function') await page.waitForTimeout(TRANSFER_FRAME_POLL_MS);
+    else await new Promise((resolve) => setTimeout(resolve, TRANSFER_FRAME_POLL_MS));
+  }
+
+  throw speedgoError(
+    'SPEEDGO_TRANSFER_UI_NOT_FOUND',
+    'The exact Speedgo popup product form did not become available',
+    page,
+    { selectorName: 'popupProductForm' },
+  );
+}
+
+async function fillWithChange(scope, selectorName, expected) {
+  const locator = await fillAndVerify(scope, selectorName, expected);
+  await locator.dispatchEvent('change');
+}
+
+async function fillLiveNaverForm(scope, page, input) {
+  const basePrice = Number(await scope.evaluate(() => Number(globalThis.a)));
+  if (!Number.isFinite(basePrice) || basePrice <= 0) {
+    throw speedgoError(
+      'SPEEDGO_FORM_VALIDATION_FAILED',
+      'The Speedgo source base price is not finite and positive',
+      page,
+      { selectorName: 'sourceBasePrice' },
+    );
+  }
+
+  const targetPrice = Number(input?.salePrice);
+  if (!Number.isFinite(targetPrice) || targetPrice < basePrice) {
+    throw speedgoError(
+      'SPEEDGO_FORM_VALIDATION_FAILED',
+      'The Naver target sale price is invalid for the Speedgo source price',
+      page,
+      { selectorName: 'salePriceInput' },
+    );
+  }
+
+  for (const [selectorName, value] of [
+    ['liveProductNameInput', input.productName],
+    ['liveRateInput', 1],
+    ['liveFeeInput', 0],
+    ['liveAddPriceInput', targetPrice - basePrice],
+    ['liveDeliveryPriceInput', 0],
+    ['liveSellerDiscountInput', 0],
+  ]) {
+    await fillWithChange(scope, selectorName, value);
+  }
+
+  for (const candidate of SPEEDGO_SELECTORS.livePriceOutputs) {
+    const output = await findFirstPresent(scope, 'priceOutputs', [candidate]);
+    if (comparableValue(await readLocatorValue(output)) !== comparableValue(targetPrice)) {
+      throw speedgoError(
+        'SPEEDGO_FORM_VALIDATION_FAILED',
+        'The Speedgo hidden price outputs did not match the target price',
+        page,
+        { selectorName: 'priceOutputs' },
+      );
+    }
+  }
+
+  const form = await findFirstVisible(
+    scope,
+    'popupProductForm',
+    SPEEDGO_SELECTORS.popupProductForm,
+  );
+  const visibleText = typeof form.innerText === 'function' ? await form.innerText() : '';
+  const expectedVisiblePrice = `${targetPrice.toLocaleString('en-US')}원`;
+  if (!visibleText.includes(expectedVisiblePrice)) {
+    throw speedgoError(
+      'SPEEDGO_FORM_VALIDATION_FAILED',
+      'The visible Speedgo price did not match the target price',
+      page,
+      { selectorName: 'visiblePriceText' },
+    );
+  }
+}
+
 async function visibleLocators(locator) {
   const count = typeof locator.count === 'function' ? await locator.count() : 1;
   const visible = [];
@@ -327,6 +434,7 @@ export function createSpeedgoBrowser({
 
   let context = null;
   let page = null;
+  let activeFormScope = null;
   let responseListener = null;
   let responseCaptureTail = Promise.resolve();
   const capturedResponses = [];
@@ -463,7 +571,9 @@ export function createSpeedgoBrowser({
     async openSpeedgoTransfer() {
       try {
         const transfer = await findFirstVisible(page, 'transferButton', SPEEDGO_SELECTORS.transferButton);
+        activeFormScope = null;
         await transfer.click();
+        activeFormScope = await waitForPopupProductForm(page);
         return true;
       } catch (error) {
         throw keepCodeOrMap(error, 'SPEEDGO_TRANSFER_UI_NOT_FOUND', 'The Speedgo transfer action is unavailable', page);
@@ -472,6 +582,45 @@ export function createSpeedgoBrowser({
 
     async selectNaverMarket() {
       try {
+        if (activeFormScope) {
+          const markets = activeFormScope.locator(SPEEDGO_SELECTORS.liveMarketCheckboxes[0].value);
+          const count = typeof markets.count === 'function' ? await markets.count() : 0;
+          let naverMarket = null;
+          for (let index = 0; index < count; index += 1) {
+            const market = markets.nth(index);
+            const id = await market.getAttribute('id');
+            if (id === 'we1') {
+              naverMarket = market;
+              continue;
+            }
+            if (await market.isChecked()) await market.uncheck();
+          }
+          if (!naverMarket) {
+            throw speedgoError(
+              'SPEEDGO_TRANSFER_UI_NOT_FOUND',
+              'The exact Naver Smartstore market checkbox is unavailable',
+              page,
+              { selectorName: 'naverMarket' },
+            );
+          }
+          if (!await naverMarket.isChecked()) await naverMarket.check();
+
+          const checkedIds = [];
+          for (let index = 0; index < count; index += 1) {
+            const market = markets.nth(index);
+            if (await market.isChecked()) checkedIds.push(await market.getAttribute('id'));
+          }
+          if (checkedIds.length !== 1 || checkedIds[0] !== 'we1') {
+            throw speedgoError(
+              'SPEEDGO_TRANSFER_UI_NOT_FOUND',
+              'The Speedgo market selection did not resolve to only Naver Smartstore',
+              page,
+              { selectorName: 'naverMarket' },
+            );
+          }
+          return true;
+        }
+
         const market = await findFirstVisible(page, 'naverMarket', SPEEDGO_SELECTORS.naverMarket);
         if (typeof market.check === 'function') {
           const checked = typeof market.isChecked === 'function' && await market.isChecked();
@@ -487,6 +636,11 @@ export function createSpeedgoBrowser({
 
     async fillNaverForm(input) {
       try {
+        if (activeFormScope) {
+          await fillLiveNaverForm(activeFormScope, page, input);
+          return true;
+        }
+
         const mainImage = await materializeImageInput(rootDir, input.mainImageUrl, {
           fetchImpl,
           kind: 'main',
@@ -537,14 +691,23 @@ export function createSpeedgoBrowser({
     },
 
     async preview() {
-      await findFirstVisible(page, 'finalSubmit', SPEEDGO_SELECTORS.finalSubmit);
-      return { ready: true, url: page.url() };
+      const scope = activeFormScope || page;
+      const selectors = activeFormScope
+        ? SPEEDGO_SELECTORS.liveFinalSubmit
+        : SPEEDGO_SELECTORS.finalSubmit;
+      await findFirstVisible(scope, 'finalSubmit', selectors);
+      return { ready: true, url: scope.url() };
     },
 
     async submitAndResolveIds() {
+      const scope = activeFormScope || page;
       let submit;
       try {
-        submit = await findFirstVisible(page, 'finalSubmit', SPEEDGO_SELECTORS.finalSubmit);
+        submit = await findFirstVisible(
+          scope,
+          'finalSubmit',
+          activeFormScope ? SPEEDGO_SELECTORS.liveFinalSubmit : SPEEDGO_SELECTORS.finalSubmit,
+        );
       } catch (error) {
         throw keepCodeOrMap(error, 'SPEEDGO_SUBMIT_FAILED', 'The final Speedgo submit control is unavailable', page);
       }
@@ -558,8 +721,8 @@ export function createSpeedgoBrowser({
       const timeoutOutcome = new Promise((_, reject) => {
         timeoutHandle = setTimeout(() => reject(new Error('Speedgo submission outcome timed out')), SUBMISSION_TIMEOUT_MS);
       });
-      const urlOutcome = typeof page.waitForURL === 'function'
-        ? page.waitForURL(/(?:speedgo|naver|smartstore).*(?:result|complete|success)|(?:result|complete|success).*(?:speedgo|naver|smartstore)/i, { timeout: SUBMISSION_TIMEOUT_MS })
+      const urlOutcome = typeof scope.waitForURL === 'function'
+        ? scope.waitForURL(/(?:speedgo|naver|smartstore).*(?:result|complete|success)|(?:result|complete|success).*(?:speedgo|naver|smartstore)/i, { timeout: SUBMISSION_TIMEOUT_MS })
           .catch(() => new Promise(() => {}))
         : new Promise(() => {});
 
@@ -572,7 +735,7 @@ export function createSpeedgoBrowser({
       }
 
       try {
-        const successOutcome = waitForSuccessEvidence(page, () => outcomeSettled)
+        const successOutcome = waitForSuccessEvidence(scope, () => outcomeSettled)
           .catch(() => new Promise(() => {}));
         await Promise.race([responseOutcome, urlOutcome, successOutcome, timeoutOutcome]);
       } catch (error) {
@@ -598,35 +761,36 @@ export function createSpeedgoBrowser({
         if (hasVerifiedOriginProductNo(combinedIds)) return combinedIds;
       }
 
-      const urlIds = extractNaverRegistrationIds(page.url());
+      const urlIds = extractNaverRegistrationIds(scope.url());
       if (hasVerifiedOriginProductNo(urlIds)) return urlIds;
 
       try {
-        const success = await findFirstVisible(page, 'successEvidence', SPEEDGO_SELECTORS.successEvidence);
+        const success = await findFirstVisible(scope, 'successEvidence', SPEEDGO_SELECTORS.successEvidence);
         const successIds = extractNaverRegistrationIds(await success.textContent());
         if (hasVerifiedOriginProductNo(successIds)) return successIds;
       } catch {
         // A URL transition can be the success evidence even without a status node.
       }
 
-      const linkIds = await collectResultLinkIds(page);
+      const linkIds = await collectResultLinkIds(scope);
       if (hasVerifiedOriginProductNo(linkIds)) return linkIds;
       throw speedgoError('UNRESOLVED_EXTERNAL_RESULT', 'Speedgo appeared to submit but no Naver origin product number was verified', page);
     },
 
     async recoverRegistration() {
-      const urlIds = extractNaverRegistrationIds(page.url());
+      const scope = activeFormScope || page;
+      const urlIds = extractNaverRegistrationIds(scope.url());
       if (hasVerifiedOriginProductNo(urlIds)) return urlIds;
 
       try {
-        const success = await findFirstVisible(page, 'successEvidence', SPEEDGO_SELECTORS.successEvidence);
+        const success = await findFirstVisible(scope, 'successEvidence', SPEEDGO_SELECTORS.successEvidence);
         const successIds = extractNaverRegistrationIds(await success.textContent());
         if (hasVerifiedOriginProductNo(successIds)) return successIds;
       } catch {
         // Recovery also supports result pages that expose identifiers only in links.
       }
 
-      const linkIds = await collectResultLinkIds(page);
+      const linkIds = await collectResultLinkIds(scope);
       if (hasVerifiedOriginProductNo(linkIds)) return linkIds;
       throw speedgoError('UNRESOLVED_EXTERNAL_RESULT', 'No verified Naver origin product number was found during recovery', page);
     },
@@ -641,6 +805,7 @@ export function createSpeedgoBrowser({
       const closingPage = page;
       context = null;
       page = null;
+      activeFormScope = null;
       if (!closingContext) return;
 
       if (responseListener && typeof closingPage?.off === 'function') {
