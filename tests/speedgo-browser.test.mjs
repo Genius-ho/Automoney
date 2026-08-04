@@ -26,6 +26,7 @@ function fakeBrowserHarness({
   cardTransferAvailable = true,
   semanticTransferAvailable = true,
   globalSpeedgoLink = true,
+  globalDataActionControl = false,
   successUrlTransition,
 } = {}) {
   const responseListeners = new Set();
@@ -51,6 +52,7 @@ function fakeBrowserHarness({
     if (css === '#search_list button[type="submit"]') return 'searchSubmit';
     if (css === '.bane_brd1[onclick*="itemInfo("]') return 'cardTrigger';
     if (css === '.main_cont_btn1[onclick*="speedGoSend("]') return 'cardTransfer';
+    if (css === '[data-action="speedgo-transfer"], [data-action*="speedgo" i]') return 'globalDataAction';
     if (css === 'a[href*="speedgo" i]') return 'globalSpeedgo';
     if (css === 'input[name="ss"]' || semanticText.includes('검색')) return 'search';
     if (semanticText.includes('로그아웃')) return 'login';
@@ -77,6 +79,7 @@ function fakeBrowserHarness({
   const visible = (concept) => {
     if (['searchMode', 'searchSubmit', 'cardTrigger'].includes(concept)) return true;
     if (concept === 'globalSpeedgo') return globalSpeedgoLink;
+    if (concept === 'globalDataAction') return globalDataActionControl;
     if (concept === 'cardTransfer') return cardActivated && cardTransferAvailable;
     if (concept === 'login') return authenticated;
     if (concept === 'success') return Boolean(successText);
@@ -475,6 +478,39 @@ test('openSpeedgoTransfer does not use the global Speedgo link when the exact tr
 
   await assert.rejects(browser.openSpeedgoTransfer(), { code: 'SPEEDGO_TRANSFER_UI_NOT_FOUND' });
   assert.equal(harness.calls.includes('click:globalSpeedgo'), false);
+  await browser.close();
+});
+
+test('findSupplierProduct does not use a broad data-action control when the exact transfer control is absent', async () => {
+  const harness = fakeBrowserHarness({
+    cardTransferAvailable: false,
+    semanticTransferAvailable: false,
+    globalSpeedgoLink: false,
+    globalDataActionControl: true,
+  });
+  const browser = createSpeedgoBrowser({ chromiumImpl: harness.chromium, rootDir: 'C:/repo' });
+  await browser.open();
+
+  await assert.rejects(
+    browser.findSupplierProduct({ supplierProductNo: '49168396' }),
+    { code: 'SPEEDGO_TRANSFER_UI_NOT_FOUND' },
+  );
+  assert.equal(harness.calls.includes('click:globalDataAction'), false);
+  await browser.close();
+});
+
+test('openSpeedgoTransfer does not use a broad data-action control when the exact transfer control is absent', async () => {
+  const harness = fakeBrowserHarness({
+    cardTransferAvailable: false,
+    semanticTransferAvailable: false,
+    globalSpeedgoLink: false,
+    globalDataActionControl: true,
+  });
+  const browser = createSpeedgoBrowser({ chromiumImpl: harness.chromium, rootDir: 'C:/repo' });
+  await browser.open();
+
+  await assert.rejects(browser.openSpeedgoTransfer(), { code: 'SPEEDGO_TRANSFER_UI_NOT_FOUND' });
+  assert.equal(harness.calls.includes('click:globalDataAction'), false);
   await browser.close();
 });
 
