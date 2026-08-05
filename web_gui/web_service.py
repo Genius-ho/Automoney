@@ -195,11 +195,19 @@ class WebService:
             overridden: list[OrderIntent] = []
             for order in display_orders:
                 raw_price = self.runtime.order_price_overrides.get(order.client_order_id)
-                if raw_price is None:
+                raw_qty = self.runtime.order_quantity_overrides.get(order.client_order_id)
+                if raw_price is None and raw_qty is None:
                     overridden.append(order)
                     continue
-                price = _text_decimal(raw_price).quantize(Decimal("0.01"))
-                overridden.append(replace(order, limit_price=price, reason=order.reason + " · 수동 지정가"))
+                updates: dict[str, Any] = {}
+                notes: list[str] = []
+                if raw_price is not None:
+                    updates["limit_price"] = _text_decimal(raw_price).quantize(Decimal("0.01"))
+                    notes.append("수동 지정가")
+                if raw_qty is not None:
+                    updates["quantity"] = int(raw_qty)
+                    notes.append("수동 수량")
+                overridden.append(replace(order, reason=order.reason + " · " + "·".join(notes), **updates))
             display_orders = overridden
             orders = [
                 {

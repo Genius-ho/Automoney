@@ -52,6 +52,7 @@ class RuntimeStatus:
     broker_client_order_ids: dict[str, str] = field(default_factory=dict)
     broker_order_ids: dict[str, str] = field(default_factory=dict)
     order_price_overrides: dict[str, str] = field(default_factory=dict)
+    order_quantity_overrides: dict[str, str] = field(default_factory=dict)
     # Per-symbol dedup key (a trading-session date) for the once-per-day
     # auto-tick buy submission, gated by auto_order_delay_minutes after the
     # regular session opens.
@@ -121,6 +122,7 @@ def prune_order_tracking(
         len(status.broker_client_order_ids),
         len(status.broker_order_ids),
         len(status.order_price_overrides),
+        len(status.order_quantity_overrides),
     )
     status.active_order_ids = [item for item in status.active_order_ids if not stale(item, active_cutoff)]
     status.skipped_order_ids = [item for item in status.skipped_order_ids if not stale(item, active_cutoff)]
@@ -128,6 +130,7 @@ def prune_order_tracking(
         status.broker_client_order_ids,
         status.broker_order_ids,
         status.order_price_overrides,
+        status.order_quantity_overrides,
     ):
         for client_order_id in list(mapping):
             if stale(client_order_id, history_cutoff):
@@ -138,6 +141,7 @@ def prune_order_tracking(
         len(status.broker_client_order_ids),
         len(status.broker_order_ids),
         len(status.order_price_overrides),
+        len(status.order_quantity_overrides),
     )
     return before != after
 

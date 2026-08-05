@@ -174,6 +174,7 @@ class TradingWebService(WebService):
             for client_order_id in stale_ledger_ids:
                 self.runtime.custom_order_ledger.pop(client_order_id, None)
                 self.runtime.order_price_overrides.pop(client_order_id, None)
+                self.runtime.order_quantity_overrides.pop(client_order_id, None)
             self.runtime_store.save(self.runtime)
         unused = set(range(len(rows)))
         statuses: dict[str, str] = {}
@@ -847,6 +848,50 @@ class TradingWebService(WebService):
             allow_auto_reprice=False,
         )
         return {"retried": client_order_id, "price": str(normalized_price), **result}
+
+    def retry_failed_order_with_quantity(self, client_order_id: str, quantity: Any) -> dict[str, Any]:
+        """Change a failed strategy leg's quantity and submit it immediately.
+
+        Mirrors retry_failed_order_with_price(): a broker "quantity mismatch"
+        rejection (e.g. the plan's quantity no longer matches what's actually
+        available/held) can only be fixed by resubmitting with a different
+        quantity, which the automatic retry never does on its own.
+        """
+        client_order_id = str(client_order_id or "").strip()
+        symbol, order, status = self._retry_order_context(client_order_id)
+        if status == "UNSENT":
+            raise ValueError("미확인 주문은 기존 수량으로만 멱등 재시도할 수 있습니다. 먼저 토스 주문 상태를 확인하세요.")
+        if isinstance(quantity, bool):
+            raise ValueError("수량은 1 이상의 정수여야 합니다.")
+        try:
+            qty = int(quantity)
+        except (TypeError, ValueError):
+            raise ValueError("수량은 1 이상의 정수여야 합니다.")
+        if qty < 1:
+            raise ValueError("수량은 1 이상의 정수여야 합니다.")
+
+        self.runtime.order_quantity_overrides[client_order_id] = str(qty)
+        self.plan_cache[symbol] = [
+            replace(
+                item,
+                quantity=qty,
+                reason=item.reason + " · Telegram 수량 수정",
+            )
+            if item.client_order_id == client_order_id else item
+            for item in self.plan_cache[symbol]
+        ]
+        self.runtime.active_order_ids = [item for item in self.runtime.active_order_ids if item != client_order_id]
+        self.runtime.skipped_order_ids = [item for item in self.runtime.skipped_order_ids if item != client_order_id]
+        if status in {"REJECTED", "CANCELED"}:
+            self.runtime.broker_client_order_ids.pop(client_order_id, None)
+        self.runtime_store.save(self.runtime)
+        result = self.submit_orders(
+            symbol,
+            [client_order_id],
+            f"SUBMIT {symbol} 1",
+            allow_auto_reprice=False,
+        )
+        return {"retried": client_order_id, "quantity": qty, **result}
 
     def _submit_orders_unguarded(
         self,

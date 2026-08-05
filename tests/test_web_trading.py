@@ -794,6 +794,33 @@ class AutoTickTests(unittest.TestCase):
             self.assertEqual(result["confirmed"], 1)
             self.assertEqual(broker.open_orders[-1]["price"], "65.25")
 
+    def test_retry_failed_order_with_quantity_submits_the_changed_quantity(self):
+        with tempfile.TemporaryDirectory() as temp:
+            broker = LiveTradingBroker()
+            service = TradingWebService(Path(temp), broker_factory=lambda: broker)
+            service.plan({
+                "symbol": "TQQQ", "current_price": "84.5", "previous_close": "82",
+                "cash_usd": "5000", "position_qty": 8, "avg_cost": "75",
+                "t_value": "3", "base_buy_qty": 2, "mode": "GENERAL",
+            })
+            order = next(item for item in service.plan_cache["TQQQ"] if item.client_order_id.endswith("-take-profit"))
+            broker.closed_orders = [{
+                "orderId": "old-canceled", "symbol": "TQQQ", "side": "SELL",
+                "quantity": str(order.quantity), "price": str(order.limit_price), "status": "CANCELED",
+            }]
+            service.runtime.active_symbols.append("TQQQ")
+            service.runtime.known_symbols.append("TQQQ")
+            service.runtime.broker_order_ids[order.client_order_id] = "old-canceled"
+            service.runtime_store.save(service.runtime)
+            service.sync_orders("TQQQ")
+
+            result = service.retry_failed_order_with_quantity(order.client_order_id, 3)
+
+            self.assertEqual(result["retried"], order.client_order_id)
+            self.assertEqual(result["quantity"], 3)
+            self.assertEqual(result["confirmed"], 1)
+            self.assertEqual(broker.open_orders[-1]["quantity"], "3")
+
     def test_notify_flag_reports_confirmed_auto_submission(self):
         class Telegram:
             enabled = True

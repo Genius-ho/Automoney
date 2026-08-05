@@ -156,6 +156,62 @@ class TelegramNotifierTests(unittest.TestCase):
         self.assertEqual(engine.calls[0][1], {"client_order_id": client_order_id, "price": "65.25"})
         self.assertIn("가격 수정 후 재시도 접수 성공", notifier.messages[-1])
 
+    def test_qty_button_prompts_for_quantity_and_submits_changed_quantity(self):
+        class Engine:
+            runtime = SimpleNamespace(telegram_update_offset=0)
+
+            def __init__(self):
+                self.calls = []
+
+            def execute(self, command, payload, *, source, actor):
+                self.calls.append((command, payload, source, actor))
+                return {"retried": payload["client_order_id"], "confirmed": 1, "quantity": payload.get("quantity")}
+
+        class Notifier:
+            chat_id = "12345"
+            enabled = True
+
+            def __init__(self):
+                self.messages = []
+                self.markups = []
+                self.answered = []
+
+            def send_message(self, text, **kwargs):
+                self.messages.append(text)
+                self.markups.append(kwargs.get("reply_markup"))
+                return {"result": {"message_id": 900}}
+
+            def answer_callback_query(self, callback_query_id, text=None):
+                self.answered.append((callback_query_id, text))
+
+        engine = Engine()
+        notifier = Notifier()
+        loop = TelegramCommandLoop(engine, notifier)
+        client_order_id = "default-SOXL-20260804-star-buy"
+
+        loop.handle_update({
+            "update_id": 20,
+            "callback_query": {
+                "id": "callback-1",
+                "message": {"chat": {"id": 12345}},
+                "data": f"qty_retry:{client_order_id}",
+            },
+        })
+        loop.handle_update({
+            "update_id": 21,
+            "message": {
+                "chat": {"id": 12345},
+                "text": "3",
+                "reply_to_message": {"message_id": 900},
+            },
+        })
+
+        self.assertEqual(notifier.answered, [("callback-1", None)])
+        self.assertIn("새 수량", notifier.messages[0])
+        self.assertEqual(engine.calls[0][0], "order.retry_failed_quantity")
+        self.assertEqual(engine.calls[0][1], {"client_order_id": client_order_id, "quantity": "3"})
+        self.assertIn("수량 수정 후 재시도 접수 성공", notifier.messages[-1])
+
     def test_price_retry_ignores_text_that_is_not_a_reply_to_its_prompt(self):
         class Engine:
             runtime = SimpleNamespace(telegram_update_offset=0)

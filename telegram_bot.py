@@ -111,14 +111,16 @@ class TelegramCommandLoop:
         self._offset = int(getattr(engine.runtime, "telegram_update_offset", 0) or 0)
         self._clock = clock
         self._price_prompt_ttl = float(price_prompt_ttl)
-        self._pending_price_order_id: str | None = None
-        self._pending_price_prompt_id: int | None = None
-        self._pending_price_expires_at = 0.0
+        self._pending_edit_kind: str | None = None  # "price" or "qty"
+        self._pending_edit_order_id: str | None = None
+        self._pending_edit_prompt_id: int | None = None
+        self._pending_edit_expires_at = 0.0
 
-    def _clear_pending_price(self) -> None:
-        self._pending_price_order_id = None
-        self._pending_price_prompt_id = None
-        self._pending_price_expires_at = 0.0
+    def _clear_pending_edit(self) -> None:
+        self._pending_edit_kind = None
+        self._pending_edit_order_id = None
+        self._pending_edit_prompt_id = None
+        self._pending_edit_expires_at = 0.0
 
     def start(self) -> threading.Thread | None:
         if not self.notifier.enabled:
@@ -178,14 +180,31 @@ class TelegramCommandLoop:
                     "text": "💲 가격 수정 후 재시도",
                     "callback_data": f"price_retry:{client_order_id}",
                 },
+                {
+                    "text": "🔢 수량 수정 후 재시도",
+                    "callback_data": f"qty_retry:{client_order_id}",
+                },
             ])
         return {"inline_keyboard": rows}
 
-    def _dispatch_retry(self, client_order_id: str, price: str | None = None) -> bool:
-        command = "order.retry_failed_price" if price is not None else "order.retry_failed"
+    def _dispatch_retry(
+        self,
+        client_order_id: str,
+        *,
+        price: str | None = None,
+        quantity: str | None = None,
+    ) -> bool:
+        if quantity is not None:
+            command = "order.retry_failed_quantity"
+        elif price is not None:
+            command = "order.retry_failed_price"
+        else:
+            command = "order.retry_failed"
         payload: dict[str, Any] = {"client_order_id": client_order_id}
         if price is not None:
             payload["price"] = price
+        if quantity is not None:
+            payload["quantity"] = quantity
         try:
             result = self.engine.execute(
                 command,
@@ -195,12 +214,16 @@ class TelegramCommandLoop:
             )
             confirmed = int(result.get("confirmed") or 0)
             if confirmed:
-                if price is None:
-                    self._send(f"✅ 재시도 접수 성공\n{client_order_id}\n토스 상태: 확인됨")
-                else:
+                if quantity is not None:
+                    self._send(
+                        f"✅ 수량 수정 후 재시도 접수 성공\n{client_order_id}\n새 수량: {quantity}주"
+                    )
+                elif price is not None:
                     self._send(
                         f"✅ 가격 수정 후 재시도 접수 성공\n{client_order_id}\n새 지정가: ${price}"
                     )
+                else:
+                    self._send(f"✅ 재시도 접수 성공\n{client_order_id}\n토스 상태: 확인됨")
                 return True
             errors = "; ".join(str(item) for item in result.get("errors") or [])
             self._send(
@@ -215,6 +238,18 @@ class TelegramCommandLoop:
             )
         return False
 
+    def _prompt_pending_edit(self, kind: str, client_order_id: str, prompt: str, placeholder: str) -> None:
+        self._pending_edit_kind = kind
+        self._pending_edit_order_id = client_order_id
+        response = self._send(prompt, {"force_reply": True, "input_field_placeholder": placeholder})
+        result = response.get("result", {}) if isinstance(response, dict) else {}
+        prompt_id = result.get("message_id")
+        if not isinstance(prompt_id, int):
+            self._clear_pending_edit()
+            return
+        self._pending_edit_prompt_id = prompt_id
+        self._pending_edit_expires_at = self._clock() + self._price_prompt_ttl
+
     def _handle_callback_query(self, callback_query: dict[str, Any]) -> None:
         callback_message = callback_query.get("message") or {}
         chat = callback_message.get("chat") or {}
@@ -225,22 +260,25 @@ class TelegramCommandLoop:
         if callback_id:
             self._answer_callback(callback_id)
         if data.startswith("retry:"):
-            self._clear_pending_price()
+            self._clear_pending_edit()
             self._dispatch_retry(data.removeprefix("retry:"))
             return
         if data.startswith("price_retry:"):
-            self._pending_price_order_id = data.removeprefix("price_retry:")
-            response = self._send(
+            self._prompt_pending_edit(
+                "price",
+                data.removeprefix("price_retry:"),
                 "새 지정가를 숫자로 보내주세요. 예: 65.25\n취소하려면 /cancel 을 보내세요.",
-                {"force_reply": True, "input_field_placeholder": "예: 65.25"},
+                "예: 65.25",
             )
-            result = response.get("result", {}) if isinstance(response, dict) else {}
-            prompt_id = result.get("message_id")
-            if not isinstance(prompt_id, int):
-                self._clear_pending_price()
-                return
-            self._pending_price_prompt_id = prompt_id
-            self._pending_price_expires_at = self._clock() + self._price_prompt_ttl
+            return
+        if data.startswith("qty_retry:"):
+            self._prompt_pending_edit(
+                "qty",
+                data.removeprefix("qty_retry:"),
+                "새 수량을 정수로 보내주세요. 예: 3\n취소하려면 /cancel 을 보내세요.",
+                "예: 3",
+            )
+            return
 
     def handle_update(self, update: dict[str, Any]) -> None:
         callback_query = update.get("callback_query") or {}
@@ -254,22 +292,28 @@ class TelegramCommandLoop:
         text = str(message.get("text") or "").strip()
         if not text:
             return
-        if self._pending_price_order_id and text.lower() in {"/cancel", "취소"}:
-            self._clear_pending_price()
-            self._send("가격 수정 재시도를 취소했습니다.")
+        if self._pending_edit_order_id and text.lower() in {"/cancel", "취소"}:
+            self._clear_pending_edit()
+            self._send("수정 재시도를 취소했습니다.")
             return
-        if self._pending_price_order_id and not text.startswith("/"):
-            if self._clock() > self._pending_price_expires_at:
-                self._clear_pending_price()
-                self._send("가격 수정 요청이 만료됐습니다. 실패 알림의 버튼을 다시 눌러주세요.")
+        if self._pending_edit_order_id and not text.startswith("/"):
+            if self._clock() > self._pending_edit_expires_at:
+                self._clear_pending_edit()
+                self._send("수정 요청이 만료됐습니다. 실패 알림의 버튼을 다시 눌러주세요.")
                 return
             reply = message.get("reply_to_message") or {}
-            if reply.get("message_id") != self._pending_price_prompt_id:
-                self._send("가격은 방금 보낸 가격 요청 메시지에 답장으로 보내주세요.")
+            if reply.get("message_id") != self._pending_edit_prompt_id:
+                self._send("새 값은 방금 보낸 요청 메시지에 답장으로 보내주세요.")
                 return
-            client_order_id = self._pending_price_order_id
-            if self._dispatch_retry(client_order_id, text):
-                self._clear_pending_price()
+            client_order_id = self._pending_edit_order_id
+            kind = self._pending_edit_kind
+            dispatched = (
+                self._dispatch_retry(client_order_id, quantity=text)
+                if kind == "qty"
+                else self._dispatch_retry(client_order_id, price=text)
+            )
+            if dispatched:
+                self._clear_pending_edit()
             return
         parts = text.split()
         command = parts[0].split("@", 1)[0].lower()

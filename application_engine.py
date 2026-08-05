@@ -288,6 +288,11 @@ class ApplicationEngine(TradingWebService):
                 str(payload.get("client_order_id") or ""),
                 payload.get("price"),
             )
+        if command == "order.retry_failed_quantity":
+            return self.retry_failed_order_with_quantity(
+                str(payload.get("client_order_id") or ""),
+                payload.get("quantity"),
+            )
         if command == "auto.start":
             return self.start_auto(symbol, str(payload.get("confirmation") or ""))
         if command == "auto.stop":
