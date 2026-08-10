@@ -27,6 +27,17 @@ function makeHarness({
     originProduct: { name: '무타공 정리 선반' },
     smartstoreChannelProduct: { channelProductNo: '888' },
   },
+  searchResult = {
+    contents: [{
+      originProductNo: 777,
+      channelProducts: [{
+        originProductNo: 777,
+        channelProductNo: 888,
+        sellerManagementCode: '49168396',
+        name: '무타공 정리 선반',
+      }],
+    }],
+  },
   completion = { originProductNo: '777', channelProductNo: '888', linkedVia: 'speedgo_automation' },
   stageError,
   screenshotError,
@@ -102,6 +113,16 @@ function makeHarness({
 
   const naverConfig = { clientId: 'client-id', clientSecret: 'config-secret' };
   const client = {
+    async searchProducts(body) {
+      calls.push('searchProducts');
+      assert.deepEqual(body, {
+        searchKeywordType: 'CHANNEL_PRODUCT_NO',
+        channelProductNos: [888],
+        page: 1,
+        size: 10,
+      });
+      return searchResult;
+    },
     async getProduct(originProductNo) {
       calls.push('verify');
       assert.equal(originProductNo, '777');
@@ -241,6 +262,23 @@ test('recovery resolves the existing reservation without submitting and complete
   assert.equal(count(harness.calls, 'postProcess'), 1);
 });
 
+test('channel-only recovery resolves one exact Naver origin product before completion', async () => {
+  const harness = makeHarness({
+    reservationAction: 'recover',
+    recoverIds: { channelProductNo: '888' },
+  });
+
+  const result = await runSpeedgoNaverRegistration({}, 'C:/repo', 501, harness.deps);
+
+  assert.equal(result.originProductNo, '777');
+  assert.equal(result.channelProductNo, '888');
+  assert.equal(count(harness.calls, 'submit'), 0);
+  assert.equal(count(harness.calls, 'recover'), 1);
+  assert.equal(count(harness.calls, 'searchProducts'), 1);
+  assert.equal(count(harness.calls, 'complete'), 1);
+  assert.equal(count(harness.calls, 'postProcess'), 1);
+});
+
 test('an already-linked registration never submits, recovers, or completes again', async () => {
   const harness = makeHarness({ reservationAction: 'already_linked' });
 
@@ -277,8 +315,11 @@ test('an origin-only browser result derives channelProductNo from the verified l
   assert.equal(count(harness.calls, 'complete'), 1);
 });
 
-test('a missing origin result never verifies, completes, or post-processes', async () => {
-  const harness = makeHarness({ submitIds: { channelProductNo: '888' } });
+test('a channel-only result with no exact Naver search match remains unresolved', async () => {
+  const harness = makeHarness({
+    submitIds: { channelProductNo: '888' },
+    searchResult: { contents: [] },
+  });
 
   await assert.rejects(
     runSpeedgoNaverRegistration({}, 'C:/repo', 501, harness.deps),
@@ -286,6 +327,7 @@ test('a missing origin result never verifies, completes, or post-processes', asy
   );
 
   assert.equal(count(harness.calls, 'submit'), 1);
+  assert.equal(count(harness.calls, 'searchProducts'), 1);
   assert.equal(count(harness.calls, 'verify'), 0);
   assert.equal(count(harness.calls, 'complete'), 0);
   assert.equal(count(harness.calls, 'postProcess'), 0);

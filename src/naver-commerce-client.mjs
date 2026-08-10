@@ -121,6 +121,13 @@ export class NaverCommerceClient {
     return this.request('GET', `/v2/products/origin-products/${originProductNo}`, { operation: 'get_product' });
   }
 
+  async searchProducts(body) {
+    return this.request('POST', '/v1/products/search', {
+      body,
+      operation: 'search_products',
+    });
+  }
+
   // "(v2) 원상품 수정" -- confirmed spec, 2026-07-28 (apicenter.commerce.naver.com,
   // pasted directly by the user since the docs site is blocked for both
   // WebFetch and browser navigation in this environment, same as every other

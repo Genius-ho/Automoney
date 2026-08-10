@@ -141,6 +141,41 @@ test('NaverCommerceClient.getOriginAreas queries the origin-area code list', asy
   assert.equal(result.originAreaCodeNames[0].code, '00');
 });
 
+test('NaverCommerceClient.searchProducts POSTs an exact channel-product recovery query', async () => {
+  let captured;
+  const fetchImpl = async (url, init) => {
+    if (String(url).includes('/v1/oauth2/token')) return tokenFetchImpl()(url);
+    captured = { url: String(url), method: init.method, body: JSON.parse(init.body) };
+    return {
+      ok: true,
+      status: 200,
+      async text() {
+        return JSON.stringify({
+          contents: [{ originProductNo: 13655881936, channelProducts: [{ channelProductNo: 13716234819 }] }],
+        });
+      },
+    };
+  };
+  const client = new NaverCommerceClient({ clientId: 'client-1', clientSecret: '$2b$10$j7fv77w6f6U3cxYt80fLJ.', fetchImpl });
+
+  const result = await client.searchProducts({
+    searchKeywordType: 'CHANNEL_PRODUCT_NO',
+    channelProductNos: [13716234819],
+    page: 1,
+    size: 10,
+  });
+
+  assert.equal(captured.url, 'https://api.commerce.naver.com/external/v1/products/search');
+  assert.equal(captured.method, 'POST');
+  assert.deepEqual(captured.body, {
+    searchKeywordType: 'CHANNEL_PRODUCT_NO',
+    channelProductNos: [13716234819],
+    page: 1,
+    size: 10,
+  });
+  assert.equal(result.contents[0].originProductNo, 13655881936);
+});
+
 // UNVERIFIED against a real order (see the client's own comment) -- these
 // two tests only lock in the request shape (path, params, POST body), which
 // was confirmed live: valid lastChangedType enum values include

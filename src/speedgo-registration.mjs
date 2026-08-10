@@ -49,6 +49,23 @@ function normalizedId(value) {
   return id || null;
 }
 
+function originProductNoFromExactChannelSearch(result, channelProductNo, input) {
+  const expectedChannel = String(channelProductNo || '');
+  const expectedSupplier = String(input?.supplierProductNo || '');
+  const expectedName = String(input?.productName || '');
+  const matches = [];
+  for (const content of result?.contents || []) {
+    for (const channel of content?.channelProducts || []) {
+      if (String(channel?.channelProductNo || '') !== expectedChannel) continue;
+      if (String(channel?.sellerManagementCode || '') !== expectedSupplier) continue;
+      if (String(channel?.name || '') !== expectedName) continue;
+      const originProductNo = normalizedId(channel?.originProductNo || content?.originProductNo);
+      if (originProductNo) matches.push(originProductNo);
+    }
+  }
+  return new Set(matches).size === 1 ? matches[0] : null;
+}
+
 function channelProductNoFromLiveProduct(product) {
   if (!product || typeof product !== 'object') return null;
   const seen = new WeakSet();
@@ -236,7 +253,34 @@ export async function runSpeedgoNaverRegistration(db, rootDir, draftId, options 
         );
       }
 
-      const originProductNo = normalizedId(ids?.originProductNo);
+      let originProductNo = normalizedId(ids?.originProductNo);
+      let channelProductNo = normalizedId(ids?.channelProductNo);
+      let client;
+      try {
+        client = clientImpl || createClientImpl(naverConfig);
+      } catch (error) {
+        throw mapError(error, 'NAVER_VERIFY_FAILED', 'Naver client could not be created');
+      }
+
+      if (!originProductNo && channelProductNo) {
+        let searchResult;
+        try {
+          searchResult = await client.searchProducts({
+            searchKeywordType: 'CHANNEL_PRODUCT_NO',
+            channelProductNos: [Number(channelProductNo)],
+            page: 1,
+            size: 10,
+          });
+        } catch (error) {
+          throw mapError(error, 'NAVER_VERIFY_FAILED', 'Naver registration recovery search failed');
+        }
+        originProductNo = originProductNoFromExactChannelSearch(
+          searchResult,
+          channelProductNo,
+          input,
+        );
+      }
+
       if (!originProductNo) {
         throw registrationError(
           'UNRESOLVED_EXTERNAL_RESULT',
@@ -245,14 +289,12 @@ export async function runSpeedgoNaverRegistration(db, rootDir, draftId, options 
       }
       await recordStep('registration_ids_resolved', {
         originProductNo,
-        channelProductNo: normalizedId(ids?.channelProductNo),
+        channelProductNo,
       });
 
       stage = 'naver_verified';
-      let client;
       let verifiedProduct;
       try {
-        client = clientImpl || createClientImpl(naverConfig);
         verifiedProduct = await client.getProduct(originProductNo);
         if (!verifiedProduct || typeof verifiedProduct !== 'object') {
           throw new Error('Naver returned no live product');
@@ -261,8 +303,7 @@ export async function runSpeedgoNaverRegistration(db, rootDir, draftId, options 
         throw mapError(error, 'NAVER_VERIFY_FAILED', 'Naver registration could not be verified');
       }
 
-      const channelProductNo = normalizedId(ids?.channelProductNo)
-        || channelProductNoFromLiveProduct(verifiedProduct);
+      channelProductNo ||= channelProductNoFromLiveProduct(verifiedProduct);
       if (!channelProductNo) {
         throw registrationError(
           'PERSISTENCE_FAILED',

@@ -100,6 +100,9 @@ export const SPEEDGO_SELECTORS = Object.freeze({
   popupProductForm: [
     { kind: 'css', value: '#mkForm' },
   ],
+  popupProductItemNo: [
+    { kind: 'css', value: '#mkForm input[name="itemNo"]' },
+  ],
   liveMarketCheckboxes: [
     { kind: 'css', value: '#mkForm input[type="checkbox"][id^="we"]' },
   ],

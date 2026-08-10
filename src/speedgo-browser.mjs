@@ -13,6 +13,7 @@ const SUBMISSION_TIMEOUT_MS = 15_000;
 const TRANSFER_UI_TIMEOUT_MS = 5_000;
 const TRANSFER_FRAME_POLL_MS = 100;
 const POPUP_PRODUCT_URL = /^https:\/\/speedgo\.domeggook\.com\/popup_market\/popup_setProduct\.php(?:\?|$)/i;
+const SPEEDGO_SUCCESS_LIST_URL = 'https://speedgo.domeggook.com/send/send_list.php?status=SUCCESS&types=';
 const IDENTIFIER_MARKER = /originProductNo|channelProductNo|원상품\s*번호|채널상품\s*번호/i;
 const RELEVANT_RESPONSE_URL = /speedgo|naver|smartstore|register|registration|product/i;
 const SUPPORTED_IMAGE_TYPES = new Map([
@@ -50,6 +51,23 @@ function primitiveId(value) {
 
 function hasVerifiedOriginProductNo(ids) {
   return Boolean(ids?.originProductNo);
+}
+
+function channelProductNoFromSpeedgoSuccessEntries(entries, input) {
+  const supplierProductNo = String(input?.supplierProductNo || '').trim();
+  const productName = String(input?.productName || '').trim();
+  const matches = new Set();
+  for (const entry of entries || []) {
+    if (String(entry?.supplierProductNo || '').trim() !== supplierProductNo) continue;
+    if (String(entry?.productName || '').trim() !== productName) continue;
+    if (!/전송완료/.test(String(entry?.statusText || ''))) continue;
+    const match = String(entry?.itemChangeOnclick || '').match(
+      /itemChange\(\s*['"]ss['"]\s*,\s*['"](\d+)['"]\s*,\s*['"](\d+)['"]/,
+    );
+    if (!match || match[1] !== supplierProductNo) continue;
+    matches.add(match[2]);
+  }
+  return matches.size === 1 ? [...matches][0] : null;
 }
 
 function idsFromString(value) {
@@ -211,11 +229,18 @@ function comparableValue(value) {
   return String(value).replace(/,/g, '').trim();
 }
 
-async function fillAndVerify(page, selectorName, expected, locatorOverride) {
+function comparablePriceValue(value) {
+  return comparableValue(value).replace(/\s*원\s*$/, '').trim();
+}
+
+async function fillAndVerify(page, selectorName, expected, locatorOverride, { exact = false } = {}) {
   const locator = locatorOverride || await findFirstVisible(page, selectorName, SPEEDGO_SELECTORS[selectorName]);
   await locator.fill(String(expected));
   const actual = await readLocatorValue(locator);
-  if (comparableValue(actual) !== comparableValue(expected)) {
+  const matches = exact
+    ? String(actual) === String(expected)
+    : comparableValue(actual) === comparableValue(expected);
+  if (!matches) {
     throw speedgoError('SPEEDGO_FORM_VALIDATION_FAILED', `Speedgo field ${selectorName} did not retain its value`, page, { selectorName });
   }
   return locator;
@@ -306,10 +331,64 @@ async function waitForExactTransferButton(page) {
   }
 }
 
-async function waitForPopupProductForm(page) {
-  const attempts = Math.ceil(TRANSFER_UI_TIMEOUT_MS / TRANSFER_FRAME_POLL_MS) + 1;
-  for (let attempt = 0; attempt < attempts; attempt += 1) {
+function remainingDeadlineMs(deadline, nowImpl) {
+  return Math.max(0, deadline - nowImpl());
+}
+
+async function withinDeadline(deadline, nowImpl, operation) {
+  const remaining = remainingDeadlineMs(deadline, nowImpl);
+  if (remaining <= 0) throw new Error('Speedgo popup acquisition timed out');
+  let timeoutHandle;
+  try {
+    return await Promise.race([
+      Promise.resolve().then(() => operation(remaining)),
+      new Promise((_, reject) => {
+        timeoutHandle = setTimeout(
+          () => reject(new Error('Speedgo popup acquisition timed out')),
+          remaining,
+        );
+      }),
+    ]);
+  } finally {
+    clearTimeout(timeoutHandle);
+  }
+}
+
+function parsedPopupItemNo(frameUrl) {
+  if (!POPUP_PRODUCT_URL.test(frameUrl)) return null;
+  try {
+    return new URL(frameUrl).searchParams.get('itemNo');
+  } catch {
+    return null;
+  }
+}
+
+function isExactPopupFormAction(action) {
+  if (action === 'mkt_marketIng.php') return true;
+  try {
+    const url = new URL(action, 'https://speedgo.domeggook.com/popup_market/');
+    return url.origin === 'https://speedgo.domeggook.com'
+      && url.pathname === '/market/mkt_marketIng.php';
+  } catch {
+    return false;
+  }
+}
+
+async function waitForPopupProductForm(page, supplierProductNo, nowImpl) {
+  const expectedItemNo = String(supplierProductNo || '').trim();
+  if (!expectedItemNo) {
+    throw speedgoError(
+      'SPEEDGO_TRANSFER_UI_NOT_FOUND',
+      'The selected Speedgo supplier product number is unavailable',
+      page,
+      { selectorName: 'popupProductForm' },
+    );
+  }
+
+  const deadline = nowImpl() + TRANSFER_UI_TIMEOUT_MS;
+  while (remainingDeadlineMs(deadline, nowImpl) > 0) {
     const frames = typeof page.frames === 'function' ? page.frames() : [];
+    const exactFrames = [];
     for (const frame of frames) {
       let frameUrl = '';
       try {
@@ -317,24 +396,68 @@ async function waitForPopupProductForm(page) {
       } catch {
         continue;
       }
-      if (!POPUP_PRODUCT_URL.test(frameUrl)) continue;
+      if (parsedPopupItemNo(frameUrl) !== expectedItemNo) continue;
 
       try {
         const form = frame.locator(SPEEDGO_SELECTORS.popupProductForm[0].value);
-        const count = typeof form.count === 'function' ? await form.count() : 1;
-        const visible = count > 0 && (typeof form.isVisible !== 'function' || await form.isVisible());
+        const count = typeof form.count === 'function'
+          ? await withinDeadline(deadline, nowImpl, () => form.count())
+          : 1;
+        const visible = count > 0 && (typeof form.isVisible !== 'function'
+          || await withinDeadline(
+            deadline,
+            nowImpl,
+            (remaining) => form.isVisible({ timeout: remaining }),
+          ));
         const action = visible && typeof form.getAttribute === 'function'
-          ? await form.getAttribute('action')
+          ? await withinDeadline(
+            deadline,
+            nowImpl,
+            (remaining) => form.getAttribute('action', { timeout: remaining }),
+          )
           : null;
-        if (visible && action === 'mkt_marketIng.php') return frame;
+        if (!visible || !isExactPopupFormAction(action)) continue;
+
+        const itemNo = frame.locator(SPEEDGO_SELECTORS.popupProductItemNo[0].value);
+        const itemCount = typeof itemNo.count === 'function'
+          ? await withinDeadline(deadline, nowImpl, () => itemNo.count())
+          : 1;
+        if (itemCount !== 1 || typeof itemNo.inputValue !== 'function') continue;
+        const formItemNo = await withinDeadline(
+          deadline,
+          nowImpl,
+          (remaining) => itemNo.inputValue({ timeout: remaining }),
+        );
+        if (String(formItemNo).trim() === expectedItemNo) exactFrames.push(frame);
       } catch {
-        // The matching frame can exist before its form is ready; keep polling.
+        // Matching frames can detach or be replaced while loading; retry within the same deadline.
       }
     }
 
-    if (attempt === attempts - 1) break;
-    if (typeof page.waitForTimeout === 'function') await page.waitForTimeout(TRANSFER_FRAME_POLL_MS);
-    else await new Promise((resolve) => setTimeout(resolve, TRANSFER_FRAME_POLL_MS));
+    if (exactFrames.length > 1) {
+      throw speedgoError(
+        'SPEEDGO_AMBIGUOUS_PRODUCT',
+        'More than one exact Speedgo popup product form was found',
+        page,
+        { selectorName: 'popupProductForm' },
+      );
+    }
+    if (exactFrames.length === 1) return exactFrames[0];
+
+    const pollMs = Math.min(
+      TRANSFER_FRAME_POLL_MS,
+      remainingDeadlineMs(deadline, nowImpl),
+    );
+    if (pollMs <= 0) break;
+    if (typeof page.waitForTimeout === 'function') {
+      await withinDeadline(deadline, nowImpl, () => page.waitForTimeout(pollMs));
+    } else {
+      await withinDeadline(
+        deadline,
+        nowImpl,
+        () => new Promise((resolve) => setTimeout(resolve, pollMs)),
+      );
+    }
   }
 
   throw speedgoError(
@@ -345,8 +468,8 @@ async function waitForPopupProductForm(page) {
   );
 }
 
-async function fillWithChange(scope, selectorName, expected) {
-  const locator = await fillAndVerify(scope, selectorName, expected);
+async function fillWithChange(scope, selectorName, expected, options) {
+  const locator = await fillAndVerify(scope, selectorName, expected, undefined, options);
   await locator.dispatchEvent('change');
 }
 
@@ -371,20 +494,20 @@ async function fillLiveNaverForm(scope, page, input) {
     );
   }
 
-  for (const [selectorName, value] of [
-    ['liveProductNameInput', input.productName],
-    ['liveRateInput', 1],
-    ['liveFeeInput', 0],
-    ['liveAddPriceInput', targetPrice - basePrice],
-    ['liveDeliveryPriceInput', 0],
-    ['liveSellerDiscountInput', 0],
+  for (const [selectorName, value, options] of [
+    ['liveProductNameInput', input.productName, { exact: true }],
+    ['liveRateInput', 1, undefined],
+    ['liveFeeInput', 0, undefined],
+    ['liveAddPriceInput', targetPrice - basePrice, undefined],
+    ['liveDeliveryPriceInput', 0, undefined],
+    ['liveSellerDiscountInput', 0, undefined],
   ]) {
-    await fillWithChange(scope, selectorName, value);
+    await fillWithChange(scope, selectorName, value, options);
   }
 
   for (const candidate of SPEEDGO_SELECTORS.livePriceOutputs) {
     const output = await findFirstPresent(scope, 'priceOutputs', [candidate]);
-    if (comparableValue(await readLocatorValue(output)) !== comparableValue(targetPrice)) {
+    if (comparablePriceValue(await readLocatorValue(output)) !== comparablePriceValue(targetPrice)) {
       throw speedgoError(
         'SPEEDGO_FORM_VALIDATION_FAILED',
         'The Speedgo hidden price outputs did not match the target price',
@@ -425,18 +548,21 @@ export function createSpeedgoBrowser({
   chromiumImpl,
   rootDir,
   fetchImpl = globalThis.fetch,
+  nowImpl = Date.now,
   headless = false,
   profileDir = join(rootDir, '.playwright-profile'),
   sessionStatePath = join(profileDir, '.session-state.json'),
 } = {}) {
   if (!chromiumImpl?.launchPersistentContext) throw new TypeError('chromiumImpl.launchPersistentContext is required');
   if (!rootDir) throw new TypeError('rootDir is required');
+  if (typeof nowImpl !== 'function') throw new TypeError('nowImpl must be a function');
 
   let context = null;
   let page = null;
   let activeFormScope = null;
   let responseListener = null;
   let responseCaptureTail = Promise.resolve();
+  let selectedSupplierProductNo = null;
   const capturedResponses = [];
   const responseWaiters = new Set();
 
@@ -521,6 +647,8 @@ export function createSpeedgoBrowser({
     async findSupplierProduct(input) {
       try {
         const supplierProductNo = String(input?.supplierProductNo || '').trim();
+        selectedSupplierProductNo = null;
+        activeFormScope = null;
         const search = await findFirstVisible(page, 'searchInput', SPEEDGO_SELECTORS.searchInput);
         const searchMode = await findFirstPresent(page, 'searchModeInput', SPEEDGO_SELECTORS.searchModeInput);
         const searchSubmit = await findFirstVisible(page, 'searchSubmit', SPEEDGO_SELECTORS.searchSubmit);
@@ -561,6 +689,7 @@ export function createSpeedgoBrowser({
         }
         await cardTriggers[0].evaluate((element) => element.click());
         await waitForExactTransferButton(page);
+        selectedSupplierProductNo = supplierProductNo;
         return true;
       } catch (error) {
         if (error?.code === 'SPEEDGO_AMBIGUOUS_PRODUCT' || error?.code === 'SPEEDGO_TRANSFER_UI_NOT_FOUND') throw error;
@@ -573,9 +702,14 @@ export function createSpeedgoBrowser({
         const transfer = await findFirstVisible(page, 'transferButton', SPEEDGO_SELECTORS.transferButton);
         activeFormScope = null;
         await transfer.click();
-        activeFormScope = await waitForPopupProductForm(page);
+        activeFormScope = await waitForPopupProductForm(
+          page,
+          selectedSupplierProductNo,
+          nowImpl,
+        );
         return true;
       } catch (error) {
+        if (error?.code === 'SPEEDGO_AMBIGUOUS_PRODUCT') throw error;
         throw keepCodeOrMap(error, 'SPEEDGO_TRANSFER_UI_NOT_FOUND', 'The Speedgo transfer action is unavailable', page);
       }
     },
@@ -583,19 +717,28 @@ export function createSpeedgoBrowser({
     async selectNaverMarket() {
       try {
         if (activeFormScope) {
-          const markets = activeFormScope.locator(SPEEDGO_SELECTORS.liveMarketCheckboxes[0].value);
-          const count = typeof markets.count === 'function' ? await markets.count() : 0;
-          let naverMarket = null;
-          for (let index = 0; index < count; index += 1) {
-            const market = markets.nth(index);
-            const id = await market.getAttribute('id');
-            if (id === 'we1') {
-              naverMarket = market;
-              continue;
+          const form = await findFirstPresent(
+            activeFormScope,
+            'popupProductForm',
+            SPEEDGO_SELECTORS.popupProductForm,
+          );
+          const marketState = await form.evaluate((formElement, naverId) => {
+            const controls = [...formElement.querySelectorAll('input[type="checkbox"][id^="we"]')];
+            const naverControl = controls.find((control) => control.id === naverId);
+            if (!naverControl) return { found: false, checkedIds: [] };
+            for (const control of controls) {
+              const shouldBeChecked = control.id === naverId;
+              if (control.checked === shouldBeChecked) continue;
+              control.checked = shouldBeChecked;
+              control.dispatchEvent(new Event('input', { bubbles: true }));
+              control.dispatchEvent(new Event('change', { bubbles: true }));
             }
-            if (await market.isChecked()) await market.uncheck();
-          }
-          if (!naverMarket) {
+            return {
+              found: true,
+              checkedIds: controls.filter((control) => control.checked).map((control) => control.id),
+            };
+          }, 'we1');
+          if (!marketState?.found) {
             throw speedgoError(
               'SPEEDGO_TRANSFER_UI_NOT_FOUND',
               'The exact Naver Smartstore market checkbox is unavailable',
@@ -603,14 +746,7 @@ export function createSpeedgoBrowser({
               { selectorName: 'naverMarket' },
             );
           }
-          if (!await naverMarket.isChecked()) await naverMarket.check();
-
-          const checkedIds = [];
-          for (let index = 0; index < count; index += 1) {
-            const market = markets.nth(index);
-            if (await market.isChecked()) checkedIds.push(await market.getAttribute('id'));
-          }
-          if (checkedIds.length !== 1 || checkedIds[0] !== 'we1') {
+          if (marketState.checkedIds.length !== 1 || marketState.checkedIds[0] !== 'we1') {
             throw speedgoError(
               'SPEEDGO_TRANSFER_UI_NOT_FOUND',
               'The Speedgo market selection did not resolve to only Naver Smartstore',
@@ -777,7 +913,7 @@ export function createSpeedgoBrowser({
       throw speedgoError('UNRESOLVED_EXTERNAL_RESULT', 'Speedgo appeared to submit but no Naver origin product number was verified', page);
     },
 
-    async recoverRegistration() {
+    async recoverRegistration(input) {
       const scope = activeFormScope || page;
       const urlIds = extractNaverRegistrationIds(scope.url());
       if (hasVerifiedOriginProductNo(urlIds)) return urlIds;
@@ -792,6 +928,29 @@ export function createSpeedgoBrowser({
 
       const linkIds = await collectResultLinkIds(scope);
       if (hasVerifiedOriginProductNo(linkIds)) return linkIds;
+
+      try {
+        await page.goto(SPEEDGO_SUCCESS_LIST_URL, {
+          waitUntil: 'domcontentloaded',
+          timeout: SUBMISSION_TIMEOUT_MS,
+        });
+        if (typeof page.waitForTimeout === 'function') await page.waitForTimeout(1_000);
+        const entries = await page.locator('input[name="item[]"]').evaluateAll((inputs) => inputs.map((input) => {
+          const row = input.closest('tr');
+          const nameInput = row?.querySelector('input[name^="itemName["]');
+          const itemChange = row?.querySelector('a[onclick*="itemChange("]');
+          return {
+            supplierProductNo: input.value,
+            productName: nameInput?.value,
+            statusText: row?.innerText,
+            itemChangeOnclick: itemChange?.getAttribute('onclick'),
+          };
+        }));
+        const channelProductNo = channelProductNoFromSpeedgoSuccessEntries(entries, input);
+        if (channelProductNo) return { channelProductNo };
+      } catch {
+        // Leave the reservation unresolved when the success list cannot prove one exact match.
+      }
       throw speedgoError('UNRESOLVED_EXTERNAL_RESULT', 'No verified Naver origin product number was found during recovery', page);
     },
 
@@ -806,6 +965,7 @@ export function createSpeedgoBrowser({
       context = null;
       page = null;
       activeFormScope = null;
+      selectedSupplierProductNo = null;
       if (!closingContext) return;
 
       if (responseListener && typeof closingPage?.off === 'function') {
