@@ -85,7 +85,7 @@ export async function prepareCandidateDraft(db, candidateRow, {
 // itself. Never calls any Coupang/Naver API, never approves an image, never
 // touches draft 27/46/64 (a different supplier_product_no by construction --
 // dedup would skip this candidate entirely if it ever collided).
-export async function processWinnerCandidate(db, candidateRow, {
+export async function analyzeWinnerCandidate(db, candidateRow, {
   rootDir,
   jobDir,
   codexConfig,
@@ -95,12 +95,10 @@ export async function processWinnerCandidate(db, candidateRow, {
   runProductAnalysisImpl = runProductAnalysis,
   getLatestAnalysisRunImpl = getLatestAnalysisRun,
   applyProductAnalysisImpl = applyProductAnalysis,
-  generateMainImageImpl = generateMainImage,
-  generateDetailImageSetImpl = generateDetailImageSet,
 } = {}) {
   const draftId = candidateRow.draftId;
   if (!draftId) {
-    throw Object.assign(new Error('processWinnerCandidate requires candidateRow.draftId -- run prepareCandidateDraft first'), { code: 'DRAFT_NOT_PREPARED' });
+    throw Object.assign(new Error('analyzeWinnerCandidate requires candidateRow.draftId -- run prepareCandidateDraft first'), { code: 'DRAFT_NOT_PREPARED' });
   }
 
   await updateBatchCandidateStatusImpl(db, candidateRow.id, { processingStatus: 'analysis_running' });
@@ -134,6 +132,22 @@ export async function processWinnerCandidate(db, candidateRow, {
   // gate (confidence/evidence/conflict) still decides what actually lands;
   // this only requests the 4 safe fields, never manufacturer/countryOfOrigin.
   await applyProductAnalysisImpl(db, draftId, { runId: run.id, fields: AUTO_APPLY_FIELDS }).catch(() => {});
+
+  return { outcome: 'success', stage: 'analysis', draftId, analysisRunId: run.id };
+}
+
+export async function generateWinnerCandidateImages(db, candidateRow, {
+  rootDir,
+  jobDir,
+  codexConfig,
+  updateBatchCandidateStatusImpl = updateBatchCandidateStatus,
+  generateMainImageImpl = generateMainImage,
+  generateDetailImageSetImpl = generateDetailImageSet,
+} = {}) {
+  const draftId = candidateRow.draftId;
+  if (!draftId) {
+    throw Object.assign(new Error('generateWinnerCandidateImages requires candidateRow.draftId -- run prepareCandidateDraft first'), { code: 'DRAFT_NOT_PREPARED' });
+  }
 
   await updateBatchCandidateStatusImpl(db, candidateRow.id, { processingStatus: 'image_generation_running' });
 
@@ -169,4 +183,10 @@ export async function processWinnerCandidate(db, candidateRow, {
     detailImagesGeneratedCount: 10,
   });
   return { outcome: 'success', draftId, mainImageResult };
+}
+
+export async function processWinnerCandidate(db, candidateRow, deps = {}) {
+  const analysis = await analyzeWinnerCandidate(db, candidateRow, deps);
+  if (analysis.outcome !== 'success') return analysis;
+  return generateWinnerCandidateImages(db, candidateRow, deps);
 }

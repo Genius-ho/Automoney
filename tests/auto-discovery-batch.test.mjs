@@ -4,9 +4,43 @@ import test from 'node:test';
 import {
   collectAndScoreCandidatesForCategory,
   runCandidateDiscoveryBatch,
+  runAnalysisStage,
   runDailyProcessingBatch,
+  runDraftPreparationStage,
+  runImageGenerationStage,
   selectRandomCategories,
 } from '../src/auto-discovery-batch.mjs';
+
+test('focused product stages process at most one eligible item and stop at their boundary', async () => {
+  const updates = [];
+  const common = {
+    getBatchRunCandidateByIdImpl: async () => ({ id: 5, batchRunId: 1, draftId: 501 }),
+    updateBatchCandidateStatusImpl: async () => {},
+    updateQueueItemStatusImpl: async (_db, id, patch) => updates.push({ id, ...patch }),
+    recordQueueItemPauseImpl: async () => {},
+  };
+  const draft = await runDraftPreparationStage({}, {
+    ...common,
+    getNextQueuedItemImpl: async () => ({ id: 1, batchRunCandidateId: 5 }),
+    prepareCandidateDraftImpl: async () => ({ outcome: 'ready', draftId: 501 }),
+  });
+  const analysis = await runAnalysisStage({}, {
+    ...common,
+    getNextAnalysisItemImpl: async () => ({ id: 2, batchRunCandidateId: 5 }),
+    analyzeWinnerCandidateImpl: async () => ({ outcome: 'success', stage: 'analysis', draftId: 501 }),
+  });
+  const images = await runImageGenerationStage({}, {
+    ...common,
+    getNextImageItemImpl: async () => ({ id: 3, batchRunCandidateId: 5 }),
+    generateWinnerCandidateImagesImpl: async () => ({ outcome: 'success', draftId: 501 }),
+  });
+  assert.equal(draft.outcome, 'ready');
+  assert.equal(analysis.stage, 'analysis');
+  assert.equal(images.outcome, 'success');
+  assert.ok(updates.some((u) => u.id === 1 && u.status === 'ready_for_registration'));
+  assert.ok(updates.some((u) => u.id === 2 && u.status === 'analysis_completed'));
+  assert.ok(updates.some((u) => u.id === 3 && u.status === 'awaiting_approval'));
+});
 
 function policy(id, overrides = {}) {
   return { id, segmentName: '생활/수납', categoryName: `카테고리${id}`, searchKeywords: ['키워드'], domeggookCategoryCode: null, isActive: true, ...overrides };

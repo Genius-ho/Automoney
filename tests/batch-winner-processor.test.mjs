@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
 
-import { prepareCandidateDraft, processWinnerCandidate } from '../src/batch-winner-processor.mjs';
+import { analyzeWinnerCandidate, generateWinnerCandidateImages, prepareCandidateDraft, processWinnerCandidate } from '../src/batch-winner-processor.mjs';
 
 function candidateRow(overrides = {}) {
   return {
@@ -85,6 +85,27 @@ test('processWinnerCandidate throws if called without a prepared draftId', async
     () => processWinnerCandidate({}, candidateRow(), baseDeps()),
     (error) => error.code === 'DRAFT_NOT_PREPARED',
   );
+});
+
+test('analyzeWinnerCandidate completes analysis without generating images', async () => {
+  let imageCalled = false;
+  const deps = baseDeps({
+    generateMainImageImpl: async () => { imageCalled = true; },
+    generateDetailImageSetImpl: async () => { imageCalled = true; },
+  });
+  const outcome = await analyzeWinnerCandidate({}, candidateRow({ draftId: 501 }), deps);
+  assert.equal(outcome.outcome, 'success');
+  assert.deepEqual(deps.statusUpdates.map((u) => u.processingStatus).filter(Boolean), ['analysis_running', 'analysis_completed']);
+  assert.equal(imageCalled, false);
+});
+
+test('generateWinnerCandidateImages generates images without running analysis', async () => {
+  let analysisCalled = false;
+  const deps = baseDeps({ runProductAnalysisImpl: async () => { analysisCalled = true; } });
+  const outcome = await generateWinnerCandidateImages({}, candidateRow({ draftId: 501 }), deps);
+  assert.equal(outcome.outcome, 'success');
+  assert.deepEqual(deps.statusUpdates.map((u) => u.processingStatus).filter(Boolean), ['image_generation_running', 'awaiting_image_approval']);
+  assert.equal(analysisCalled, false);
 });
 
 test('processWinnerCandidate skips re-running analysis on resume when a prior attempt on this draft already completed it successfully', async () => {

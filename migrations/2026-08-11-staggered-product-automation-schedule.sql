@@ -28,3 +28,7 @@ update batch_schedule_state set
       + case when (now() at time zone 'Asia/Seoul')::time >= time '10:00' then interval_days else 0 end) + time '10:00') at time zone 'Asia/Seoul',
   fixed_schedule_initialized = true
 where id = 1 and fixed_schedule_initialized = false;
+
+alter table processing_queue drop constraint if exists processing_queue_status_check;
+alter table processing_queue add constraint processing_queue_status_check
+  check (status in ('queued', 'analyzing', 'analysis_completed', 'generating_images', 'awaiting_approval', 'ready_for_registration', 'failed'));

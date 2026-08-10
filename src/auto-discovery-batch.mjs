@@ -17,12 +17,15 @@ import {
 import {
   countActiveQueueItems as countActiveQueueItemsReal,
   enqueueCandidate as enqueueCandidateReal,
+  getNextAnalysisItem as getNextAnalysisItemReal,
+  getNextImageItem as getNextImageItemReal,
+  getNextQueuedItem as getNextQueuedItemReal,
   getNextQueueItem as getNextQueueItemReal,
   isCandidateActiveOrQueued as isCandidateActiveOrQueuedReal,
   recordQueueItemPause as recordQueueItemPauseReal,
   updateQueueItemStatus as updateQueueItemStatusReal,
 } from './processing-queue-store.mjs';
-import { prepareCandidateDraft as prepareCandidateDraftReal, processWinnerCandidate as processWinnerCandidateReal } from './batch-winner-processor.mjs';
+import { analyzeWinnerCandidate as analyzeWinnerCandidateReal, generateWinnerCandidateImages as generateWinnerCandidateImagesReal, prepareCandidateDraft as prepareCandidateDraftReal, processWinnerCandidate as processWinnerCandidateReal } from './batch-winner-processor.mjs';
 
 const CANDIDATES_STORED_PER_CATEGORY = 5;
 
@@ -210,10 +213,65 @@ export async function runCandidateDiscoveryBatch(db, {
 // (not through this mirror), landing the queue at 'ready_for_registration'
 // instead.
 function mapCandidateStatusToQueueStatus(processingStatus) {
-  if (processingStatus === 'analysis_running' || processingStatus === 'analysis_completed') return 'analyzing';
+  if (processingStatus === 'analysis_running') return 'analyzing';
+  if (processingStatus === 'analysis_completed') return 'analysis_completed';
   if (processingStatus === 'image_generation_running') return 'generating_images';
   if (processingStatus === 'awaiting_image_approval') return 'awaiting_approval';
   return null;
+}
+
+export async function runDraftPreparationStage(db, {
+  rootDir,
+  getNextQueuedItemImpl = getNextQueuedItemReal,
+  getBatchRunCandidateByIdImpl = getBatchRunCandidateByIdReal,
+  prepareCandidateDraftImpl = prepareCandidateDraftReal,
+  updateQueueItemStatusImpl = updateQueueItemStatusReal,
+} = {}) {
+  const queueItem = await getNextQueuedItemImpl(db);
+  if (!queueItem) return { skipped: true, reason: 'QUEUE_EMPTY' };
+  const candidate = await getBatchRunCandidateByIdImpl(db, queueItem.batchRunCandidateId);
+  const outcome = await prepareCandidateDraftImpl(db, candidate, { rootDir, batchRunId: candidate.batchRunId });
+  if (outcome.outcome === 'ready') await updateQueueItemStatusImpl(db, queueItem.id, { status: 'ready_for_registration', draftId: outcome.draftId, startedAt: queueItem.startedAt || new Date().toISOString() });
+  else await updateQueueItemStatusImpl(db, queueItem.id, { status: 'failed', draftId: outcome.draftId, failureStage: 'draft_creation', failureMessage: outcome.outcome });
+  return { queueItemId: queueItem.id, ...outcome };
+}
+
+async function runImprovementStage(db, queueItem, processor, deps, successStatus) {
+  if (!queueItem) return { skipped: true, reason: 'QUEUE_EMPTY' };
+  const candidate = await deps.getBatchRunCandidateByIdImpl(db, queueItem.batchRunCandidateId);
+  const mirror = async (dbArg, candidateId, patch) => {
+    const result = await deps.updateBatchCandidateStatusImpl(dbArg, candidateId, patch);
+    const status = mapCandidateStatusToQueueStatus(patch.processingStatus);
+    if (status) await deps.updateQueueItemStatusImpl(dbArg, queueItem.id, { status, draftId: patch.draftId });
+    return result;
+  };
+  const outcome = await processor(db, candidate, { ...deps, updateBatchCandidateStatusImpl: mirror });
+  if (outcome.outcome === 'success') await deps.updateQueueItemStatusImpl(db, queueItem.id, { status: successStatus, draftId: outcome.draftId });
+  else if (outcome.quotaLimited) await deps.recordQueueItemPauseImpl(db, queueItem.id, { failureStage: outcome.stage, failureMessage: outcome.errorCode || 'quota limited' });
+  else await deps.updateQueueItemStatusImpl(db, queueItem.id, { status: 'failed', failureStage: outcome.stage, failureMessage: outcome.errorCode || 'unknown failure' });
+  return { queueItemId: queueItem.id, ...outcome };
+}
+
+function improvementDeps(deps) {
+  return {
+    ...deps,
+    getBatchRunCandidateByIdImpl: deps.getBatchRunCandidateByIdImpl || getBatchRunCandidateByIdReal,
+    updateBatchCandidateStatusImpl: deps.updateBatchCandidateStatusImpl || updateBatchCandidateStatusReal,
+    updateQueueItemStatusImpl: deps.updateQueueItemStatusImpl || updateQueueItemStatusReal,
+    recordQueueItemPauseImpl: deps.recordQueueItemPauseImpl || recordQueueItemPauseReal,
+  };
+}
+
+export async function runAnalysisStage(db, deps = {}) {
+  const resolved = improvementDeps(deps);
+  const item = await (deps.getNextAnalysisItemImpl || getNextAnalysisItemReal)(db);
+  return runImprovementStage(db, item, deps.analyzeWinnerCandidateImpl || analyzeWinnerCandidateReal, resolved, 'analysis_completed');
+}
+
+export async function runImageGenerationStage(db, deps = {}) {
+  const resolved = improvementDeps(deps);
+  const item = await (deps.getNextImageItemImpl || getNextImageItemReal)(db);
+  return runImprovementStage(db, item, deps.generateWinnerCandidateImagesImpl || generateWinnerCandidateImagesReal, resolved, 'awaiting_approval');
 }
 
 // Heavy cycle (daily by default), one of two things per tick -- never both,

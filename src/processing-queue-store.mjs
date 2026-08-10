@@ -76,6 +76,23 @@ export async function getNextQueueItem(db) {
   return queued.rows[0] ? toQueueItem(queued.rows[0]) : null;
 }
 
+async function getFirstByStatus(db, status, orderBy) {
+  const result = await db.query(`select * from processing_queue where status = '${status}' order by ${orderBy} limit 1`);
+  return result.rows[0] ? toQueueItem(result.rows[0]) : null;
+}
+
+export function getNextQueuedItem(db) {
+  return getFirstByStatus(db, 'queued', 'score desc nulls last, queued_at asc');
+}
+
+export function getNextAnalysisItem(db) {
+  return getFirstByStatus(db, 'analyzing', 'started_at asc nulls last, queued_at asc');
+}
+
+export function getNextImageItem(db) {
+  return getFirstByStatus(db, 'analysis_completed', 'started_at asc nulls last, queued_at asc');
+}
+
 export async function updateQueueItemStatus(db, id, { status, draftId, failureStage, failureMessage, startedAt } = {}) {
   const result = await db.query(
     `update processing_queue set

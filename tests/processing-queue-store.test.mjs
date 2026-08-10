@@ -4,6 +4,9 @@ import test from 'node:test';
 import {
   countActiveQueueItems,
   enqueueCandidate,
+  getNextAnalysisItem,
+  getNextImageItem,
+  getNextQueuedItem,
   getNextQueueItem,
   isCandidateActiveOrQueued,
   listQueue,
@@ -23,6 +26,18 @@ function fakeRow(overrides = {}) {
 test('isCandidateActiveOrQueued is true when an active (non-failed) queue row exists for the supplier_product_no', async () => {
   const db = { async query(sql) { return sql.includes('processing_queue') ? { rows: [{ x: 1 }] } : { rows: [] }; } };
   assert.equal(await isCandidateActiveOrQueued(db, '111'), true);
+});
+
+test('stage selectors each query only their eligible queue status', async () => {
+  const sqls = [];
+  const db = { async query(sql) { sqls.push(sql); return { rows: [fakeRow()] }; } };
+  await getNextQueuedItem(db);
+  await getNextAnalysisItem(db);
+  await getNextImageItem(db);
+  assert.match(sqls[0], /status = 'queued'/);
+  assert.match(sqls[1], /status = 'analyzing'/);
+  assert.match(sqls[2], /status = 'analysis_completed'/);
+  assert.ok(sqls.every((sql) => !sql.includes('ready_for_registration')));
 });
 
 test('isCandidateActiveOrQueued is true when a draft already exists, even if the queue has no active row', async () => {
