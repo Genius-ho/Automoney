@@ -19,7 +19,7 @@ test('startScheduledJobs schedules one tick per sweep, with the section-18 inter
     loadSchedulerDepsImpl: async () => ({ coupangClient: {}, naverClient: {}, domemeClient: {}, domemePrivateClient: {} }),
     tickImpl: (label, intervalMs, fn) => { scheduled.push({ label, intervalMs }); return { label }; },
   });
-  assert.equal(handles.length, 12);
+  assert.equal(handles.length, 13);
   const byLabel = Object.fromEntries(scheduled.map((s) => [s.label, s.intervalMs]));
   assert.equal(byLabel.coupangOrders, ORDER_TICK_INTERVAL_MS);
   assert.equal(byLabel.naverOrders, ORDER_TICK_INTERVAL_MS);
@@ -31,6 +31,7 @@ test('startScheduledJobs schedules one tick per sweep, with the section-18 inter
   assert.equal(byLabel.cancellationExceptions, DISPATCH_TICK_INTERVAL_MS);
   assert.equal(byLabel.supplierMonitor, SUPPLIER_MONITOR_TICK_INTERVAL_MS);
   assert.equal(byLabel.purchaseOrderTelegramNotify, ORDER_TICK_INTERVAL_MS);
+  assert.equal(byLabel.coupangSaleApprovalTelegramNotify, ORDER_TICK_INTERVAL_MS);
   assert.equal(byLabel.telegramApprovalPoll, TELEGRAM_APPROVAL_POLL_INTERVAL_MS);
   assert.equal(byLabel.dailySummary, DAILY_SUMMARY_TICK_INTERVAL_MS);
 });
@@ -77,8 +78,34 @@ test('startScheduledJobs passes the loaded telegramConfig through to every tickI
     loadSchedulerDepsImpl: async () => ({ coupangClient: {}, naverClient: {}, domemeClient: {}, domemePrivateClient: {}, telegramConfig }),
     tickImpl: (label, intervalMs, fn, opts) => { seen.push(opts?.telegramConfig); return { label }; },
   });
-  assert.equal(seen.length, 12);
+  assert.equal(seen.length, 13);
   assert.ok(seen.every((config) => config === telegramConfig));
+});
+
+test('startScheduledJobs uses one shared callback router and passes Coupang to notification and polling jobs', async () => {
+  const jobs = new Map();
+  const coupangClient = { kind: 'coupang' };
+  const domemePrivateClient = { kind: 'domeme-private' };
+  const telegramConfig = { botToken: 't', chatId: 'c' };
+  const notificationCalls = [];
+  const pollCalls = [];
+  await startScheduledJobs({ kind: 'db' }, '/root', {
+    loadSchedulerDepsImpl: async () => ({ coupangClient, naverClient: {}, domemeClient: {}, domemePrivateClient, telegramConfig }),
+    tickImpl: (label, intervalMs, fn) => { jobs.set(label, fn); return { label }; },
+    notifyPendingCoupangSaleApprovalsImpl: async (...args) => { notificationCalls.push(args); return { notified: 1 }; },
+    createTelegramCallbackRouterImpl: () => ({
+      pollOnce: async (...args) => { pollCalls.push(args); return { processed: 0 }; },
+    }),
+  });
+
+  await jobs.get('coupangSaleApprovalTelegramNotify')();
+  await jobs.get('telegramApprovalPoll')();
+
+  assert.equal(notificationCalls[0][1], telegramConfig);
+  assert.equal(notificationCalls[0][2].coupangClient, coupangClient);
+  assert.equal(pollCalls[0][1].coupangClient, coupangClient);
+  assert.equal(pollCalls[0][1].domemeClient, domemePrivateClient);
+  assert.equal(pollCalls[0][2], telegramConfig);
 });
 
 test('stopScheduledJobs clears every handle, and tolerates an empty/undefined list', () => {

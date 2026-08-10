@@ -44,7 +44,7 @@ export async function listCoupangRegistrationsAwaitingTelegramNotification(db) {
        and r.requested = false
        and r.telegram_notified_at is null
      group by r.product_draft_id, r.seller_product_id, r.seller_product_name, r.status, r.requested, d.coupang_sale_price
-     order by r.created_at`,
+     order by min(r.created_at)`,
     [],
   );
   return result.rows.map((row) => ({

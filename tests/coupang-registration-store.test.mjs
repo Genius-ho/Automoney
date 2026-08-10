@@ -39,6 +39,7 @@ test('listCoupangRegistrationsAwaitingTelegramNotification selects only created 
   assert.match(captured.sql, /r\.status = 'created'/);
   assert.match(captured.sql, /r\.requested = false/);
   assert.match(captured.sql, /r\.telegram_notified_at is null/);
+  assert.match(captured.sql, /order by min\(r\.created_at\)/);
 });
 
 test('markCoupangRegistrationTelegramNotified stores timestamp and message id', async () => {
