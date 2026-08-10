@@ -1,0 +1,18 @@
+[Unit]
+Description=Mumae indicator backtest sweep + Telegram notify (one-shot)
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=oneshot
+User=ho
+Group=ho
+WorkingDirectory=/home/ho/apps/automoney
+EnvironmentFile=/home/ho/apps/automoney/deploy/mumae.env
+ExecStart=/home/ho/apps/automoney/.venv/bin/python /home/ho/apps/automoney/backtest_indicator_sweep.py KORU --notify
+UMask=0077
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectSystem=strict
+ProtectHome=read-only
+ReadWritePaths=/home/ho/apps/automoney/data

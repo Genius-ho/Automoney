@@ -1,0 +1,18 @@
+[Unit]
+Description=Mumae 1-minute candle history logger (oneshot)
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=oneshot
+User=ho
+Group=ho
+WorkingDirectory=/home/ho/apps/automoney
+EnvironmentFile=/home/ho/apps/automoney/deploy/mumae.env
+ExecStart=/usr/bin/python3 /home/ho/apps/automoney/candle_logger.py KORU
+UMask=0077
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectSystem=strict
+ProtectHome=read-only
+ReadWritePaths=/home/ho/apps/automoney/data

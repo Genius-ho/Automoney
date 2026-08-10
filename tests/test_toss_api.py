@@ -44,6 +44,18 @@ class TossRateLimitTests(unittest.TestCase):
         path = broker._request.call_args.args[1]
         self.assertIn("count=200", path)
         self.assertIn("before=2025-09-29T00%3A00%3A00Z", path)
+
+    def test_minute_candles_use_1m_interval_and_support_before_cursor(self):
+        broker = TossBroker.__new__(TossBroker)
+        broker._request = MagicMock(return_value={"result": {"candles": []}})
+
+        broker.get_minute_candles_raw("KORU", 200, before="2025-09-29T00:00:00Z")
+
+        path = broker._request.call_args.args[1]
+        self.assertIn("interval=1m", path)
+        self.assertIn("count=200", path)
+        self.assertIn("before=2025-09-29T00%3A00%3A00Z", path)
+
     @patch("toss_api.time.sleep")
     def test_live_cancel_spaces_requests_by_one_second(self, mocked_sleep):
         broker = TossBroker()

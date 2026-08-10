@@ -211,6 +211,13 @@ class TossBroker:
         if before:
             params["before"] = before
         return self._request("GET", "/api/v1/candles?" + urlencode(params))
+
+    def get_minute_candles_raw(self, symbol: str, count: int = 200, before: str | None = None) -> dict:
+        params: dict[str, str | int] = {"symbol": symbol, "interval": "1m", "count": count, "adjusted": "true"}
+        if before:
+            params["before"] = before
+        return self._request("GET", "/api/v1/candles?" + urlencode(params))
+
     def get_us_market_calendar_raw(self, date_value: str | None = None) -> dict:
         path = "/api/v1/market-calendar/US" if date_value is None else "/api/v1/market-calendar/US?date=" + date_value
         return self._request("GET", path)
