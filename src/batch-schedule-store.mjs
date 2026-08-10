@@ -8,6 +8,22 @@ function toBatchScheduleState(row) {
     processingIntervalDays: row.processing_interval_days,
     processingNextRunAt: row.processing_next_run_at,
     processingLastRunAt: row.processing_last_run_at,
+    draftNextRunAt: row.draft_next_run_at,
+    draftLastRunAt: row.draft_last_run_at,
+    draftLastServiceDate: row.draft_last_service_date,
+    draftLastOutcome: row.draft_last_outcome,
+    analysisNextRunAt: row.analysis_next_run_at,
+    analysisLastRunAt: row.analysis_last_run_at,
+    analysisLastServiceDate: row.analysis_last_service_date,
+    analysisLastOutcome: row.analysis_last_outcome,
+    imagesNextRunAt: row.images_next_run_at,
+    imagesLastRunAt: row.images_last_run_at,
+    imagesLastServiceDate: row.images_last_service_date,
+    imagesLastOutcome: row.images_last_outcome,
+    discoveryNextRunAt: row.next_run_at,
+    discoveryLastRunAt: row.last_run_at,
+    discoveryLastServiceDate: row.discovery_last_service_date,
+    discoveryLastOutcome: row.discovery_last_outcome,
     updatedAt: row.updated_at,
   };
 }
@@ -92,3 +108,32 @@ export async function releaseLockOnly(db) {
   );
   return toBatchScheduleState(result.rows[0]);
 }
+
+const PRODUCT_STAGE_COLUMNS = Object.freeze({
+  draft: 'draft',
+  analysis: 'analysis',
+  images: 'images',
+  discovery: 'discovery',
+});
+
+export async function completeProductStage(db, stage, { serviceDate, nextRunAt, outcome } = {}) {
+  const prefix = PRODUCT_STAGE_COLUMNS[stage];
+  if (!prefix) throw new TypeError(`unknown product stage: ${stage}`);
+  const nextColumn = stage === 'discovery' ? 'next_run_at' : `${prefix}_next_run_at`;
+  const lastRunColumn = stage === 'discovery' ? 'last_run_at' : `${prefix}_last_run_at`;
+  const result = await db.query(
+    `update batch_schedule_state set
+       is_running = false,
+       ${lastRunColumn} = now(),
+       ${prefix}_last_service_date = $1,
+       ${nextColumn} = $2,
+       ${prefix}_last_outcome = $3,
+       updated_at = now()
+     where id = 1
+     returning *`,
+    [serviceDate, nextRunAt, outcome],
+  );
+  return toBatchScheduleState(result.rows[0]);
+}
+
+export const releaseProductStageLock = releaseLockOnly;

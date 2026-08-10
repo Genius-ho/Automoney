@@ -2,6 +2,7 @@ import assert from 'node:assert/strict';
 import test from 'node:test';
 
 import {
+  completeProductStage,
   getBatchScheduleState,
   releaseDiscoveryLock,
   releaseLockOnly,
@@ -20,6 +21,20 @@ function fakeRow(overrides = {}) {
     processing_interval_days: 1,
     processing_next_run_at: '2026-07-21T00:00:00Z',
     processing_last_run_at: null,
+    draft_next_run_at: '2026-07-20T22:00:00Z',
+    draft_last_run_at: null,
+    draft_last_service_date: null,
+    draft_last_outcome: null,
+    analysis_next_run_at: '2026-07-20T23:00:00Z',
+    analysis_last_run_at: null,
+    analysis_last_service_date: null,
+    analysis_last_outcome: null,
+    images_next_run_at: '2026-07-21T00:00:00Z',
+    images_last_run_at: null,
+    images_last_service_date: null,
+    images_last_outcome: null,
+    discovery_last_service_date: null,
+    discovery_last_outcome: null,
     updated_at: '2026-07-20T00:00:00Z',
     ...overrides,
   };
@@ -28,6 +43,30 @@ function fakeRow(overrides = {}) {
 test('getBatchScheduleState returns null when the single row is somehow missing', async () => {
   const db = { async query() { return { rows: [] }; } };
   assert.equal(await getBatchScheduleState(db), null);
+});
+
+test('getBatchScheduleState maps independent fixed stage fields', async () => {
+  const db = { async query() { return { rows: [fakeRow()] }; } };
+  const state = await getBatchScheduleState(db);
+  assert.equal(state.draftNextRunAt, '2026-07-20T22:00:00Z');
+  assert.equal(state.analysisNextRunAt, '2026-07-20T23:00:00Z');
+  assert.equal(state.imagesNextRunAt, '2026-07-21T00:00:00Z');
+  assert.equal(state.discoveryNextRunAt, '2026-07-23T00:00:00Z');
+});
+
+test('completeProductStage updates only the whitelisted stage and releases the lock', async () => {
+  let capturedSql;
+  let capturedParams;
+  const db = { async query(sql, params) { capturedSql = sql; capturedParams = params; return { rows: [fakeRow()] }; } };
+  await completeProductStage(db, 'analysis', {
+    serviceDate: '2026-08-11', nextRunAt: '2026-08-11T23:00:00Z', outcome: 'no_work',
+  });
+  assert.match(capturedSql, /analysis_last_service_date/);
+  assert.match(capturedSql, /analysis_next_run_at/);
+  assert.doesNotMatch(capturedSql, /draft_next_run_at/);
+  assert.match(capturedSql, /is_running = false/);
+  assert.deepEqual(capturedParams, ['2026-08-11', '2026-08-11T23:00:00Z', 'no_work']);
+  await assert.rejects(() => completeProductStage(db, 'unknown', {}), /unknown product stage/);
 });
 
 test('getBatchScheduleState maps both the discovery and processing schedule fields to camelCase', async () => {
