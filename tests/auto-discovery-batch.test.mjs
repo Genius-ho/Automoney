@@ -8,8 +8,37 @@ import {
   runDailyProcessingBatch,
   runDraftPreparationStage,
   runImageGenerationStage,
+  runDueProductAutomationStage,
   selectRandomCategories,
 } from '../src/auto-discovery-batch.mjs';
+
+test('due dispatcher runs only the oldest due product stage and records its next slot', async () => {
+  const calls = [];
+  const result = await runDueProductAutomationStage({}, {}, {
+    now: new Date('2026-08-11T01:30:00Z'),
+    getBatchScheduleStateImpl: async () => ({ draftNextRunAt: '2026-08-10T22:00:00Z' }),
+    selectOldestDueStageImpl: () => ({ stage: 'draft', serviceDate: '2026-08-11', dueAt: new Date('2026-08-10T22:00:00Z') }),
+    tryAcquireBatchLockImpl: async () => ({ isRunning: true }),
+    runDraftPreparationStageImpl: async () => { calls.push('draft'); return { outcome: 'ready' }; },
+    runAnalysisStageImpl: async () => { calls.push('analysis'); },
+    completeProductStageImpl: async (_db, stage, details) => calls.push({ stage, details }),
+  });
+  assert.equal(result.stage, 'draft');
+  assert.deepEqual(calls.slice(0, 1), ['draft']);
+  assert.equal(calls[1].stage, 'draft');
+  assert.equal(calls[1].details.nextRunAt, '2026-08-11T22:00:00.000Z');
+});
+
+test('due dispatcher returns NOT_DUE without acquiring the lock', async () => {
+  let acquired = false;
+  const result = await runDueProductAutomationStage({}, {}, {
+    getBatchScheduleStateImpl: async () => ({}),
+    selectOldestDueStageImpl: () => null,
+    tryAcquireBatchLockImpl: async () => { acquired = true; },
+  });
+  assert.deepEqual(result, { skipped: true, reason: 'NOT_DUE' });
+  assert.equal(acquired, false);
+});
 
 test('focused product stages process at most one eligible item and stop at their boundary', async () => {
   const updates = [];

@@ -2,11 +2,14 @@ import { collectCandidates as collectCandidatesReal, evaluateCandidates as evalu
 import { computeCompetitivenessScore as computeCompetitivenessScoreReal } from './competitiveness-score.mjs';
 import { getRecentlySelectedCategoryIds, listActiveCategoryPolicies, recordCategorySelections as recordCategorySelectionsReal } from './category-policy-store.mjs';
 import {
+  completeProductStage as completeProductStageReal,
+  getBatchScheduleState as getBatchScheduleStateReal,
   releaseDiscoveryLock as releaseDiscoveryLockReal,
   releaseLockOnly as releaseLockOnlyReal,
   releaseProcessingLock as releaseProcessingLockReal,
   tryAcquireBatchLock as tryAcquireBatchLockReal,
 } from './batch-schedule-store.mjs';
+import { selectOldestDueStage as selectOldestDueStageReal } from './product-automation-schedule.mjs';
 import {
   createBatchRun as createBatchRunReal,
   finishBatchRun as finishBatchRunReal,
@@ -28,6 +31,42 @@ import {
 import { analyzeWinnerCandidate as analyzeWinnerCandidateReal, generateWinnerCandidateImages as generateWinnerCandidateImagesReal, prepareCandidateDraft as prepareCandidateDraftReal, processWinnerCandidate as processWinnerCandidateReal } from './batch-winner-processor.mjs';
 
 const CANDIDATES_STORED_PER_CATEGORY = 5;
+
+export async function runDueProductAutomationStage(db, deps = {}, {
+  now = new Date(),
+  getBatchScheduleStateImpl = getBatchScheduleStateReal,
+  selectOldestDueStageImpl = selectOldestDueStageReal,
+  tryAcquireBatchLockImpl = tryAcquireBatchLockReal,
+  completeProductStageImpl = completeProductStageReal,
+  runDraftPreparationStageImpl = runDraftPreparationStage,
+  runAnalysisStageImpl = runAnalysisStage,
+  runImageGenerationStageImpl = runImageGenerationStage,
+  runCandidateDiscoveryBatchImpl = runCandidateDiscoveryBatch,
+} = {}) {
+  const state = await getBatchScheduleStateImpl(db);
+  const due = selectOldestDueStageImpl(state, now);
+  if (!due) return { skipped: true, reason: 'NOT_DUE' };
+
+  const days = due.stage === 'discovery' ? Number(state?.intervalDays || 3) : 1;
+  const nextRunAt = new Date(due.dueAt.getTime() + days * 24 * 60 * 60 * 1000).toISOString();
+  try {
+    let outcome;
+    if (due.stage === 'discovery') {
+      outcome = await runCandidateDiscoveryBatchImpl(db, deps);
+    } else {
+      const lock = await tryAcquireBatchLockImpl(db);
+      if (!lock) return { skipped: true, reason: 'ALREADY_RUNNING' };
+      const runners = { draft: runDraftPreparationStageImpl, analysis: runAnalysisStageImpl, images: runImageGenerationStageImpl };
+      outcome = await runners[due.stage](db, deps);
+    }
+    const outcomeLabel = outcome?.outcome || (outcome?.skipped ? `skipped:${outcome.reason}` : 'completed');
+    await completeProductStageImpl(db, due.stage, { serviceDate: due.serviceDate, nextRunAt, outcome: outcomeLabel });
+    return { stage: due.stage, outcome };
+  } catch (error) {
+    await completeProductStageImpl(db, due.stage, { serviceDate: due.serviceDate, nextRunAt, outcome: `failed:${error.code || error.message}` });
+    throw error;
+  }
+}
 
 // "전체 카테고리에서 무작위로 고르되 ... 최근 30일 동안 선택한 카테고리는
 // 가능하면 다시 선택하지 않는다" -- prefers the pool of categories NOT

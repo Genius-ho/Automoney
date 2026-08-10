@@ -6,7 +6,7 @@ import { createHash } from 'node:crypto';
 import { loadAiSecrets, loadCodexConfig, loadCoupangConfig, loadDatabaseUrl, loadDomemePrivateConfig, loadEnvConfig, loadJobPathsConfig, loadNaverCommerceConfig, loadNaverConfig, loadPricingRules, loadPythonConfig, loadTelegramConfig } from './config.mjs';
 import { sendCriticalAlert } from './telegram-notifier.mjs';
 import { DomemeClient } from './domeme-client.mjs';
-import { runCandidateDiscoveryBatch, runDailyProcessingBatch } from './auto-discovery-batch.mjs';
+import { runCandidateDiscoveryBatch, runDailyProcessingBatch, runDueProductAutomationStage } from './auto-discovery-batch.mjs';
 import { getBatchScheduleState, updateBatchScheduleState } from './batch-schedule-store.mjs';
 import { getBatchRunDetail, listBatchRuns } from './batch-run-store.mjs';
 import { countActiveQueueItems, getNextQueueItem, listQueue, updateQueueItemStatus } from './processing-queue-store.mjs';
@@ -126,22 +126,8 @@ export async function createAdminServer({ rootDir = process.cwd() } = {}) {
   const tickHandle = setInterval(async () => {
     if (!autoBatchDeps) return;
     try {
-      const state = await getBatchScheduleState(db);
-      if (!state || state.isRunning) return;
-      // Daily processing (the Codex-heavy cycle) takes priority when both
-      // happen to be due at once -- "큐에 미완료 상품이 있으면 새 후보 발굴보다
-      // 기존 큐 처리를 우선". runCandidateDiscoveryBatch itself also refuses
-      // to do any work while a backlog remains, so checking processing first
-      // here is belt-and-suspenders, not load-bearing on its own.
-      if (new Date(state.processingNextRunAt) <= new Date()) {
-        const result = await runDailyProcessingBatch(db, { rootDir, ...autoBatchDeps });
-        console.log(`autoBatch.processingTick=${result.skipped ? `skipped:${result.reason}` : result.outcome}`);
-        return;
-      }
-      if (new Date(state.nextRunAt) <= new Date()) {
-        const result = await runCandidateDiscoveryBatch(db, { rootDir, ...autoBatchDeps });
-        console.log(`autoBatch.discoveryTick=${result.skipped ? `skipped:${result.reason}` : result.run?.status}`);
-      }
+      const result = await runDueProductAutomationStage(db, { rootDir, ...autoBatchDeps });
+      if (!result.skipped) console.log(`autoBatch.stageTick=${result.stage}:${result.outcome?.outcome || result.outcome?.reason || 'completed'}`);
     } catch (error) {
       console.error(`autoBatch.tickError=${error.message}`);
       try {
