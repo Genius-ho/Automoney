@@ -8,6 +8,12 @@ param(
 )
 
 $ErrorActionPreference = 'Stop'
+
+function ConvertFrom-CodePoints {
+    param([int[]]$CodePoints)
+    return -join ($CodePoints | ForEach-Object { [char]$_ })
+}
+
 $repositoryRoot = Split-Path -Parent $PSScriptRoot
 $adminScript = Join-Path $repositoryRoot 'scripts\admin-server.js'
 
@@ -81,31 +87,36 @@ if ($ProbeOnly) {
 }
 
 if (-not (Test-Path -LiteralPath $adminScript -PathType Leaf)) {
-    [Console]::Error.WriteLine('Automoney admin server script was not found.')
+    $notFound = ConvertFrom-CodePoints @(0xC2E4,0xD589,0xAE30,0x20,0xD30C,0xC77C,0xC744,0x20,0xCC3E,0xC744,0x20,0xC218,0x20,0xC5C6,0xC2B5,0xB2C8,0xB2E4)
+    [Console]::Error.WriteLine("Automoney $notFound.")
     exit 2
 }
 
 $nodeCommand = Get-Command node.exe -ErrorAction SilentlyContinue
 if ($null -eq $nodeCommand) {
-    [Console]::Error.WriteLine('Node.js를 찾을 수 없습니다. Node.js 24 이상을 설치하세요.')
+    $nodeMissing = ConvertFrom-CodePoints @(0x4E,0x6F,0x64,0x65,0x2E,0x6A,0x73,0xB97C,0x20,0xCC3E,0xC744,0x20,0xC218,0x20,0xC5C6,0xC2B5,0xB2C8,0xB2E4,0x2E,0x20,0x4E,0x6F,0x64,0x65,0x2E,0x6A,0x73,0x20,0x32,0x34,0x20,0xC774,0xC0C1,0xC744,0x20,0xC124,0xCE58,0xD558,0xC138,0xC694,0x2E)
+    [Console]::Error.WriteLine($nodeMissing)
     exit 2
 }
 
 Push-Location $repositoryRoot
 $serverProcess = $null
 try {
-    Write-Output "Automoney 서버를 시작합니다: $adminUrl"
+    $starting = ConvertFrom-CodePoints @(0xC11C,0xBC84,0xB97C,0x20,0xC2DC,0xC791,0xD569,0xB2C8,0xB2E4)
+    Write-Output "Automoney $starting`: $adminUrl"
     $serverProcess = Start-Process -FilePath $nodeCommand.Source -ArgumentList @($adminScript) -NoNewWindow -PassThru
 
     if (-not (Wait-ForAdminEndpoint -Url $adminUrl -TimeoutSeconds $StartupTimeoutSeconds)) {
-        [Console]::Error.WriteLine("서버가 $StartupTimeoutSeconds 초 안에 준비되지 않았습니다.")
+        $notReady = ConvertFrom-CodePoints @(0xC11C,0xBC84,0xAC00,0x20,0xC2DC,0xAC04,0x20,0xC548,0xC5D0,0x20,0xC900,0xBE44,0xB418,0xC9C0,0x20,0xC54A,0xC558,0xC2B5,0xB2C8,0xB2E4)
+        [Console]::Error.WriteLine("$notReady ($StartupTimeoutSeconds seconds).")
         if (-not $serverProcess.HasExited) {
             Stop-Process -Id $serverProcess.Id
         }
         exit 1
     }
 
-    Write-Output "Automoney 준비 완료: $adminUrl"
+    $ready = ConvertFrom-CodePoints @(0xC900,0xBE44,0x20,0xC644,0xB8CC)
+    Write-Output "Automoney $ready`: $adminUrl"
     if (-not $NoBrowser) {
         Start-Process $adminUrl
     }

@@ -25,7 +25,8 @@ if ($Describe) {
 }
 
 if (-not (Test-Path -LiteralPath $launcherPath -PathType Leaf)) {
-    [Console]::Error.WriteLine('Automoney Windows 실행기 파일을 찾을 수 없습니다.')
+    $notFound = -join (@(0xC2E4,0xD589,0xAE30,0x20,0xD30C,0xC77C,0xC744,0x20,0xCC3E,0xC744,0x20,0xC218,0x20,0xC5C6,0xC2B5,0xB2C8,0xB2E4) | ForEach-Object { [char]$_ })
+    [Console]::Error.WriteLine("Automoney Windows $notFound.")
     exit 2
 }
 
@@ -37,4 +38,5 @@ $shortcut.WorkingDirectory = $repositoryRoot
 $shortcut.IconLocation = "$env:SystemRoot\System32\WindowsPowerShell\v1.0\powershell.exe,0"
 $shortcut.Save()
 
-Write-Output "바탕화면 바로가기를 만들었습니다: $shortcutPath"
+$created = -join (@(0xBC14,0xD0D5,0xD654,0xBA74,0x20,0xBC14,0xB85C,0xAC00,0xAE30,0xB97C,0x20,0xB9CC,0xB4E4,0xC5C8,0xC2B5,0xB2C8,0xB2E4) | ForEach-Object { [char]$_ })
+Write-Output "$created`: $shortcutPath"

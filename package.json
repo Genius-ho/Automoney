@@ -6,6 +6,8 @@
   "scripts": {
     "db:check": "node scripts/db-check.js",
     "admin": "node scripts/admin-server.js",
+    "admin:windows": "powershell.exe -NoProfile -ExecutionPolicy Bypass -File scripts/run-admin-server-windows.ps1",
+    "admin:windows:install-shortcut": "powershell.exe -NoProfile -ExecutionPolicy Bypass -File scripts/install-windows-desktop-shortcut.ps1",
     "speedgo:login": "node scripts/speedgo-login.mjs",
     "speedgo:register": "node scripts/speedgo-register.mjs",
     "collect:candidates": "node scripts/collect-candidates.js",

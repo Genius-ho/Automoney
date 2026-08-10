@@ -118,3 +118,15 @@ test('shortcut describe is deterministic and does not create the shortcut', () =
   assert.deepEqual(JSON.parse(second.stdout), description);
   assert.equal(fs.existsSync(description.shortcutPath), existedBefore);
 });
+
+test('package scripts expose the manual Windows launch workflow', () => {
+  const pkg = JSON.parse(fs.readFileSync(path.join(repoRoot, 'package.json'), 'utf8'));
+  assert.equal(
+    pkg.scripts['admin:windows'],
+    'powershell.exe -NoProfile -ExecutionPolicy Bypass -File scripts/run-admin-server-windows.ps1',
+  );
+  assert.equal(
+    pkg.scripts['admin:windows:install-shortcut'],
+    'powershell.exe -NoProfile -ExecutionPolicy Bypass -File scripts/install-windows-desktop-shortcut.ps1',
+  );
+});
