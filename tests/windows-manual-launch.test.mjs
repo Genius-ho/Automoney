@@ -1,5 +1,6 @@
 import assert from 'node:assert/strict';
 import { spawn, spawnSync } from 'node:child_process';
+import fs from 'node:fs';
 import net from 'node:net';
 import path from 'node:path';
 import test from 'node:test';
@@ -7,6 +8,7 @@ import { fileURLToPath } from 'node:url';
 
 const repoRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
 const launcher = path.join(repoRoot, 'scripts', 'run-admin-server-windows.ps1');
+const shortcutInstaller = path.join(repoRoot, 'scripts', 'install-windows-desktop-shortcut.ps1');
 
 function runPowerShell(script, args = [], env = {}) {
   return spawnSync(
@@ -89,4 +91,30 @@ test('probe-only fails within its bounded timeout when no endpoint is listening'
   );
   assert.notEqual(result.status, 0);
   assert.ok(Date.now() - startedAt < 5_000, 'probe exceeded its bounded timeout');
+});
+
+test('shortcut description targets only the current desktop with exact launch arguments', () => {
+  const result = runPowerShell(shortcutInstaller, ['-Describe']);
+  assert.equal(result.status, 0, result.stderr);
+  const description = JSON.parse(result.stdout);
+  assert.equal(path.basename(description.shortcutPath), 'Automoney 시작.lnk');
+  assert.equal(description.targetPath.toLowerCase(), 'powershell.exe');
+  assert.equal(path.resolve(description.workingDirectory), repoRoot);
+  assert.match(
+    description.arguments,
+    /^-NoProfile -ExecutionPolicy Bypass -NoExit -File ".+run-admin-server-windows\.ps1"$/,
+  );
+  assert.ok(path.isAbsolute(description.shortcutPath));
+});
+
+test('shortcut describe is deterministic and does not create the shortcut', () => {
+  const first = runPowerShell(shortcutInstaller, ['-Describe']);
+  assert.equal(first.status, 0, first.stderr);
+  const description = JSON.parse(first.stdout);
+  const existedBefore = fs.existsSync(description.shortcutPath);
+
+  const second = runPowerShell(shortcutInstaller, ['-Describe']);
+  assert.equal(second.status, 0, second.stderr);
+  assert.deepEqual(JSON.parse(second.stdout), description);
+  assert.equal(fs.existsSync(description.shortcutPath), existedBefore);
 });
