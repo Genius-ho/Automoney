@@ -76,7 +76,7 @@ test('listQueue filters by status when provided', async () => {
 test('getNextQueueItem resumes an in-progress item before ever picking a fresh queued one', async () => {
   const db = {
     async query(sql) {
-      if (sql.includes("in ('analyzing', 'generating_images')")) return { rows: [fakeRow({ id: '9', status: 'generating_images' })] };
+      if (sql.includes("in ('analyzing', 'analysis_completed', 'generating_images')")) return { rows: [fakeRow({ id: '9', status: 'generating_images' })] };
       return { rows: [fakeRow({ id: '1' })] };
     },
   };
@@ -88,7 +88,7 @@ test('getNextQueueItem resumes an in-progress item before ever picking a fresh q
 test('getNextQueueItem falls back to the highest-scoring queued item when nothing is in progress', async () => {
   const db = {
     async query(sql) {
-      if (sql.includes("in ('analyzing', 'generating_images')")) return { rows: [] };
+      if (sql.includes("in ('analyzing', 'analysis_completed', 'generating_images')")) return { rows: [] };
       return { rows: [fakeRow({ id: '3', score: '91' })] };
     },
   };

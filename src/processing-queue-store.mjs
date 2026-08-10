@@ -67,7 +67,7 @@ export async function listQueue(db, { status } = {}) {
 // day boundaries, not just within one run.
 export async function getNextQueueItem(db) {
   const inProgress = await db.query(
-    `select * from processing_queue where status in ('analyzing', 'generating_images') order by started_at asc nulls last limit 1`,
+    `select * from processing_queue where status in ('analyzing', 'analysis_completed', 'generating_images') order by started_at asc nulls last limit 1`,
   );
   if (inProgress.rows.length > 0) return toQueueItem(inProgress.rows[0]);
   const queued = await db.query(

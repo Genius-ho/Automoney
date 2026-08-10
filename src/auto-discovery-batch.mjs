@@ -313,6 +313,20 @@ export async function runImageGenerationStage(db, deps = {}) {
   return runImprovementStage(db, item, deps.generateWinnerCandidateImagesImpl || generateWinnerCandidateImagesReal, resolved, 'awaiting_approval');
 }
 
+export async function runNextProductAutomationStage(db, deps = {}) {
+  const lock = await (deps.tryAcquireBatchLockImpl || tryAcquireBatchLockReal)(db);
+  if (!lock) return { skipped: true, reason: 'ALREADY_RUNNING' };
+  try {
+    const item = await (deps.getNextQueueItemImpl || getNextQueueItemReal)(db);
+    if (!item) return { skipped: true, reason: 'QUEUE_EMPTY' };
+    if (item.status === 'queued') return runDraftPreparationStage(db, deps);
+    if (item.status === 'analyzing') return runAnalysisStage(db, deps);
+    return runImageGenerationStage(db, deps);
+  } finally {
+    await (deps.releaseLockOnlyImpl || releaseLockOnlyReal)(db);
+  }
+}
+
 // Heavy cycle (daily by default), one of two things per tick -- never both,
 // capping real work (Codex usage, and now also a brand-new draft) at once
 // per day regardless of how many items discovery has queued:
