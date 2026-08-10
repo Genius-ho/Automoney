@@ -24,6 +24,7 @@ import { buildRegistrationPreview, createDirectRegistration, extractList, previe
 import { getSellerShippingSettings, saveSellerShippingSettings } from './coupang-seller-settings-store.mjs';
 import { NaverCommerceClient, NaverCommerceApiError } from './naver-commerce-client.mjs';
 import { createNaverDirectRegistration } from './naver-registration-flow.mjs';
+import { buildNaverPriceUpdatePayload } from './naver-registration-post-process.mjs';
 import { getNaverRegistration, linkNaverRegistration, recordImagesSwapped as recordNaverImagesSwapped } from './naver-registration-store.mjs';
 import { mapLiveNaverProductToImageSwapPayload } from './naver-payload-builder.mjs';
 import { createPgPool, runSchema } from './postgres-store.mjs';
@@ -84,21 +85,6 @@ export function renderManualMainImageWorkflowSection({request={},sourceMainImage
 }
 
 function escapeHtmlForSection(value) { return String(value).replaceAll('&', '&amp;').replaceAll('<', '&lt;').replaceAll('>', '&gt;'); }
-
-// Passes the live product's own optionInfo straight through, changing only
-// productSalePrice -- see the /naver-registration/update-price route's own
-// comment for why this doesn't try to reconstruct optionInfo from scratch.
-function buildNaverPriceUpdatePayload(liveProduct, salePrice) {
-  const optionInfo = liveProduct?.originProduct?.detailAttribute?.optionInfo || {};
-  return {
-    productSalePrice: { salePrice },
-    optionInfo: {
-      optionCombinations: optionInfo.optionCombinations || [],
-      optionStandards: optionInfo.optionStandards || [],
-      useStockManagement: optionInfo.useStockManagement ?? false,
-    },
-  };
-}
 
 const AUTO_BATCH_TICK_INTERVAL_MS = 5 * 60 * 1000;
 

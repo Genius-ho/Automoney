@@ -15,7 +15,54 @@ function toRegistrationListItem(row) {
     liveSalePrice: row.live_sale_price,
     approvalRequestedAt: row.approval_requested_at,
     approvalResponseMessage: row.approval_response_message,
+    telegramNotifiedAt: row.telegram_notified_at ?? null,
+    telegramMessageId: row.telegram_message_id == null ? null : Number(row.telegram_message_id),
   };
+}
+
+export async function listCoupangRegistrationsAwaitingTelegramNotification(db) {
+  const result = await db.query(
+    `select
+       r.product_draft_id,
+       r.seller_product_id,
+       r.seller_product_name,
+       r.status,
+       r.requested,
+       d.coupang_sale_price as sale_price,
+       coalesce(
+         jsonb_agg(
+           jsonb_build_object('name', o.value, 'stockQuantity', o.stock_quantity)
+           order by o.option_index
+         ) filter (where o.id is not null),
+         '[]'::jsonb
+       ) as options
+     from coupang_product_registrations r
+     join product_drafts d on d.id = r.product_draft_id
+     left join product_options o on o.product_draft_id = d.id
+     where r.seller_product_id is not null
+       and r.status = 'created'
+       and r.requested = false
+       and r.telegram_notified_at is null
+     group by r.product_draft_id, r.seller_product_id, r.seller_product_name, r.status, r.requested, d.coupang_sale_price
+     order by min(r.created_at)`,
+    [],
+  );
+  return result.rows.map((row) => ({
+    ...toRegistrationListItem(row),
+    salePrice: row.sale_price == null ? null : Number(row.sale_price),
+    options: row.options || [],
+  }));
+}
+
+export async function markCoupangRegistrationTelegramNotified(db, productDraftId, messageId) {
+  const result = await db.query(
+    `update coupang_product_registrations
+        set telegram_notified_at = now(), telegram_message_id = $2, updated_at = now()
+      where product_draft_id = $1
+      returning *`,
+    [productDraftId, messageId],
+  );
+  return result.rows[0] ? toRegistrationListItem({ ...result.rows[0], product_draft_id: productDraftId }) : null;
 }
 
 // Left-joins every draft against coupang_product_registrations so both

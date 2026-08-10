@@ -494,6 +494,8 @@ alter table coupang_product_registrations add column if not exists live_status_n
 alter table coupang_product_registrations add column if not exists live_item_snapshot_json jsonb;
 alter table coupang_product_registrations add column if not exists live_total_stock_quantity integer;
 alter table coupang_product_registrations add column if not exists live_sale_price integer;
+alter table coupang_product_registrations add column if not exists telegram_notified_at timestamptz;
+alter table coupang_product_registrations add column if not exists telegram_message_id bigint;
 
 create table if not exists product_analysis_runs (
   id bigserial primary key,

@@ -1,6 +1,8 @@
 import { loadCoupangConfig, loadNaverCommerceConfig, loadEnvConfig, loadDomemePrivateConfig, loadTelegramConfig } from './config.mjs';
 import { sendCriticalAlert } from './telegram-notifier.mjs';
-import { notifyPendingPurchaseApprovals, createTelegramApprovalPoller } from './telegram-approval-bot.mjs';
+import { notifyPendingPurchaseApprovals } from './telegram-approval-bot.mjs';
+import { notifyPendingCoupangSaleApprovals } from './coupang-telegram-approval.mjs';
+import { createTelegramCallbackRouter } from './telegram-callback-router.mjs';
 import { CoupangClient } from './coupang-client.mjs';
 import { NaverCommerceClient } from './naver-commerce-client.mjs';
 import { DomemeClient } from './domeme-client.mjs';
@@ -85,13 +87,14 @@ export function tick(label, intervalMs, fn, { setIntervalImpl = setInterval, tel
 export async function startScheduledJobs(db, rootDir, {
   loadSchedulerDepsImpl = loadSchedulerDeps,
   tickImpl = tick,
-  createTelegramApprovalPollerImpl = createTelegramApprovalPoller,
+  notifyPendingCoupangSaleApprovalsImpl = notifyPendingCoupangSaleApprovals,
+  createTelegramCallbackRouterImpl = createTelegramCallbackRouter,
 } = {}) {
   const deps = await loadSchedulerDepsImpl(rootDir);
   if (!deps) return [];
   const { coupangClient, naverClient, domemeClient, domemePrivateClient, telegramConfig = null } = deps;
   const opts = { telegramConfig };
-  const approvalPoller = createTelegramApprovalPollerImpl();
+  const approvalPoller = createTelegramCallbackRouterImpl();
 
   return [
     tickImpl('coupangOrders', ORDER_TICK_INTERVAL_MS, () => runCoupangOrderCollection(db, coupangClient), opts),
@@ -104,7 +107,8 @@ export async function startScheduledJobs(db, rootDir, {
     tickImpl('cancellationExceptions', DISPATCH_TICK_INTERVAL_MS, () => runCancellationExceptionSweep(db), opts),
     tickImpl('supplierMonitor', SUPPLIER_MONITOR_TICK_INTERVAL_MS, () => runSupplierMonitorAndSuspendSweep(db, domemeClient, { coupangClient, naverClient }), opts),
     tickImpl('purchaseOrderTelegramNotify', ORDER_TICK_INTERVAL_MS, () => notifyPendingPurchaseApprovals(db, telegramConfig), opts),
-    tickImpl('telegramApprovalPoll', TELEGRAM_APPROVAL_POLL_INTERVAL_MS, () => approvalPoller.pollOnce(db, domemePrivateClient, telegramConfig), opts),
+    tickImpl('coupangSaleApprovalTelegramNotify', ORDER_TICK_INTERVAL_MS, () => notifyPendingCoupangSaleApprovalsImpl(db, telegramConfig, { coupangClient }), opts),
+    tickImpl('telegramApprovalPoll', TELEGRAM_APPROVAL_POLL_INTERVAL_MS, () => approvalPoller.pollOnce(db, { domemeClient: domemePrivateClient, coupangClient }, telegramConfig), opts),
     tickImpl('dailySummary', DAILY_SUMMARY_TICK_INTERVAL_MS, () => sendDailySummary(db, telegramConfig), opts),
   ];
 }

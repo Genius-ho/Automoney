@@ -108,6 +108,21 @@ async function handleSkip(telegramConfig, query, impls) {
   await notifyResult(telegramConfig, query, '⏭ 보류됨 (변경 없음, 관리자 화면에서 처리)', impls);
 }
 
+export async function handlePurchaseOrderApprovalCallback(db, domemeClient, telegramConfig, query, {
+  approveSupplierOrderImpl = approveSupplierOrder,
+  answerCallbackQueryImpl = answerCallbackQuery,
+  editTelegramMessageTextImpl = editTelegramMessageText,
+  sendTelegramMessageImpl = sendTelegramMessage,
+} = {}) {
+  const [action, idText] = String(query?.data || '').split(':');
+  const id = Number(idText);
+  if (!['approve_po', 'skip_po'].includes(action) || !Number.isInteger(id) || id <= 0) return { handled: false };
+  const impls = { approveSupplierOrderImpl, answerCallbackQueryImpl, editTelegramMessageTextImpl, sendTelegramMessageImpl };
+  if (action === 'approve_po') await handleApprove(db, domemeClient, telegramConfig, query, id, impls);
+  else await handleSkip(telegramConfig, query, impls);
+  return { handled: true, action: action === 'approve_po' ? 'approve' : 'defer', id };
+}
+
 // Long-polling via getUpdates, not a webhook -- this app has no public
 // HTTPS endpoint on the Windows dev box it currently runs on (see
 // scheduler.mjs's own header comment on why this stays interim). offset is
@@ -129,22 +144,15 @@ export function createTelegramApprovalPoller() {
   } = {}) {
     if (!telegramConfig) return { processed: 0 };
     const updates = await getTelegramUpdatesImpl(telegramConfig, { offset });
-    const impls = { approveSupplierOrderImpl, answerCallbackQueryImpl, editTelegramMessageTextImpl, sendTelegramMessageImpl };
     let processed = 0;
     for (const update of updates) {
       offset = update.update_id + 1;
       const query = update.callback_query;
       if (!query || !query.data) continue;
-      const [action, idText] = query.data.split(':');
-      const id = Number(idText);
-      if (!Number.isInteger(id)) continue;
-      if (action === 'approve_po') {
-        await handleApprove(db, domemeClient, telegramConfig, query, id, impls);
-        processed += 1;
-      } else if (action === 'skip_po') {
-        await handleSkip(telegramConfig, query, impls);
-        processed += 1;
-      }
+      const result = await handlePurchaseOrderApprovalCallback(db, domemeClient, telegramConfig, query, {
+        approveSupplierOrderImpl, answerCallbackQueryImpl, editTelegramMessageTextImpl, sendTelegramMessageImpl,
+      });
+      if (result.handled) processed += 1;
     }
     return { processed };
   }

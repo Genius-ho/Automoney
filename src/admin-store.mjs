@@ -1039,7 +1039,7 @@ function toDraftDetail(row, images, options) {
       crawlError: image.crawl_error || null,
       selectedForDetail: Boolean(image.selected_for_detail),
       qualityStatus: image.quality_status || null,
-      sourceSection: image.source_section || 'unknown',
+      sourceSection: image.source_section ?? null,
       rejectReason: image.reject_reason || null,
     })),
     options: options.map((option) => ({
@@ -1180,7 +1180,7 @@ function imageUrlsByType(draft, types) {
   const wanted = new Set(types);
   return (draft.images || [])
     .filter((image) => wanted.has(image.imageType))
-    .filter((image) => image.imageType === 'main' || image.sourceSection === 'detail' || image.sourceSection == null)
+    .filter((image) => image.imageType === 'main' || ['detail', 'unknown', null].includes(image.sourceSection))
     .sort((a, b) => (a.sortOrder ?? a.index ?? 0) - (b.sortOrder ?? b.index ?? 0))
     .map((image) => image.storedUrl || image.url);
 }

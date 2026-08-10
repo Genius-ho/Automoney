@@ -342,6 +342,59 @@ test('exports prefer only the approved Coupang-safe manual main image', async ()
   assert.ok(!coupang.mainImages.includes('/generated-ai-images/original.webp'));
 });
 
+test('Naver export keeps explicitly typed legacy detail images in stored order', async () => {
+  const db = {
+    async query(sql) {
+      if (sql.includes('from product_drafts d')) {
+        return {
+          rows: [{
+            id: 8,
+            supplier_product_id: 10,
+            supplier_product_no: '8',
+            raw_name: 'raw',
+            selling_title: 'selling',
+            status: 'draft',
+            filter_status: 'pass',
+            block_reasons: [],
+            review_reasons: [],
+            generated_detail_html: '<p>detail</p>',
+            price_tiers: [],
+            shipping_tiers: [],
+          }],
+        };
+      }
+      if (sql.includes('from product_images')) {
+        return {
+          rows: [
+            { id: 1, image_index: 0, image_type: 'main', sort_order: 0, url: 'https://source.test/main.jpg', stored_url: 'https://stored.test/main.jpg', source_section: 'unknown' },
+            { id: 2, image_index: 1, image_type: 'detail', sort_order: 2, url: 'https://source.test/detail-2.jpg', stored_url: 'https://stored.test/detail-2.jpg', source_section: 'unknown' },
+            { id: 3, image_index: 2, image_type: 'detail_slice', sort_order: 4, url: 'https://source.test/slice-2.jpg', stored_url: 'https://stored.test/slice-2.jpg', source_section: 'unknown' },
+            { id: 4, image_index: 3, image_type: 'thumbnail', sort_order: 5, url: 'https://source.test/other.jpg', stored_url: 'https://stored.test/other.jpg', source_section: 'unknown' },
+            { id: 5, image_index: 4, image_type: 'detail', sort_order: 1, url: 'https://source.test/detail-1.jpg', stored_url: 'https://stored.test/detail-1.jpg', source_section: 'detail' },
+            { id: 6, image_index: 5, image_type: 'detail_slice', sort_order: 3, url: 'https://source.test/slice-1.jpg', stored_url: 'https://stored.test/slice-1.jpg', source_section: null },
+          ],
+        };
+      }
+      if (sql.includes('from product_options')) return { rows: [] };
+      return { rows: [] };
+    },
+  };
+
+  const naver = await exportProductDraft(db, 8, 'naver');
+
+  assert.deepEqual(naver.mainImages, ['https://stored.test/main.jpg']);
+  assert.deepEqual(naver.detailImages, [
+    'https://stored.test/detail-1.jpg',
+    'https://stored.test/detail-2.jpg',
+  ]);
+  assert.deepEqual(naver.detailSliceImages, [
+    'https://stored.test/slice-1.jpg',
+    'https://stored.test/slice-2.jpg',
+  ]);
+  assert.ok(!naver.detailImages.includes('https://stored.test/other.jpg'));
+  assert.ok(!naver.detailSliceImages.includes('https://stored.test/other.jpg'));
+});
+
 test('upsertMarketResearch calculates and stores winner result', async () => {
   const calls = [];
   const db = {
