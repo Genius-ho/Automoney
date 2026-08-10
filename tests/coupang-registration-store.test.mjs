@@ -4,11 +4,58 @@ import test from 'node:test';
 import {
   getCoupangRegistration,
   linkCoupangRegistration,
+  listCoupangRegistrationsAwaitingTelegramNotification,
   listCoupangRegistrations,
+  markCoupangRegistrationTelegramNotified,
   recordApprovalRequested,
   recordImagesSwapped,
   recordLiveSnapshot,
 } from '../src/coupang-registration-store.mjs';
+
+test('listCoupangRegistrationsAwaitingTelegramNotification selects only created unrequested unnotified linked rows', async () => {
+  let captured;
+  const db = {
+    async query(sql, params) {
+      captured = { sql, params };
+      return { rows: [{
+        product_draft_id: '119',
+        seller_product_id: '16341358344',
+        seller_product_name: 'safe title',
+        status: 'created',
+        requested: false,
+        sale_price: 42140,
+        options: [{ name: 'black', stockQuantity: 1 }],
+      }] };
+    },
+  };
+
+  const [row] = await listCoupangRegistrationsAwaitingTelegramNotification(db);
+
+  assert.equal(row.productDraftId, 119);
+  assert.equal(row.salePrice, 42140);
+  assert.deepEqual(row.options, [{ name: 'black', stockQuantity: 1 }]);
+  assert.deepEqual(captured.params, []);
+  assert.match(captured.sql, /r\.seller_product_id is not null/);
+  assert.match(captured.sql, /r\.status = 'created'/);
+  assert.match(captured.sql, /r\.requested = false/);
+  assert.match(captured.sql, /r\.telegram_notified_at is null/);
+});
+
+test('markCoupangRegistrationTelegramNotified stores timestamp and message id', async () => {
+  const db = {
+    async query(sql, params) {
+      assert.match(sql, /telegram_notified_at = now\(\)/);
+      assert.match(sql, /telegram_message_id = \$2/);
+      assert.deepEqual(params, [119, 987]);
+      return { rows: [{ product_draft_id: '119', telegram_notified_at: '2026-08-10T00:00:00Z', telegram_message_id: '987' }] };
+    },
+  };
+
+  const row = await markCoupangRegistrationTelegramNotified(db, 119, 987);
+
+  assert.equal(row.telegramMessageId, 987);
+  assert.equal(row.telegramNotifiedAt, '2026-08-10T00:00:00Z');
+});
 
 test('listCoupangRegistrations includes an onlyLinked clause only when requested', async () => {
   const calls = [];
@@ -62,6 +109,8 @@ test('listCoupangRegistrations maps rows to camelCase', async () => {
     liveSalePrice: null,
     approvalRequestedAt: null,
     approvalResponseMessage: null,
+    telegramNotifiedAt: null,
+    telegramMessageId: null,
   });
 });
 
