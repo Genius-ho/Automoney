@@ -16,6 +16,7 @@ import { runChannelDispatchSweep } from './channel-dispatch.mjs';
 import { runCancellationExceptionSweep } from './cancellation-handler.mjs';
 import { runSupplierMonitorAndSuspendSweep } from './channel-suspension.mjs';
 import { sendDailySummary } from './daily-summary.mjs';
+import { reconcileCoupangQueue } from './image-approval-registration.mjs';
 
 // automoney_complete_automation_implementation_plan.md section 18 스케줄
 // 기준. 상품 카테고리 발굴(3일)/스피드등록/상품개선(매일)은 admin-server.mjs's own
@@ -81,6 +82,19 @@ export function tick(label, intervalMs, fn, { setIntervalImpl = setInterval, tel
   return handle;
 }
 
+export function createNonOverlappingRunner(fn) {
+  let running = false;
+  return async (...args) => {
+    if (running) return { skipped: true, reason: 'ALREADY_RUNNING' };
+    running = true;
+    try {
+      return await fn(...args);
+    } finally {
+      running = false;
+    }
+  };
+}
+
 // Returns the interval handles so the caller (admin-server.mjs) can clear
 // them on shutdown, the same lifecycle as the existing autoBatch tick.
 // Returns [] (no-op, nothing scheduled) when config is unavailable.
@@ -88,6 +102,7 @@ export async function startScheduledJobs(db, rootDir, {
   loadSchedulerDepsImpl = loadSchedulerDeps,
   tickImpl = tick,
   notifyPendingCoupangSaleApprovalsImpl = notifyPendingCoupangSaleApprovals,
+  reconcileCoupangQueueImpl = reconcileCoupangQueue,
   createTelegramCallbackRouterImpl = createTelegramCallbackRouter,
 } = {}) {
   const deps = await loadSchedulerDepsImpl(rootDir);
@@ -95,6 +110,9 @@ export async function startScheduledJobs(db, rootDir, {
   const { coupangClient, naverClient, domemeClient, domemePrivateClient, telegramConfig = null } = deps;
   const opts = { telegramConfig };
   const approvalPoller = createTelegramCallbackRouterImpl();
+  const reconcileRegistrations = createNonOverlappingRunner(
+    () => reconcileCoupangQueueImpl(db, { coupangClient }),
+  );
 
   return [
     tickImpl('coupangOrders', ORDER_TICK_INTERVAL_MS, () => runCoupangOrderCollection(db, coupangClient), opts),
@@ -107,7 +125,13 @@ export async function startScheduledJobs(db, rootDir, {
     tickImpl('cancellationExceptions', DISPATCH_TICK_INTERVAL_MS, () => runCancellationExceptionSweep(db), opts),
     tickImpl('supplierMonitor', SUPPLIER_MONITOR_TICK_INTERVAL_MS, () => runSupplierMonitorAndSuspendSweep(db, domemeClient, { coupangClient, naverClient }), opts),
     tickImpl('purchaseOrderTelegramNotify', ORDER_TICK_INTERVAL_MS, () => notifyPendingPurchaseApprovals(db, telegramConfig), opts),
-    tickImpl('coupangSaleApprovalTelegramNotify', ORDER_TICK_INTERVAL_MS, () => notifyPendingCoupangSaleApprovalsImpl(db, telegramConfig, { coupangClient }), opts),
+    tickImpl('coupangSaleApprovalTelegramNotify', ORDER_TICK_INTERVAL_MS, async () => {
+      let reconciliationError = null;
+      try { await reconcileRegistrations(); } catch (error) { reconciliationError = error; }
+      const notification = await notifyPendingCoupangSaleApprovalsImpl(db, telegramConfig, { coupangClient });
+      if (reconciliationError) throw reconciliationError;
+      return notification;
+    }, opts),
     tickImpl('telegramApprovalPoll', TELEGRAM_APPROVAL_POLL_INTERVAL_MS, () => approvalPoller.pollOnce(db, { domemeClient: domemePrivateClient, coupangClient }, telegramConfig), opts),
     tickImpl('dailySummary', DAILY_SUMMARY_TICK_INTERVAL_MS, () => sendDailySummary(db, telegramConfig), opts),
   ];

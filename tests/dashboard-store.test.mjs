@@ -4,6 +4,7 @@ import test from 'node:test';
 import { getDashboardSummary } from '../src/dashboard-store.mjs';
 
 test('getDashboardSummary queries all seven metrics and returns them as numbers', async () => {
+  let processingQueueSql = '';
   const responses = {
     'coupang_product_registrations': { count: '2' },
     'processing_queue': { count: '1' },
@@ -15,6 +16,7 @@ test('getDashboardSummary queries all seven metrics and returns them as numbers'
   };
   const db = {
     async query(sql) {
+      if (sql.includes('processing_queue')) processingQueueSql = sql;
       for (const [needle, row] of Object.entries(responses)) {
         if (sql.includes(needle)) return { rows: [row] };
       }
@@ -32,4 +34,6 @@ test('getDashboardSummary queries all seven metrics and returns them as numbers'
     supplierAlerts: 7,
     automationErrors: 6,
   });
+  assert.match(processingQueueSql, /status in \('awaiting_image_approval', 'registering', 'awaiting_sale_approval', 'completed'\)/);
+  assert.ok(!processingQueueSql.includes('ready_for_registration'));
 });

@@ -66,9 +66,11 @@ test('focused product stages process at most one eligible item and stop at their
   assert.equal(draft.outcome, 'ready');
   assert.equal(analysis.stage, 'analysis');
   assert.equal(images.outcome, 'success');
-  assert.ok(updates.some((u) => u.id === 1 && u.status === 'ready_for_registration'));
+  assert.ok(updates.some((u) => u.id === 1 && u.status === 'draft_created'));
   assert.ok(updates.some((u) => u.id === 2 && u.status === 'analysis_completed'));
-  assert.ok(updates.some((u) => u.id === 3 && u.status === 'awaiting_approval'));
+  assert.ok(updates.some((u) => u.id === 3 && u.status === 'awaiting_image_approval'));
+  assert.ok(updates.some((u) => u.id === 2 && u.status === 'analyzing'));
+  assert.ok(updates.some((u) => u.id === 3 && u.status === 'generating_images'));
 });
 
 function policy(id, overrides = {}) {
@@ -270,14 +272,14 @@ test('runDailyProcessingBatch does nothing (skipped) and releases the lock when 
   assert.equal(deps.calls.releaseProcessingLock.length, 1);
 });
 
-test('runDailyProcessingBatch resumes an in-progress queue item via processWinnerCandidate and marks it awaiting_approval on success', async () => {
+test('runDailyProcessingBatch resumes an in-progress queue item via processWinnerCandidate and marks it awaiting_image_approval on success', async () => {
   const deps = processingDeps();
   const result = await runDailyProcessingBatch({}, deps);
 
   assert.equal(deps.calls.processWinnerCandidate.length, 1);
   assert.equal(deps.calls.prepareCandidateDraft.length, 0);
   assert.equal(result.outcome, 'success');
-  const finalUpdate = deps.calls.updateQueueItemStatus.find((u) => u.status === 'awaiting_approval');
+  const finalUpdate = deps.calls.updateQueueItemStatus.find((u) => u.status === 'awaiting_image_approval');
   assert.ok(finalUpdate);
   assert.equal(finalUpdate.draftId, 501);
   assert.equal(deps.calls.releaseProcessingLock.length, 1);
@@ -315,7 +317,7 @@ test('runDailyProcessingBatch mirrors processWinnerCandidate progress updates on
   assert.ok(deps.calls.updateQueueItemStatus.some((u) => u.status === 'generating_images'));
 });
 
-test('runDailyProcessingBatch prepares (never analyzes) a fresh queued item and lands it at ready_for_registration', async () => {
+test('runDailyProcessingBatch prepares (never analyzes) a fresh queued item and lands it at draft_created', async () => {
   const deps = processingDeps({
     getNextQueueItemImpl: async () => queueItem({ status: 'queued', draftId: null, startedAt: null }),
   });
@@ -324,7 +326,7 @@ test('runDailyProcessingBatch prepares (never analyzes) a fresh queued item and 
   assert.equal(deps.calls.prepareCandidateDraft.length, 1);
   assert.equal(deps.calls.processWinnerCandidate.length, 0);
   assert.equal(result.outcome, 'ready');
-  const finalUpdate = deps.calls.updateQueueItemStatus.find((u) => u.status === 'ready_for_registration');
+  const finalUpdate = deps.calls.updateQueueItemStatus.find((u) => u.status === 'draft_created');
   assert.ok(finalUpdate);
   assert.equal(finalUpdate.draftId, 501);
 });

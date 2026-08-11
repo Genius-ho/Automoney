@@ -24,7 +24,7 @@ export async function getDashboardSummary(db) {
     // section 10.2's own status vocabulary: queued/analyzing/
     // generating_images/awaiting_approval/ready_for_registration/failed)
     // reaching ready_for_registration today.
-    db.query(`select count(*) as count from processing_queue where status = 'ready_for_registration' and updated_at::date = current_date`),
+    db.query(`select count(*) as count from processing_queue where status in ('awaiting_image_approval', 'registering', 'awaiting_sale_approval', 'completed') and updated_at::date = current_date`),
     // 신규 주문 수: channel orders this app collected today (Phase 7).
     db.query(`select count(*) as count from channel_orders where created_at::date = current_date`),
     // 발주 승인 대기 수 (Phase 8, 13.5).

@@ -7,6 +7,7 @@ import test from 'node:test';
 
 import { isAllowedPublicAssetPath } from '../src/public-assets.mjs';
 import { persistManualMainImageFiles, readManualImageMultipart } from '../src/manual-ai/multipart.mjs';
+import { approveImageAndMaybeRegister } from '../src/admin-server.mjs';
 
 function request(parts,boundary='manual-boundary'){
   const chunks=[];
@@ -40,4 +41,41 @@ test('file persistence uses immutable revision/version names and public URLs',as
 test('manual generated image paths are public but traversal is not',()=>{
   assert.equal(isAllowedPublicAssetPath('/generated-ai-images/drafts/64/main/manual/a.jpg'),true);
   assert.equal(isAllowedPublicAssetPath('/generated-ai-images/../schema.sql'),false);
+});
+
+test('image approval commits before automatic registration coordination', async () => {
+  const calls = [];
+  const value = await approveImageAndMaybeRegister({}, 'C:/repo', 119, 7, null, {
+    approveImpl: async () => { calls.push('approved'); return { approved: { id: 7 } }; },
+    handleApprovedImagesImpl: async (_db, _root, draftId) => { calls.push(`registered:${draftId}`); return { outcome: 'not_ready' }; },
+    loadCoupangConfigImpl: async () => ({ accessKey: 'test' }),
+    loadTelegramConfigImpl: async () => ({ botToken: 'test' }),
+    createCoupangClientImpl: () => ({}),
+  });
+  assert.deepEqual(calls, ['approved', 'registered:119']);
+  assert.equal(value.result.approved.id, 7);
+  assert.equal(value.autoRegistration.outcome, 'not_ready');
+});
+
+test('detail approval can trigger automatic registration after both image gates are ready', async () => {
+  const value = await approveImageAndMaybeRegister({}, 'C:/repo', 119, 8, 'ok', {
+    approveImpl: async () => ({ approved: { id: 8 } }),
+    handleApprovedImagesImpl: async () => ({ outcome: 'awaiting_sale_approval' }),
+    loadCoupangConfigImpl: async () => ({}),
+    loadTelegramConfigImpl: async () => ({}),
+    createCoupangClientImpl: () => ({}),
+  });
+  assert.equal(value.autoRegistration.outcome, 'awaiting_sale_approval');
+});
+
+test('registration failure does not roll back the committed image approval', async () => {
+  let approved = false;
+  await assert.rejects(() => approveImageAndMaybeRegister({}, 'C:/repo', 119, 9, null, {
+    approveImpl: async () => { approved = true; return { approved: { id: 9 } }; },
+    handleApprovedImagesImpl: async () => { throw Object.assign(new Error('safe failure'), { code: 'COUPANG_REGISTRATION_FAILED' }); },
+    loadCoupangConfigImpl: async () => ({}),
+    loadTelegramConfigImpl: async () => ({}),
+    createCoupangClientImpl: () => ({}),
+  }), /safe failure/);
+  assert.equal(approved, true);
 });

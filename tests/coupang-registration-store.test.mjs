@@ -12,7 +12,7 @@ import {
   recordLiveSnapshot,
 } from '../src/coupang-registration-store.mjs';
 
-test('listCoupangRegistrationsAwaitingTelegramNotification selects only created unrequested unnotified linked rows', async () => {
+test('listCoupangRegistrationsAwaitingTelegramNotification includes direct and externally linked unrequested rows', async () => {
   let captured;
   const db = {
     async query(sql, params) {
@@ -36,7 +36,7 @@ test('listCoupangRegistrationsAwaitingTelegramNotification selects only created 
   assert.deepEqual(row.options, [{ name: 'black', stockQuantity: 1 }]);
   assert.deepEqual(captured.params, []);
   assert.match(captured.sql, /r\.seller_product_id is not null/);
-  assert.match(captured.sql, /r\.status = 'created'/);
+  assert.match(captured.sql, /r\.status in \('created', 'linked'\)/);
   assert.match(captured.sql, /r\.requested = false/);
   assert.match(captured.sql, /r\.telegram_notified_at is null/);
   assert.match(captured.sql, /order by min\(r\.created_at\)/);

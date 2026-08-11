@@ -3,6 +3,8 @@ import {
   markCoupangRegistrationTelegramNotified,
 } from './coupang-registration-store.mjs';
 import { requestCoupangSaleApproval } from './coupang-registration-flow.mjs';
+import { classifyCoupangLiveStatus } from './image-approval-registration.mjs';
+import { getQueueItemByDraftId, updateQueueItemStatus } from './processing-queue-store.mjs';
 import {
   answerCallbackQuery,
   editTelegramMessageText,
@@ -102,6 +104,8 @@ export async function handleCoupangApprovalCallback(db, telegramConfig, query, {
   sendTelegramMessageImpl = sendTelegramMessage,
   coupangClient = null,
   coupangConfig = null,
+  getQueueItemByDraftIdImpl = getQueueItemByDraftId,
+  updateQueueItemStatusImpl = updateQueueItemStatus,
 } = {}) {
   const [action, idText] = String(query?.data || '').split(':');
   const draftId = Number(idText);
@@ -115,12 +119,28 @@ export async function handleCoupangApprovalCallback(db, telegramConfig, query, {
   }
 
   let resultText;
+  let liveStatusName = null;
+  let queueStatus = null;
   try {
-    await requestApprovalImpl(db, draftId, { clientImpl: coupangClient, coupangConfig });
+    const approval = await requestApprovalImpl(db, draftId, { clientImpl: coupangClient, coupangConfig });
+    liveStatusName = approval?.liveStatusNameAfter ?? null;
     resultText = `${COPY.approved} (draft ${draftId})`;
   } catch (error) {
+    liveStatusName = error?.liveStatusName ?? null;
     resultText = `\u26A0\uFE0F \uC2B9\uC778 \uC694\uCCAD \uC548 \uB428: ${error.message}`;
   }
+  const classified = classifyCoupangLiveStatus(liveStatusName);
+  if (classified) {
+    queueStatus = classified.status;
+    const queueItem = await getQueueItemByDraftIdImpl(db, draftId);
+    if (queueItem) {
+      await updateQueueItemStatusImpl(db, queueItem.id, {
+        status: classified.status,
+        failureStage: classified.failureStage || null,
+        failureMessage: classified.failureMessage || null,
+      });
+    }
+  }
   await presentResult(telegramConfig, query, resultText, presentation);
-  return { handled: true, action: 'approve', draftId };
+  return { handled: true, action: 'approve', draftId, liveStatusName, queueStatus };
 }

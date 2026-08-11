@@ -247,15 +247,12 @@ export async function runCandidateDiscoveryBatch(db, {
 // after processWinnerCandidate returns, since a quota-limited stop must
 // leave the queue item at its last in-progress stage (resumable tomorrow),
 // not force it to 'failed' (terminal) the way every other failure does.
-// 'draft_created' is not mapped here -- that status is only ever set by
-// prepareCandidateDraft, which runDailyProcessingBatch calls directly
-// (not through this mirror), landing the queue at 'ready_for_registration'
-// instead.
+// 'draft_created' is set by draft preparation before any analysis begins.
 function mapCandidateStatusToQueueStatus(processingStatus) {
   if (processingStatus === 'analysis_running') return 'analyzing';
   if (processingStatus === 'analysis_completed') return 'analysis_completed';
   if (processingStatus === 'image_generation_running') return 'generating_images';
-  if (processingStatus === 'awaiting_image_approval') return 'awaiting_approval';
+  if (processingStatus === 'awaiting_image_approval') return 'awaiting_image_approval';
   return null;
 }
 
@@ -270,13 +267,16 @@ export async function runDraftPreparationStage(db, {
   if (!queueItem) return { skipped: true, reason: 'QUEUE_EMPTY' };
   const candidate = await getBatchRunCandidateByIdImpl(db, queueItem.batchRunCandidateId);
   const outcome = await prepareCandidateDraftImpl(db, candidate, { rootDir, batchRunId: candidate.batchRunId });
-  if (outcome.outcome === 'ready') await updateQueueItemStatusImpl(db, queueItem.id, { status: 'ready_for_registration', draftId: outcome.draftId, startedAt: queueItem.startedAt || new Date().toISOString() });
+  if (outcome.outcome === 'ready') await updateQueueItemStatusImpl(db, queueItem.id, { status: 'draft_created', draftId: outcome.draftId, startedAt: queueItem.startedAt || new Date().toISOString() });
   else await updateQueueItemStatusImpl(db, queueItem.id, { status: 'failed', draftId: outcome.draftId, failureStage: 'draft_creation', failureMessage: outcome.outcome });
   return { queueItemId: queueItem.id, ...outcome };
 }
 
-async function runImprovementStage(db, queueItem, processor, deps, successStatus) {
+async function runImprovementStage(db, queueItem, processor, deps, activeStatus, successStatus) {
   if (!queueItem) return { skipped: true, reason: 'QUEUE_EMPTY' };
+  if (queueItem.status !== activeStatus) {
+    await deps.updateQueueItemStatusImpl(db, queueItem.id, { status: activeStatus, draftId: queueItem.draftId, startedAt: queueItem.startedAt || new Date().toISOString() });
+  }
   const candidate = await deps.getBatchRunCandidateByIdImpl(db, queueItem.batchRunCandidateId);
   const mirror = async (dbArg, candidateId, patch) => {
     const result = await deps.updateBatchCandidateStatusImpl(dbArg, candidateId, patch);
@@ -304,13 +304,13 @@ function improvementDeps(deps) {
 export async function runAnalysisStage(db, deps = {}) {
   const resolved = improvementDeps(deps);
   const item = await (deps.getNextAnalysisItemImpl || getNextAnalysisItemReal)(db);
-  return runImprovementStage(db, item, deps.analyzeWinnerCandidateImpl || analyzeWinnerCandidateReal, resolved, 'analysis_completed');
+  return runImprovementStage(db, item, deps.analyzeWinnerCandidateImpl || analyzeWinnerCandidateReal, resolved, 'analyzing', 'analysis_completed');
 }
 
 export async function runImageGenerationStage(db, deps = {}) {
   const resolved = improvementDeps(deps);
   const item = await (deps.getNextImageItemImpl || getNextImageItemReal)(db);
-  return runImprovementStage(db, item, deps.generateWinnerCandidateImagesImpl || generateWinnerCandidateImagesReal, resolved, 'awaiting_approval');
+  return runImprovementStage(db, item, deps.generateWinnerCandidateImagesImpl || generateWinnerCandidateImagesReal, resolved, 'generating_images', 'awaiting_image_approval');
 }
 
 export async function runNextProductAutomationStage(db, deps = {}) {
@@ -320,7 +320,7 @@ export async function runNextProductAutomationStage(db, deps = {}) {
     const item = await (deps.getNextQueueItemImpl || getNextQueueItemReal)(db);
     if (!item) return { skipped: true, reason: 'QUEUE_EMPTY' };
     if (item.status === 'queued') return runDraftPreparationStage(db, deps);
-    if (item.status === 'analyzing') return runAnalysisStage(db, deps);
+    if (item.status === 'draft_created' || item.status === 'analyzing') return runAnalysisStage(db, deps);
     return runImageGenerationStage(db, deps);
   } finally {
     await (deps.releaseLockOnlyImpl || releaseLockOnlyReal)(db);
@@ -372,7 +372,7 @@ export async function runDailyProcessingBatch(db, {
     if (queueItem.status === 'queued') {
       const prepared = await prepareCandidateDraftImpl(db, candidateRow, { rootDir, batchRunId: candidateRow.batchRunId });
       if (prepared.outcome === 'ready') {
-        await updateQueueItemStatusImpl(db, queueItem.id, { status: 'ready_for_registration', draftId: prepared.draftId, startedAt: queueItem.startedAt || new Date().toISOString() });
+        await updateQueueItemStatusImpl(db, queueItem.id, { status: 'draft_created', draftId: prepared.draftId, startedAt: queueItem.startedAt || new Date().toISOString() });
       } else if (prepared.outcome === 'skipped_duplicate') {
         await updateQueueItemStatusImpl(db, queueItem.id, { status: 'failed', failureStage: 'draft_creation', failureMessage: '이미 존재하는 draft와 동일한 상품 -- 건너뜀', draftId: prepared.draftId });
       } else {
@@ -400,7 +400,7 @@ export async function runDailyProcessingBatch(db, {
     });
 
     if (outcome.outcome === 'success') {
-      await updateQueueItemStatusImpl(db, queueItem.id, { status: 'awaiting_approval', draftId: outcome.draftId });
+      await updateQueueItemStatusImpl(db, queueItem.id, { status: 'awaiting_image_approval', draftId: outcome.draftId });
     } else if (outcome.quotaLimited) {
       // Leave status at whatever in-progress stage the mirror last set --
       // resumed tomorrow by getNextQueueItem, not retried today.
