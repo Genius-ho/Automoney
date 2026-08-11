@@ -40,7 +40,7 @@ export async function listCoupangRegistrationsAwaitingTelegramNotification(db) {
      join product_drafts d on d.id = r.product_draft_id
      left join product_options o on o.product_draft_id = d.id
      where r.seller_product_id is not null
-       and r.status = 'created'
+       and r.status in ('created', 'linked')
        and r.requested = false
        and r.telegram_notified_at is null
      group by r.product_draft_id, r.seller_product_id, r.seller_product_name, r.status, r.requested, d.coupang_sale_price
