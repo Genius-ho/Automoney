@@ -100,7 +100,13 @@ export function mapOptionsToMandatoryAttributes({ draftOptions, mandatoryOptionN
     if (!meta || meta.dataType !== 'NUMBER') return null;
     return meta.usableUnits?.[0] || (meta.basicUnit && meta.basicUnit !== '없음' ? meta.basicUnit : null);
   };
-  const unitField = (name) => { const unit = unitForAttribute(name); return unit ? { attributeValueUnit: unit } : {}; };
+  const formattedValueForAttribute = (name) => {
+    const value = valueForAttribute(name);
+    const unit = unitForAttribute(name);
+    if (value == null || !unit) return value;
+    const text = String(value).trim();
+    return text.endsWith(unit) ? text : `${text}${unit}`;
+  };
 
   const items = hasOptions
     ? (draftOptions || []).map((option) => ({
@@ -109,7 +115,7 @@ export function mapOptionsToMandatoryAttributes({ draftOptions, mandatoryOptionN
       stockQuantity: Object.hasOwn(stockByOptionValue, option.optionValue) ? stockByOptionValue[option.optionValue] : null,
       attributes: [
         colorAttributeName ? { attributeTypeName: colorAttributeName, attributeValueName: option.optionValue, ...exposedField } : null,
-        ...remainingAttributeNames.map((name) => ({ attributeTypeName: name, attributeValueName: valueForAttribute(name), ...unitField(name), ...exposedField })),
+        ...remainingAttributeNames.map((name) => ({ attributeTypeName: name, attributeValueName: formattedValueForAttribute(name), ...exposedField })),
       ].filter(Boolean),
     }))
     : [{
@@ -118,7 +124,7 @@ export function mapOptionsToMandatoryAttributes({ draftOptions, mandatoryOptionN
       stockQuantity: singleItemStockQuantity,
       attributes: [
         colorAttributeName ? { attributeTypeName: colorAttributeName, attributeValueName: Object.hasOwn(additionalAttributeValues, colorAttributeName) ? additionalAttributeValues[colorAttributeName] : null, ...exposedField } : null,
-        ...remainingAttributeNames.map((name) => ({ attributeTypeName: name, attributeValueName: valueForAttribute(name), ...unitField(name), ...exposedField })),
+        ...remainingAttributeNames.map((name) => ({ attributeTypeName: name, attributeValueName: formattedValueForAttribute(name), ...exposedField })),
       ].filter(Boolean),
     }];
 

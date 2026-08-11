@@ -193,7 +193,7 @@ test('mapOptionsToMandatoryAttributes reports unresolved 색상 and missing stoc
   assert.deepEqual(result.missingStock, ['(단일상품)']);
 });
 
-test('mapOptionsToMandatoryAttributes attaches attributeValueUnit for a NUMBER-datatype mandatory attribute, derived from category meta', () => {
+test('mapOptionsToMandatoryAttributes appends the usable unit to a NUMBER attribute value', () => {
   const result = mapOptionsToMandatoryAttributes({
     draftOptions: [],
     mandatoryOptionNames: ['색상', '사이즈', '단 수'],
@@ -210,7 +210,7 @@ test('mapOptionsToMandatoryAttributes attaches attributeValueUnit for a NUMBER-d
   assert.deepEqual(result.items[0].attributes, [
     { attributeTypeName: '색상', attributeValueName: '투명' },
     { attributeTypeName: '사이즈', attributeValueName: '47 x 16 x 15.5cm' },
-    { attributeTypeName: '단 수', attributeValueName: '1', attributeValueUnit: '단' },
+    { attributeTypeName: '단 수', attributeValueName: '1단' },
   ]);
 });
 
