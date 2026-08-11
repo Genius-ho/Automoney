@@ -1,6 +1,13 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
-import { renderManualMainImageWorkflowSection } from '../src/admin-server.mjs';
+import { getQueueStatusLabel, renderManualMainImageWorkflowSection } from '../src/admin-server.mjs';
+
+test('queue lifecycle labels cover image and sale approval waits',()=>{
+  assert.equal(getQueueStatusLabel('draft_created'),'드래프트 생성 완료');
+  assert.equal(getQueueStatusLabel('awaiting_image_approval'),'이미지 승인 대기');
+  assert.equal(getQueueStatusLabel('awaiting_sale_approval'),'판매승인 대기');
+  assert.equal(getQueueStatusLabel('completed'),'완료');
+});
 
 test('manual main image UI includes package, copy, upload, provider, comparison, and decisions',()=>{
   const html=renderManualMainImageWorkflowSection({request:{id:91,revision:2,templateHash:'abcdef1234567890',promptOriginal:'original',promptRendered:'rendered'},results:[]});

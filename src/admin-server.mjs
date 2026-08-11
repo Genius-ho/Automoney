@@ -50,6 +50,7 @@ import { validateManualDetailWorkflowMetadata, validateManualWorkflowMetadata } 
 import { approveManualMainImage, getNextManualMainImageVersion, insertManualMainImage, listManualMainImages, rejectManualMainImage } from './manual-ai/workflow-store.mjs';
 import { approveManualDetailSet, insertDetailSet, listManualDetailSets, rejectManualDetailSet, reserveDetailSetVersion } from './manual-ai/detail-workflow-store.mjs';
 import { generateDetailImageSet, generateMainImage } from './manual-ai/codex-image-runner.mjs';
+import { handleApprovedImages } from './image-approval-registration.mjs';
 import {
   exportProductDraft,
   analyzeSeoKeywords,
@@ -87,6 +88,34 @@ export function renderManualMainImageWorkflowSection({request={},sourceMainImage
 function escapeHtmlForSection(value) { return String(value).replaceAll('&', '&amp;').replaceAll('<', '&lt;').replaceAll('>', '&gt;'); }
 
 const AUTO_BATCH_TICK_INTERVAL_MS = 5 * 60 * 1000;
+
+const QUEUE_STATUS_LABELS = Object.freeze({
+  queued: '대기 중', draft_created: '드래프트 생성 완료', analyzing: '분석 중', analysis_completed: '분석 완료',
+  generating_images: '이미지 생성 중', awaiting_image_approval: '이미지 승인 대기', registering: '쿠팡 등록 중',
+  awaiting_sale_approval: '판매승인 대기', completed: '완료', failed: '실패',
+});
+
+export function getQueueStatusLabel(status) {
+  return QUEUE_STATUS_LABELS[status] || status;
+}
+
+export async function approveImageAndMaybeRegister(db, rootDir, draftId, imageId, approvalNote, {
+  approveImpl,
+  handleApprovedImagesImpl = handleApprovedImages,
+  loadCoupangConfigImpl = loadCoupangConfig,
+  loadTelegramConfigImpl = loadTelegramConfig,
+  createCoupangClientImpl = (config) => new CoupangClient(config),
+} = {}) {
+  const result = await approveImpl(db, draftId, imageId, approvalNote || null);
+  const [coupangConfig, telegramConfig] = await Promise.all([
+    loadCoupangConfigImpl(rootDir), loadTelegramConfigImpl(rootDir),
+  ]);
+  const coupangClient = createCoupangClientImpl(coupangConfig);
+  const autoRegistration = await handleApprovedImagesImpl(db, rootDir, draftId, {
+    coupangConfig, telegramConfig, coupangClient,
+  });
+  return { result, autoRegistration };
+}
 
 // Loaded once at startup, not per-tick -- Domeme credentials, pricing rules,
 // and Codex/Python/job-path config don't change during the process
@@ -194,7 +223,7 @@ async function handleRequest({ request, response, db, aiSecrets, rootDir }) {
   const manualUploadMatch=url.pathname.match(/^\/api\/product-drafts\/(\d+)\/ai-workflows\/main-image\/upload$/);
   if(manualUploadMatch&&request.method==='POST'){const draftId=Number(manualUploadMatch[1]);let stored=null;try{const context=await getManualMainImageWorkflowContext(db,draftId);const {image,fields}=await readManualImageMultipart(request);const metadata=validateManualWorkflowMetadata(context,fields);const validated=await validateManualMainImage(image.buffer,image.mimeType);const derivative=await createCoupangDerivative(image.buffer);const version=await getNextManualMainImageVersion(db,draftId);stored=await persistManualMainImageFiles({rootDir,draftId,revision:metadata.promptRevision,version,original:{buffer:image.buffer,mimeType:validated.mimeType},derivative});const result=await insertManualMainImage(db,{productDraftId:draftId,promptRequestId:metadata.promptRequestId,promptRevision:metadata.promptRevision,providerCode:metadata.providerCode,providerDisplayName:metadata.providerDisplayName,version,...stored,originalFileSize:validated.fileSize,coupangFileSize:derivative.fileSize,originalMimeType:validated.mimeType,originalWidth:validated.width,originalHeight:validated.height,sha256:createHash('sha256').update(image.buffer).digest('hex'),notes:metadata.notes});sendJson(response,201,{result});}catch(error){if(stored)await removeWorkflowFiles(rootDir,stored);sendWorkflowError(response,error);}return;}
   const manualActionMatch=url.pathname.match(/^\/api\/product-drafts\/(\d+)\/ai-workflows\/main-image\/results\/(\d+)\/(approve|reject)$/);
-  if(manualActionMatch&&request.method==='POST'){try{const body=await readJson(request);const [draftId,imageId]=manualActionMatch.slice(1,3).map(Number);const result=manualActionMatch[3]==='approve'?await approveManualMainImage(db,draftId,imageId,body.approvalNote||null):await rejectManualMainImage(db,draftId,imageId,body.notes||null);sendJson(response,200,{result});}catch(error){sendWorkflowError(response,error);}return;}
+  if(manualActionMatch&&request.method==='POST'){try{const body=await readJson(request);const [draftId,imageId]=manualActionMatch.slice(1,3).map(Number);if(manualActionMatch[3]==='approve'){sendJson(response,200,await approveImageAndMaybeRegister(db,rootDir,draftId,imageId,body.approvalNote||null,{approveImpl:approveManualMainImage}));}else{sendJson(response,200,{result:await rejectManualMainImage(db,draftId,imageId,body.notes||null)});}}catch(error){sendWorkflowError(response,error);}return;}
   const detailPackageMatch=url.pathname.match(/^\/api\/product-drafts\/(\d+)\/ai-workflows\/detail-page\/package$/);
   if(detailPackageMatch&&request.method==='GET'){try{const draftId=Number(detailPackageMatch[1]);await createImagePromptRequest(db,draftId,'detail_page');const context=await getManualDetailWorkflowContext(db,draftId);const result=await buildDetailPagePackage(context,{fetchImpl:(value)=>fetchWorkflowAsset(value,rootDir),readLocalAsset:(value)=>readWorkflowAsset(value,rootDir)});sendBinary(response,200,result.buffer,'application/zip',result.filename);}catch(error){sendWorkflowError(response,error);}return;}
   const detailResultsMatch=url.pathname.match(/^\/api\/product-drafts\/(\d+)\/ai-workflows\/detail-page\/results$/);
@@ -212,7 +241,7 @@ async function handleRequest({ request, response, db, aiSecrets, rootDir }) {
   const detailUploadMatch=url.pathname.match(/^\/api\/product-drafts\/(\d+)\/ai-workflows\/detail-page\/upload$/);
   if(detailUploadMatch&&request.method==='POST'){try{const result=await uploadManualDetailSet({db,request,rootDir,draftId:Number(detailUploadMatch[1])});sendJson(response,201,{set:result});}catch(error){sendWorkflowError(response,error);}return;}
   const detailActionMatch=url.pathname.match(/^\/api\/product-drafts\/(\d+)\/ai-workflows\/detail-page\/sets\/(\d+)\/(approve|reject)$/);
-  if(detailActionMatch&&request.method==='POST'){try{const body=await readJson(request);const [draftId,setId]=detailActionMatch.slice(1,3).map(Number);const result=detailActionMatch[3]==='approve'?await approveManualDetailSet(db,draftId,setId,body.approvalNote||null):await rejectManualDetailSet(db,draftId,setId,body.notes||null);sendJson(response,200,{result});}catch(error){sendWorkflowError(response,error);}return;}
+  if(detailActionMatch&&request.method==='POST'){try{const body=await readJson(request);const [draftId,setId]=detailActionMatch.slice(1,3).map(Number);if(detailActionMatch[3]==='approve'){sendJson(response,200,await approveImageAndMaybeRegister(db,rootDir,draftId,setId,body.approvalNote||null,{approveImpl:approveManualDetailSet}));}else{sendJson(response,200,{result:await rejectManualDetailSet(db,draftId,setId,body.notes||null)});}}catch(error){sendWorkflowError(response,error);}return;}
   const debugExportMatch = url.pathname.match(/^\/api\/product-drafts\/(\d+)\/debug-export$/);
   if (debugExportMatch && request.method === 'GET') { const value=await buildDebugExport(db,Number(debugExportMatch[1])); if(!value) sendJson(response,404,{error:'Product draft not found'}); else sendJson(response,200,value); return; }
 
@@ -1263,7 +1292,7 @@ function adminHtml() {
           +'<td><button type="button" data-alert-acknowledge-id="'+a.id+'">확인 처리</button></td></tr>').join('')
         +'</tbody></table>';
     }
-    const QUEUE_STATUS_LABELS={queued:'대기 중',analyzing:'분석 중',analysis_completed:'분석 완료',generating_images:'이미지 생성 중',awaiting_approval:'승인 대기',ready_for_registration:'등록 준비 완료',failed:'실패'};
+    const QUEUE_STATUS_LABELS=${JSON.stringify(QUEUE_STATUS_LABELS)};
     async function loadAutoBatchView(){
       const el=document.getElementById('specialView');
       el.innerHTML='<p class="muted" style="padding:12px">불러오는 중...</p>';
@@ -1361,7 +1390,7 @@ function adminHtml() {
         +queue.map(q=>'<tr><td>'+escapeHtml(q.name||q.supplierProductNo)+'</td><td>'+(q.score??'-')+'</td><td>'+escapeHtml(QUEUE_STATUS_LABELS[q.status]||q.status)+'</td>'
           +'<td>'+(q.draftId?'<a href="/admin?draftId='+q.draftId+'">#'+q.draftId+'</a>':'-')+'</td>'
           +'<td>'+(q.failureMessage?escapeHtml(q.failureStage||'')+': '+escapeHtml(q.failureMessage):'-')+'</td>'
-          +'<td>'+(q.status==='ready_for_registration'?'<button type="button" data-queue-register-id="'+q.id+'">지금 등록 (쿠팡)</button> <button type="button" data-queue-register-naver-id="'+q.id+'">지금 등록 (네이버)</button>':'-')+'</td></tr>').join('')
+          +'<td>-</td></tr>').join('')
         +'</tbody></table>';
     }
     function autoBatchRunsListHtml(runs){
