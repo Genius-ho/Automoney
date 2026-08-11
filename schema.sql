@@ -694,7 +694,7 @@ create table if not exists processing_queue (
   supplier_product_no text not null,
   name text,
   score numeric,
-  status text not null default 'queued' check (status in ('queued', 'analyzing', 'analysis_completed', 'generating_images', 'awaiting_approval', 'ready_for_registration', 'failed')),
+  status text not null default 'queued' check (status in ('queued', 'draft_created', 'analyzing', 'analysis_completed', 'generating_images', 'awaiting_image_approval', 'registering', 'awaiting_sale_approval', 'completed', 'failed')),
   draft_id bigint references product_drafts(id),
   failure_stage text,
   failure_message text,

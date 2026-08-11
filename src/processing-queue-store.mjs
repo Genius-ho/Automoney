@@ -49,8 +49,36 @@ export async function enqueueCandidate(db, { batchRunCandidateId, categoryPolicy
 }
 
 export async function countActiveQueueItems(db) {
-  const result = await db.query(`select count(*)::int as count from processing_queue where status <> 'failed'`);
+  const result = await db.query(
+    `select count(*)::int as count from processing_queue
+     where status in ('queued', 'draft_created', 'analyzing', 'analysis_completed', 'generating_images', 'registering')`,
+  );
   return result.rows[0].count;
+}
+
+export async function getQueueItemByDraftId(db, draftId) {
+  const result = await db.query('select * from processing_queue where draft_id = $1 order by id desc limit 1', [draftId]);
+  return result.rows[0] ? toQueueItem(result.rows[0]) : null;
+}
+
+export async function claimQueueItemStatus(db, draftId, fromStatus, toStatus) {
+  const result = await db.query(
+    `update processing_queue set status = $3, failure_stage = null, failure_message = null, updated_at = now()
+     where draft_id = $1 and status = $2
+     returning *`,
+    [draftId, fromStatus, toStatus],
+  );
+  return result.rows[0] ? toQueueItem(result.rows[0]) : null;
+}
+
+export async function listQueueItemsForRegistrationReconciliation(db) {
+  const result = await db.query(
+    `select pq.* from processing_queue pq
+     join coupang_product_registrations cpr on cpr.product_draft_id = pq.draft_id
+     where pq.status not in ('completed', 'failed')
+     order by pq.updated_at asc`,
+  );
+  return result.rows.map(toQueueItem);
 }
 
 export async function listQueue(db, { status } = {}) {
@@ -94,17 +122,23 @@ export function getNextImageItem(db) {
 }
 
 export async function updateQueueItemStatus(db, id, { status, draftId, failureStage, failureMessage, startedAt } = {}) {
+  const hasStatus = status !== undefined;
+  const hasDraftId = draftId !== undefined;
+  const hasFailureStage = failureStage !== undefined;
+  const hasFailureMessage = failureMessage !== undefined;
+  const hasStartedAt = startedAt !== undefined;
   const result = await db.query(
     `update processing_queue set
-       status = coalesce($2, status),
-       draft_id = coalesce($3, draft_id),
-       failure_stage = coalesce($4, failure_stage),
-       failure_message = coalesce($5, failure_message),
-       started_at = coalesce($6, started_at),
+       status = case when $7 then $2 else status end,
+       draft_id = case when $8 then $3 else draft_id end,
+       failure_stage = case when $9 then $4 else failure_stage end,
+       failure_message = case when $10 then $5 else failure_message end,
+       started_at = case when $11 then $6 else started_at end,
        updated_at = now()
      where id = $1
      returning *`,
-    [id, status ?? null, draftId ?? null, failureStage ?? null, failureMessage ?? null, startedAt ?? null],
+    [id, status ?? null, draftId ?? null, failureStage ?? null, failureMessage ?? null, startedAt ?? null,
+      hasStatus, hasDraftId, hasFailureStage, hasFailureMessage, hasStartedAt],
   );
   return result.rows[0] ? toQueueItem(result.rows[0]) : null;
 }
