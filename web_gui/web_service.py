@@ -80,25 +80,37 @@ class WebService:
         self._previous_close_cache: dict[str, tuple[str, Decimal]] = {}
 
     def _previous_close(self, broker: TossBroker, ticker: str) -> Decimal | None:
-        today = date.today()
-        today_key = today.isoformat()
+        # Cache key is our local (KST) calendar date -- purely a "don't
+        # refetch more than once a day" throttle. It must NOT be used to
+        # decide which candle counts as "previous": KST is far enough ahead
+        # of US market hours that the most recent US trading session is
+        # still labeled "yesterday" by KST clock time for much of the US
+        # session, so comparing candle dates against date.today() picks the
+        # in-progress session itself and reports 0% change against it.
+        today_key = date.today().isoformat()
         cached = self._previous_close_cache.get(ticker)
         if cached and cached[0] == today_key:
             return cached[1]
-        # Find the most recent candle strictly before today by its own
-        # timestamp rather than assuming index 1 is "yesterday" -- if
-        # today's candle isn't in the response yet (or is missing for any
-        # other reason), a fixed index silently grabs the wrong day and
-        # caches it wrong for the rest of the day.
+        # The candle with the latest date is "the current session" (whatever
+        # calendar date it happens to be labeled with -- never our own
+        # clock), and the next-latest *distinct* date is "previous close".
+        # Computed from the data itself so it doesn't depend on response
+        # order either.
         candles = broker.get_daily_candles_raw(ticker, 5).get("result", {}).get("candles", [])
         time.sleep(0.25)
-        for candle in candles:
-            candle_date = datetime.fromisoformat(candle["timestamp"]).date()
-            if candle_date < today:
-                previous = _text_decimal(candle.get("closePrice"))
-                self._previous_close_cache[ticker] = (today_key, previous)
-                return previous
-        return None
+        dated = sorted(
+            ((datetime.fromisoformat(candle["timestamp"]).date(), candle) for candle in candles),
+            key=lambda item: item[0],
+            reverse=True,
+        )
+        distinct_dates = sorted({candle_date for candle_date, _ in dated}, reverse=True)
+        if len(distinct_dates) < 2:
+            return None
+        previous_date = distinct_dates[1]
+        previous_candle = next(candle for candle_date, candle in dated if candle_date == previous_date)
+        previous = _text_decimal(previous_candle.get("closePrice"))
+        self._previous_close_cache[ticker] = (today_key, previous)
+        return previous
 
     def _reconcile_known_symbols(self) -> None:
         """known_symbols must include every ETF that has ever been saved, not

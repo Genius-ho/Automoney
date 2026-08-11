@@ -129,23 +129,43 @@ class WebServiceTests(unittest.TestCase):
 
             self.assertAlmostEqual(Decimal(by_symbol["TQQQ"]["day_change_pct"]), Decimal("2.5") / Decimal("82") * 100)
 
-    def test_previous_close_skips_over_a_missing_todays_candle(self):
-        class NoTodayCandleBroker(FakeMixedBroker):
+    def test_previous_close_ignores_our_own_clock_across_the_kst_us_timezone_gap(self):
+        """Regression test: comparing candle dates against date.today() (KST)
+        broke as soon as it was deployed -- KST is far enough ahead of US
+        market hours that the most recent US session is still labeled
+        "yesterday" by KST clock time for most of the US trading day, so
+        every symbol's "previous close" resolved to today's own
+        in-progress session and day_change_pct came out as 0%. Using dates
+        entirely in the past (unrelated to whatever date.today() is when
+        this test runs) proves the selection no longer depends on the
+        local clock at all -- only on the candle data's own relative dates."""
+        class PastDatesBroker(FakeMixedBroker):
             def get_daily_candles_raw(self, symbol, count):
-                two_days_ago = (date.today() - timedelta(days=2)).isoformat()
                 return {"result": {"candles": [
-                    {"timestamp": _YESTERDAY + "T13:00:00+09:00", "closePrice": "82"},
-                    {"timestamp": two_days_ago + "T13:00:00+09:00", "closePrice": "70"},
+                    {"timestamp": "2020-01-02T13:00:00+09:00", "closePrice": "84.5"},
+                    {"timestamp": "2020-01-01T13:00:00+09:00", "closePrice": "82"},
                 ]}}
 
         with tempfile.TemporaryDirectory() as temp:
-            service = WebService(Path(temp), broker_factory=NoTodayCandleBroker)
+            service = WebService(Path(temp), broker_factory=PastDatesBroker)
             with patch("web_gui.web_service.time.sleep"):
                 result = service.refresh_account("TQQQ")
             by_symbol = {row["symbol"]: row for row in result["holdings"]}
 
-            # Must pick yesterday's close (82), not two-days-ago (70).
             self.assertAlmostEqual(Decimal(by_symbol["TQQQ"]["day_change_pct"]), Decimal("2.5") / Decimal("82") * 100)
+
+    def test_previous_close_is_none_when_only_one_session_is_available(self):
+        class OneCandleBroker(FakeMixedBroker):
+            def get_daily_candles_raw(self, symbol, count):
+                return {"result": {"candles": [{"timestamp": _TODAY + "T13:00:00+09:00", "closePrice": "84.5"}]}}
+
+        with tempfile.TemporaryDirectory() as temp:
+            service = WebService(Path(temp), broker_factory=OneCandleBroker)
+            with patch("web_gui.web_service.time.sleep"):
+                result = service.refresh_account("TQQQ")
+            by_symbol = {row["symbol"]: row for row in result["holdings"]}
+
+            self.assertIsNone(by_symbol["TQQQ"]["day_change_pct"])
 
     def test_previous_close_is_fetched_at_most_once_per_symbol_per_day(self):
         """Previous close never changes intraday, so a second refresh the same
