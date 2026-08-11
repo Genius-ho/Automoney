@@ -51,6 +51,8 @@ import { approveManualMainImage, getNextManualMainImageVersion, insertManualMain
 import { approveManualDetailSet, insertDetailSet, listManualDetailSets, rejectManualDetailSet, reserveDetailSetVersion } from './manual-ai/detail-workflow-store.mjs';
 import { generateDetailImageSet, generateMainImage } from './manual-ai/codex-image-runner.mjs';
 import { handleApprovedImages } from './image-approval-registration.mjs';
+import { listApprovalInbox } from './approval-inbox-store.mjs';
+import { approveInboxImages, retryFailedInboxItem } from './approval-inbox-service.mjs';
 import {
   exportProductDraft,
   analyzeSeoKeywords,
@@ -115,6 +117,40 @@ export async function approveImageAndMaybeRegister(db, rootDir, draftId, imageId
     coupangConfig, telegramConfig, coupangClient,
   });
   return { result, autoRegistration };
+}
+
+export async function getApprovalInboxResponse(db, {
+  listApprovalInboxImpl = listApprovalInbox,
+} = {}) {
+  return { status: 200, body: await listApprovalInboxImpl(db) };
+}
+
+function approvalInboxErrorResponse(error) {
+  const conflicts = new Set(['QUEUE_NOT_APPROVABLE', 'IMAGES_NOT_READY', 'IMAGE_APPROVAL_FAILED', 'RETRY_NOT_SAFE']);
+  return {
+    status: conflicts.has(error?.code) ? 409 : 500,
+    body: { error: error?.message || String(error), code: error?.code || 'APPROVAL_INBOX_ERROR' },
+  };
+}
+
+export async function approveInboxImagesResponse(db, rootDir, draftId, {
+  approveInboxImagesImpl = approveInboxImages,
+} = {}) {
+  try {
+    return { status: 200, body: await approveInboxImagesImpl(db, rootDir, draftId) };
+  } catch (error) {
+    return approvalInboxErrorResponse(error);
+  }
+}
+
+export async function retryApprovalInboxResponse(db, queueId, {
+  retryFailedInboxItemImpl = retryFailedInboxItem,
+} = {}) {
+  try {
+    return { status: 200, body: await retryFailedInboxItemImpl(db, queueId) };
+  } catch (error) {
+    return approvalInboxErrorResponse(error);
+  }
 }
 
 // Loaded once at startup, not per-tick -- Domeme credentials, pricing rules,
@@ -194,6 +230,23 @@ async function handleRequest({ request, response, db, aiSecrets, rootDir }) {
   }
   if (request.method === 'GET' && isAllowedPublicAssetPath(url.pathname)) {
     await sendPublicFile(response, url.pathname);
+    return;
+  }
+  if (url.pathname === '/api/approval-inbox' && request.method === 'GET') {
+    const result = await getApprovalInboxResponse(db);
+    sendJson(response, result.status, result.body);
+    return;
+  }
+  const approvalInboxImagesMatch = url.pathname.match(/^\/api\/approval-inbox\/drafts\/(\d+)\/approve-images$/);
+  if (approvalInboxImagesMatch && request.method === 'POST') {
+    const result = await approveInboxImagesResponse(db, rootDir, Number(approvalInboxImagesMatch[1]));
+    sendJson(response, result.status, result.body);
+    return;
+  }
+  const approvalInboxRetryMatch = url.pathname.match(/^\/api\/approval-inbox\/queue\/(\d+)\/retry$/);
+  if (approvalInboxRetryMatch && request.method === 'POST') {
+    const result = await retryApprovalInboxResponse(db, Number(approvalInboxRetryMatch[1]));
+    sendJson(response, result.status, result.body);
     return;
   }
   const providerOptions={environment:aiSecrets,masterKey:aiSecrets.AUTOMONEY_CREDENTIAL_MASTER_KEY};
