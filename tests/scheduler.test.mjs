@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
 
-import { startScheduledJobs, stopScheduledJobs, tick, ORDER_TICK_INTERVAL_MS, DISPATCH_TICK_INTERVAL_MS, SUPPLIER_MONITOR_TICK_INTERVAL_MS, TELEGRAM_APPROVAL_POLL_INTERVAL_MS, DAILY_SUMMARY_TICK_INTERVAL_MS } from '../src/scheduler.mjs';
+import { createNonOverlappingRunner, startScheduledJobs, stopScheduledJobs, tick, ORDER_TICK_INTERVAL_MS, DISPATCH_TICK_INTERVAL_MS, SUPPLIER_MONITOR_TICK_INTERVAL_MS, TELEGRAM_APPROVAL_POLL_INTERVAL_MS, DAILY_SUMMARY_TICK_INTERVAL_MS } from '../src/scheduler.mjs';
 
 function fakeSetInterval(callback) {
   const promise = callback();
@@ -89,10 +89,12 @@ test('startScheduledJobs uses one shared callback router and passes Coupang to n
   const telegramConfig = { botToken: 't', chatId: 'c' };
   const notificationCalls = [];
   const pollCalls = [];
+  const reconciliationCalls = [];
   await startScheduledJobs({ kind: 'db' }, '/root', {
     loadSchedulerDepsImpl: async () => ({ coupangClient, naverClient: {}, domemeClient: {}, domemePrivateClient, telegramConfig }),
     tickImpl: (label, intervalMs, fn) => { jobs.set(label, fn); return { label }; },
     notifyPendingCoupangSaleApprovalsImpl: async (...args) => { notificationCalls.push(args); return { notified: 1 }; },
+    reconcileCoupangQueueImpl: async (...args) => { reconciliationCalls.push(args); return { checked: 0 }; },
     createTelegramCallbackRouterImpl: () => ({
       pollOnce: async (...args) => { pollCalls.push(args); return { processed: 0 }; },
     }),
@@ -103,9 +105,24 @@ test('startScheduledJobs uses one shared callback router and passes Coupang to n
 
   assert.equal(notificationCalls[0][1], telegramConfig);
   assert.equal(notificationCalls[0][2].coupangClient, coupangClient);
+  assert.equal(reconciliationCalls.length, 1);
+  assert.equal(reconciliationCalls[0][1].coupangClient, coupangClient);
   assert.equal(pollCalls[0][1].coupangClient, coupangClient);
   assert.equal(pollCalls[0][1].domemeClient, domemePrivateClient);
   assert.equal(pollCalls[0][2], telegramConfig);
+});
+
+test('non-overlapping reconciliation skips a second invocation while the first is pending', async () => {
+  let release;
+  let calls = 0;
+  const pending = new Promise((resolve) => { release = resolve; });
+  const run = createNonOverlappingRunner(async () => { calls += 1; await pending; return { checked: 1 }; });
+  const first = run();
+  const second = await run();
+  assert.deepEqual(second, { skipped: true, reason: 'ALREADY_RUNNING' });
+  assert.equal(calls, 1);
+  release();
+  assert.deepEqual(await first, { checked: 1 });
 });
 
 test('stopScheduledJobs clears every handle, and tolerates an empty/undefined list', () => {
