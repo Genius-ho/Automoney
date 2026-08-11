@@ -2,6 +2,7 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 
 import {
+  adminHtml,
   approveInboxImagesResponse,
   getApprovalInboxResponse,
   retryApprovalInboxResponse,
@@ -48,4 +49,21 @@ test('retryApprovalInboxResponse rejects unsafe external retries with HTTP 409',
   });
 
   assert.deepEqual(response, { status: 409, body: { error: 'external reconciliation required', code: 'RETRY_NOT_SAFE' } });
+});
+
+test('admin HTML opens a one-click approval inbox by default', () => {
+  const html = adminHtml();
+
+  assert.match(html, /id="viewApprovalInboxButton" class="primary"/);
+  assert.match(html, /let currentView='approvalInbox'/);
+  assert.match(html, /이미지 승인/);
+  assert.match(html, /판매 승인/);
+  assert.match(html, /발주 승인/);
+  assert.match(html, /처리 실패/);
+  assert.match(html, /data-approve-images-draft-id/);
+  assert.match(html, /전체 이미지 승인/);
+  assert.match(html, /data-request-sale-approval-draft-id/);
+  assert.match(html, /data-approve-purchase-order-id/);
+  assert.match(html, /data-retry-queue-id/);
+  assert.match(html, /loadApprovalInbox\(\)/);
 });

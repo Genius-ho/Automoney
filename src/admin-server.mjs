@@ -1216,7 +1216,7 @@ function contentType(filePath) {
   return 'application/octet-stream';
 }
 
-function adminHtml() {
+export function adminHtml() {
   return `<!doctype html>
 <html lang="ko">
 <head>
@@ -1229,7 +1229,7 @@ function adminHtml() {
     h1{font-size:18px;margin:0} button,select,input,textarea{font:inherit}
     button{border:1px solid #b9c2cf;background:#fff;padding:7px 10px;cursor:pointer}
     button.primary{background:#1f6feb;color:#fff;border-color:#1f6feb}
-    main{display:grid;grid-template-rows:minmax(420px,52vh) 1fr;min-height:calc(100vh - 57px)}
+    main{display:grid;grid-template-rows:minmax(420px,52vh) 1fr;min-height:calc(100vh - 57px)}main.singleView{grid-template-rows:1fr}
     main[hidden]{display:none}
     .list{border-bottom:1px solid #d8dee7;background:#fff;overflow:hidden;display:flex;flex-direction:column;min-width:0}
     .detail{padding:18px;overflow:auto}.toolbar{display:flex;gap:8px;flex-wrap:wrap;padding:10px 12px;border-bottom:1px solid #d8dee7;background:#fff;flex:0 0 auto;align-items:center}
@@ -1256,15 +1256,17 @@ function adminHtml() {
     input,textarea,select{box-sizing:border-box;width:100%;border:1px solid #b9c2cf;padding:8px;background:#fff}textarea{min-height:120px;resize:vertical}
     iframe{width:100%;min-height:360px;border:1px solid #d8dee7;background:#fff}img{max-width:120px;max-height:120px;object-fit:contain;border:1px solid #d8dee7;background:#fff;margin:4px}
     pre{white-space:pre-wrap;background:#0f172a;color:#dbeafe;padding:12px;overflow:auto}
+    .approvalInbox{padding:16px;max-width:1400px;margin:0 auto}.approvalSummary{display:grid;grid-template-columns:repeat(4,minmax(140px,1fr));gap:10px;margin-bottom:14px}.approvalMetric{background:#fff;border:1px solid #d8dee7;padding:14px;text-align:center}.approvalMetric strong{display:block;font-size:28px;color:#1f6feb}.approvalCard{background:#fff;border:1px solid #d8dee7;border-left:5px solid #1f6feb;padding:16px;margin-bottom:14px}.approvalCard.failed{border-left-color:#cf222e}.approvalCard h2{margin:0 0 8px;font-size:17px}.approvalImages{display:flex;gap:14px;align-items:flex-start;overflow:auto;margin:12px 0}.approvalMainImage img{width:180px;height:180px;max-width:none;max-height:none}.approvalDetailImages{display:flex;flex-wrap:wrap}.approvalDetailImages img{width:82px;height:105px}.approvalActions{display:flex;gap:8px;align-items:center}.approvalActions button{font-weight:700}.approvalError{color:#a8071a;background:#fff1f0;border:1px solid #ffccc7;padding:10px;margin:10px 0}@media(max-width:760px){.approvalSummary{grid-template-columns:repeat(2,1fr)}}
   </style>
 </head>
 <body>
   <header><h1>Automoney Admin</h1><span class="muted">Product draft review</span><button id="aiSettingsButton" type="button">AI API 설정</button></header>
-  <main>
+  <main class="singleView">
     <section class="list">
       <div class="viewNav">
+        <button id="viewApprovalInboxButton" class="primary" type="button">승인함</button>
         <button id="viewDashboardButton" type="button">대시보드</button>
-        <button id="viewAllButton" class="primary" type="button">전체</button>
+        <button id="viewAllButton" type="button">전체</button>
         <button id="viewRecommendButton" type="button">추천</button>
         <button id="viewRegistrationsButton" type="button">등록·재고관리</button>
         <button id="viewAutoBatchButton" type="button">자동배치</button>
@@ -1273,7 +1275,7 @@ function adminHtml() {
         <button id="viewPurchaseOrdersButton" type="button">발주안</button>
         <button id="viewOrderExceptionsButton" type="button">예외 큐</button>
       </div>
-      <div class="toolbar">
+      <div class="toolbar" hidden>
         <select id="statusFilter"><option value="">all</option><option value="draft">draft</option><option value="needs_review">needs_review</option><option value="blocked">blocked</option><option value="approved">approved</option></select>
         <select id="naverWinnerFilter"><option value="">naver all</option><option value="candidate">candidate</option><option value="needs_review">needs_review</option><option value="reject">reject</option></select>
         <select id="finalDecisionFilter"><option value="">final all</option><option value="등록후보">등록후보</option><option value="검수필요">검수필요</option><option value="제외">제외</option></select>
@@ -1282,25 +1284,29 @@ function adminHtml() {
         <button id="naverCandidateButton">N winner Candidate</button>
         <button id="reloadButton">Reload</button>
       </div>
-      <div class="tableWrap"><table id="draftTable"><thead><tr id="draftHeaderRow"></tr></thead><tbody id="draftRows"></tbody></table></div>
-      <div id="specialView" class="tableWrap" hidden></div>
+      <div class="tableWrap" hidden><table id="draftTable"><thead><tr id="draftHeaderRow"></tr></thead><tbody id="draftRows"></tbody></table></div>
+      <div id="specialView" class="tableWrap"></div>
     </section>
-    <section class="detail" id="detail">Select a product.</section>
+    <section class="detail" id="detail" hidden>Select a product.</section>
   </main>
   <section id="aiSettings" class="detail" hidden><div class="section"><h2>AI API 설정</h2><p class="muted">현재 이미지 생성은 반수동 외부 AI workflow를 사용합니다. API 설정은 향후 자동 생성 기능을 위한 선택 사항입니다.</p><div id="aiProviderCards" class="grid"></div></div><div class="section"><h2>AI 작업별 모델 설정</h2><div id="aiTaskRouting"></div></div></section>
   <script>
     let selectedId=null;let selectedColIndex=null;let selectedRowIndex=null;const rows=document.getElementById('draftRows');const detail=document.getElementById('detail');
     const statusFilter=document.getElementById('statusFilter');const naverWinnerFilter=document.getElementById('naverWinnerFilter');const finalDecisionFilter=document.getElementById('finalDecisionFilter');const batchFilter=document.getElementById('batchFilter');const collectedOnly=document.getElementById('collectedOnly');
     document.getElementById('reloadButton').addEventListener('click',loadList);document.getElementById('naverCandidateButton').addEventListener('click',()=>{naverWinnerFilter.value='candidate';loadList();});statusFilter.addEventListener('change',loadList);naverWinnerFilter.addEventListener('change',loadList);finalDecisionFilter.addEventListener('change',loadList);batchFilter.addEventListener('change',loadList);collectedOnly.addEventListener('change',loadList);
-    let currentView='all';
-    const viewButtons={dashboard:document.getElementById('viewDashboardButton'),all:document.getElementById('viewAllButton'),recommend:document.getElementById('viewRecommendButton'),registrations:document.getElementById('viewRegistrationsButton'),autoBatch:document.getElementById('viewAutoBatchButton'),channelOrders:document.getElementById('viewChannelOrdersButton'),domemePrecheck:document.getElementById('viewDomemePrecheckButton'),purchaseOrders:document.getElementById('viewPurchaseOrdersButton'),orderExceptions:document.getElementById('viewOrderExceptionsButton')};
+    let currentView='approvalInbox';
+    const viewButtons={approvalInbox:document.getElementById('viewApprovalInboxButton'),dashboard:document.getElementById('viewDashboardButton'),all:document.getElementById('viewAllButton'),recommend:document.getElementById('viewRecommendButton'),registrations:document.getElementById('viewRegistrationsButton'),autoBatch:document.getElementById('viewAutoBatchButton'),channelOrders:document.getElementById('viewChannelOrdersButton'),domemePrecheck:document.getElementById('viewDomemePrecheckButton'),purchaseOrders:document.getElementById('viewPurchaseOrdersButton'),orderExceptions:document.getElementById('viewOrderExceptionsButton')};
     for(const [view,button] of Object.entries(viewButtons))button.addEventListener('click',()=>switchView(view));
     function switchView(view){
       currentView=view;
       for(const [key,button] of Object.entries(viewButtons))button.classList.toggle('primary',key===view);
       document.querySelector('#draftTable').closest('.tableWrap').hidden=view!=='all';
       document.getElementById('specialView').hidden=view==='all';
-      if(view==='dashboard')loadDashboardView();
+      document.querySelector('.toolbar').hidden=view!=='all';
+      detail.hidden=view!=='all';
+      document.querySelector('main').classList.toggle('singleView',view!=='all');
+      if(view==='approvalInbox')loadApprovalInbox();
+      else if(view==='dashboard')loadDashboardView();
       else if(view==='all')loadList();
       else if(view==='recommend')loadRecommendView();
       else if(view==='registrations')loadRegistrationsView();
@@ -1309,6 +1315,57 @@ function adminHtml() {
       else if(view==='domemePrecheck')loadDomemePrecheckView();
       else if(view==='purchaseOrders')loadPurchaseOrdersView();
       else if(view==='orderExceptions')loadOrderExceptionsView();
+    }
+    const APPROVAL_TYPE_LABELS={image:'이미지 승인',sale:'판매 승인',purchase:'발주 승인',failed:'처리 실패'};
+    async function loadApprovalInbox(){
+      const el=document.getElementById('specialView');
+      el.innerHTML='<div class="approvalInbox"><p class="muted">승인할 항목을 불러오는 중...</p></div>';
+      try{
+        const data=await api('/api/approval-inbox');
+        el.innerHTML=approvalInboxHtml(data);
+        bindApprovalInboxActions(el);
+      }catch(error){
+        el.innerHTML='<div class="approvalInbox"><div class="approvalError">승인함을 불러오지 못했습니다: '+escapeHtml(error.message)+'</div><button type="button" data-reload-approval-inbox>다시 불러오기</button></div>';
+        el.querySelector('[data-reload-approval-inbox]').onclick=loadApprovalInbox;
+      }
+    }
+    function approvalInboxHtml(data){
+      const counts=data.counts||{};
+      const metrics=[['이미지 승인',counts.image],['판매 승인',counts.sale],['발주 승인',counts.purchase],['처리 실패',counts.failed]];
+      const summary='<div class="approvalSummary">'+metrics.map(([label,count])=>'<div class="approvalMetric"><strong>'+(Number(count)||0)+'</strong>'+label+'</div>').join('')+'</div>';
+      const cards=(data.cards||[]).map(approvalCardHtml).join('');
+      return '<div class="approvalInbox"><h2>승인함</h2><p class="muted">지금 사람이 결정해야 하는 항목만 모았습니다.</p>'+summary+(cards||'<div class="section"><strong>현재 승인할 항목이 없습니다.</strong></div>')+'</div>';
+    }
+    function approvalCardHtml(card){
+      const p=card.pricing||{};
+      const price='<div>원가 '+money(p.unitCostPrice)+'원 · 판매가 '+money(p.salePrice)+'원 · 예상 마진 '+money(p.expectedProfit)+'원</div>';
+      const main=card.mainImage?.url?'<div class="approvalMainImage"><div class="muted">대표 이미지</div><a href="'+attr(card.mainImage.url)+'" target="_blank"><img src="'+attr(card.mainImage.url)+'" alt="대표 이미지"></a></div>':'';
+      const details=(card.detailImages||[]).length?'<div><div class="muted">상세 이미지 '+card.detailImages.length+'장</div><div class="approvalDetailImages">'+card.detailImages.map((url,index)=>'<a href="'+attr(url)+'" target="_blank"><img src="'+attr(url)+'" alt="상세 이미지 '+(index+1)+'"></a>').join('')+'</div></div>':'';
+      const images=main||details?'<div class="approvalImages">'+main+details+'</div>':'';
+      const failure=card.error?'<div class="approvalError"><strong>'+escapeHtml(card.error.stage||'처리 실패')+'</strong><br>'+escapeHtml(card.error.message||'오류 내용 없음')+'</div>':'';
+      const actions=(card.availableActions||[]).map(action=>approvalActionButtonHtml(action,card)).join('');
+      return '<article class="approvalCard '+(card.type==='failed'?'failed':'')+'" data-approval-key="'+attr(card.key)+'"><h2>'+escapeHtml(card.title)+' <small>#'+escapeHtml(card.draftId??'-')+'</small></h2><div><span class="badge status">'+escapeHtml(APPROVAL_TYPE_LABELS[card.type]||card.type)+'</span> '+escapeHtml(card.status||'')+'</div>'+price+images+failure+'<div class="approvalActions">'+(actions||'<span class="muted">자동 재시도할 수 없습니다. 외부 상태 확인이 필요합니다.</span>')+'<span data-action-result class="muted"></span></div></article>';
+    }
+    function approvalActionButtonHtml(action,card){
+      if(action==='approve_images')return '<button class="primary" type="button" data-approve-images-draft-id="'+card.draftId+'">전체 이미지 승인</button>';
+      if(action==='request_sale_approval')return '<button class="primary" type="button" data-request-sale-approval-draft-id="'+card.draftId+'">쿠팡 판매 승인</button>';
+      if(action==='approve_purchase_order')return '<button class="primary" type="button" data-approve-purchase-order-id="'+card.supplierOrderId+'">실제 발주 승인</button>';
+      if(action==='retry')return '<button type="button" data-retry-queue-id="'+card.queueId+'">다시 시도</button>';
+      return '';
+    }
+    function bindApprovalInboxActions(el){
+      el.querySelectorAll('.approvalCard button').forEach(button=>button.onclick=async()=>{
+        const card=button.closest('.approvalCard'),result=card.querySelector('[data-action-result]');
+        let path=null,body='{}';
+        if(button.dataset.approveImagesDraftId)path='/api/approval-inbox/drafts/'+button.dataset.approveImagesDraftId+'/approve-images';
+        else if(button.dataset.requestSaleApprovalDraftId)path='/api/product-drafts/'+button.dataset.requestSaleApprovalDraftId+'/coupang-registration/request-approval';
+        else if(button.dataset.approvePurchaseOrderId){if(!confirm('도매매에 실제 발주합니다. 승인하시겠습니까?'))return;path='/api/purchase-orders/'+button.dataset.approvePurchaseOrderId+'/approve';body=JSON.stringify({confirm:true});}
+        else if(button.dataset.retryQueueId)path='/api/approval-inbox/queue/'+button.dataset.retryQueueId+'/retry';
+        if(!path)return;
+        card.querySelectorAll('button').forEach(item=>item.disabled=true);result.textContent='처리 중...';
+        try{await api(path,{method:'POST',body});result.textContent='처리 완료';await loadApprovalInbox();}
+        catch(error){result.textContent='오류: '+error.message;card.querySelectorAll('button').forEach(item=>item.disabled=false);}
+      });
     }
     const DASHBOARD_METRIC_LABELS={todayRegistrations:'오늘 등록 수',todayImprovements:'오늘 개선 수',newOrders:'신규 주문 수',awaitingApproval:'발주 승인 대기 수',awaitingInvoice:'송장 대기 수',supplierAlerts:'품절/가격변동 수',automationErrors:'자동화 오류 수'};
     const ALERT_CODE_LABELS={SUPPLIER_OUT_OF_STOCK:'공급처 품절',SUPPLIER_BACK_IN_STOCK:'공급처 재입고',SUPPLIER_PRICE_INCREASED:'공급가 상승',SUPPLIER_PRICE_DECREASED:'공급가 하락',SUPPLIER_MOQ_CHANGED:'최소주문수량 변경',SUPPLIER_DATA_ERROR:'공급처 데이터 오류'};
@@ -1730,7 +1787,7 @@ function adminHtml() {
           :'<div class="muted">아직 쿠팡 상품과 연결되지 않았습니다.</div>')
         +'<p><a class="productLink" href="/admin?draftId='+r.productDraftId+'">상세보기(연결/이미지반영/새로고침) →</a></p></div>';
     }
-    window.__adminUiDiagnostics=window.__adminUiDiagnostics||{};window.__adminUiDiagnostics.scriptLoaded=true;loadList();const initialId=new URL(location.href).searchParams.get('draftId');window.__adminUiDiagnostics.initialId=Number(initialId)||null;window.__adminUiDiagnostics.initialLoadDetailCallAttempted=Boolean(initialId);window.__initialLoadPromise=initialId?Promise.resolve(loadDetail(initialId,false)):Promise.resolve();
+    window.__adminUiDiagnostics=window.__adminUiDiagnostics||{};window.__adminUiDiagnostics.scriptLoaded=true;const initialId=new URL(location.href).searchParams.get('draftId');window.__adminUiDiagnostics.initialId=Number(initialId)||null;window.__adminUiDiagnostics.initialLoadDetailCallAttempted=Boolean(initialId);if(initialId)switchView('all');else loadApprovalInbox();window.__initialLoadPromise=initialId?Promise.resolve(loadDetail(initialId,false)):Promise.resolve();
 
     let currentDrafts=[];
     let columnOrder=null;

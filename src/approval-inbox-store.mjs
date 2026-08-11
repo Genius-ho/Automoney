@@ -121,7 +121,7 @@ async function listSaleApprovals(db) {
       from processing_queue pq
       join product_drafts d on d.id = pq.draft_id
       join coupang_product_registrations cpr on cpr.product_draft_id = pq.draft_id
-     where pq.status = 'awaiting_sale_approval'
+     where pq.status = 'awaiting_sale_approval' and cpr.requested = false
      order by pq.updated_at asc`);
   return rows;
 }

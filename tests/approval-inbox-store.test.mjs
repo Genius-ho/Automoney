@@ -72,6 +72,7 @@ test('listApprovalInbox separates sale, purchase, and failed cards with safe act
     ['retry'],
   ]);
   assert.equal(result.cards[2].error.message, 'quota');
+  assert.match(db.calls[1], /cpr\.requested\s*=\s*false/i);
 });
 
 test('listApprovalInbox does not offer retry for an external registration failure', async () => {
