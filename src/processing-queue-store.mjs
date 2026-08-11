@@ -95,7 +95,7 @@ export async function listQueue(db, { status } = {}) {
 // day boundaries, not just within one run.
 export async function getNextQueueItem(db) {
   const inProgress = await db.query(
-    `select * from processing_queue where status in ('analyzing', 'analysis_completed', 'generating_images') order by started_at asc nulls last limit 1`,
+    `select * from processing_queue where status in ('draft_created', 'analyzing', 'analysis_completed', 'generating_images') order by started_at asc nulls last limit 1`,
   );
   if (inProgress.rows.length > 0) return toQueueItem(inProgress.rows[0]);
   const queued = await db.query(
@@ -114,11 +114,17 @@ export function getNextQueuedItem(db) {
 }
 
 export function getNextAnalysisItem(db) {
-  return getFirstByStatus(db, 'analyzing', 'started_at asc nulls last, queued_at asc');
+  return getFirstByStatuses(db, ['draft_created', 'analyzing'], 'started_at asc nulls last, queued_at asc');
 }
 
 export function getNextImageItem(db) {
-  return getFirstByStatus(db, 'analysis_completed', 'started_at asc nulls last, queued_at asc');
+  return getFirstByStatuses(db, ['analysis_completed', 'generating_images'], 'started_at asc nulls last, queued_at asc');
+}
+
+async function getFirstByStatuses(db, statuses, orderBy) {
+  const quoted = statuses.map((status) => `'${status}'`).join(', ');
+  const result = await db.query(`select * from processing_queue where status in (${quoted}) order by ${orderBy} limit 1`);
+  return result.rows[0] ? toQueueItem(result.rows[0]) : null;
 }
 
 export async function updateQueueItemStatus(db, id, { status, draftId, failureStage, failureMessage, startedAt } = {}) {

@@ -38,8 +38,8 @@ test('stage selectors each query only their eligible queue status', async () => 
   await getNextAnalysisItem(db);
   await getNextImageItem(db);
   assert.match(sqls[0], /status = 'queued'/);
-  assert.match(sqls[1], /status = 'analyzing'/);
-  assert.match(sqls[2], /status = 'analysis_completed'/);
+  assert.match(sqls[1], /status in \('draft_created', 'analyzing'\)/);
+  assert.match(sqls[2], /status in \('analysis_completed', 'generating_images'\)/);
   assert.ok(sqls.every((sql) => !sql.includes('ready_for_registration')));
 });
 
@@ -104,14 +104,14 @@ test('listQueueItemsForRegistrationReconciliation returns non-terminal linked re
 test('listQueue filters by status when provided', async () => {
   let capturedParams = null;
   const db = { async query(sql, params) { capturedParams = params; return { rows: [fakeRow()] }; } };
-  await listQueue(db, { status: 'awaiting_approval' });
-  assert.deepEqual(capturedParams, ['awaiting_approval']);
+  await listQueue(db, { status: 'awaiting_image_approval' });
+  assert.deepEqual(capturedParams, ['awaiting_image_approval']);
 });
 
 test('getNextQueueItem resumes an in-progress item before ever picking a fresh queued one', async () => {
   const db = {
     async query(sql) {
-      if (sql.includes("in ('analyzing', 'analysis_completed', 'generating_images')")) return { rows: [fakeRow({ id: '9', status: 'generating_images' })] };
+      if (sql.includes("in ('draft_created', 'analyzing', 'analysis_completed', 'generating_images')")) return { rows: [fakeRow({ id: '9', status: 'generating_images' })] };
       return { rows: [fakeRow({ id: '1' })] };
     },
   };
@@ -123,7 +123,7 @@ test('getNextQueueItem resumes an in-progress item before ever picking a fresh q
 test('getNextQueueItem falls back to the highest-scoring queued item when nothing is in progress', async () => {
   const db = {
     async query(sql) {
-      if (sql.includes("in ('analyzing', 'analysis_completed', 'generating_images')")) return { rows: [] };
+      if (sql.includes("in ('draft_created', 'analyzing', 'analysis_completed', 'generating_images')")) return { rows: [] };
       return { rows: [fakeRow({ id: '3', score: '91' })] };
     },
   };
