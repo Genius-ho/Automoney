@@ -73,6 +73,24 @@ test('focused product stages process at most one eligible item and stop at their
   assert.ok(updates.some((u) => u.id === 3 && u.status === 'generating_images'));
 });
 
+test('image stage forwards jobPathsConfig.jobDir to the image generator', async () => {
+  let receivedJobDir = null;
+  const result = await runImageGenerationStage({}, {
+    jobPathsConfig: { jobDir: 'C:/automoney-data/jobs' },
+    getNextImageItemImpl: async () => ({ id: 3, batchRunCandidateId: 5, draftId: 118, status: 'analysis_completed' }),
+    getBatchRunCandidateByIdImpl: async () => ({ id: 5, draftId: 118 }),
+    updateBatchCandidateStatusImpl: async () => {},
+    updateQueueItemStatusImpl: async () => {},
+    recordQueueItemPauseImpl: async () => {},
+    generateWinnerCandidateImagesImpl: async (_db, _candidate, options) => {
+      receivedJobDir = options.jobDir;
+      return { outcome: 'success', draftId: 118 };
+    },
+  });
+  assert.equal(result.outcome, 'success');
+  assert.equal(receivedJobDir, 'C:/automoney-data/jobs');
+});
+
 function policy(id, overrides = {}) {
   return { id, segmentName: '생활/수납', categoryName: `카테고리${id}`, searchKeywords: ['키워드'], domeggookCategoryCode: null, isActive: true, ...overrides };
 }

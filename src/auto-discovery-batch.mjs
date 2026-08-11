@@ -308,7 +308,10 @@ export async function runAnalysisStage(db, deps = {}) {
 }
 
 export async function runImageGenerationStage(db, deps = {}) {
-  const resolved = improvementDeps(deps);
+  const resolved = improvementDeps({
+    ...deps,
+    jobDir: deps.jobDir || deps.jobPathsConfig?.jobDir,
+  });
   const item = await (deps.getNextImageItemImpl || getNextImageItemReal)(db);
   return runImprovementStage(db, item, deps.generateWinnerCandidateImagesImpl || generateWinnerCandidateImagesReal, resolved, 'generating_images', 'awaiting_image_approval');
 }
