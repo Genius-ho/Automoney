@@ -66,24 +66,53 @@ test('notification does not mark a row when Telegram returns no message id', asy
   assert.equal(marked, false);
 });
 
-test('approve callback delegates exactly once to the guarded Coupang approval flow', async () => {
+test('approve callback delegates exactly once and completes the queue from live approval status', async () => {
   let approvalCalls = 0;
   const edited = [];
+  const updates = [];
   const result = await handleCoupangApprovalCallback({}, telegramConfig, callbackQuery('approve_cp:119'), {
     requestApprovalImpl: async (db, draftId) => {
       approvalCalls += 1;
       assert.equal(draftId, 119);
-      return { liveStatusNameBefore: 'temporary', liveStatusNameAfter: 'requested' };
+      return { liveStatusNameBefore: '임시저장', liveStatusNameAfter: '승인완료' };
     },
+    getQueueItemByDraftIdImpl: async () => ({ id: 3, status: 'awaiting_sale_approval' }),
+    updateQueueItemStatusImpl: async (_db, id, patch) => updates.push({ id, ...patch }),
     answerCallbackQueryImpl: async () => {},
     editTelegramMessageTextImpl: async (config, messageId, text) => edited.push({ messageId, text }),
     sendTelegramMessageImpl: async () => { throw new Error('fallback should not run'); },
   });
 
-  assert.deepEqual(result, { handled: true, action: 'approve', draftId: 119 });
+  assert.deepEqual(result, { handled: true, action: 'approve', draftId: 119, liveStatusName: '승인완료', queueStatus: 'completed' });
   assert.equal(approvalCalls, 1);
   assert.equal(edited.length, 1);
   assert.match(edited[0].text, /119/);
+  assert.deepEqual(updates, [{ id: 3, status: 'completed', failureStage: null, failureMessage: null }]);
+});
+
+test('approve callback keeps approval-pending products in the human wait state', async () => {
+  const updates = [];
+  const result = await handleCoupangApprovalCallback({}, telegramConfig, callbackQuery('approve_cp:119'), {
+    requestApprovalImpl: async () => ({ liveStatusNameAfter: '승인대기중' }),
+    getQueueItemByDraftIdImpl: async () => ({ id: 3 }),
+    updateQueueItemStatusImpl: async (_db, id, patch) => updates.push({ id, ...patch }),
+    answerCallbackQueryImpl: async () => {}, editTelegramMessageTextImpl: async () => {}, sendTelegramMessageImpl: async () => {},
+  });
+  assert.equal(result.queueStatus, 'awaiting_sale_approval');
+  assert.equal(updates[0].status, 'awaiting_sale_approval');
+});
+
+test('explicit live rejection marks the queue failed even when approval request refuses', async () => {
+  const updates = [];
+  const error = Object.assign(new Error('not temporary'), { code: 'NOT_TEMPORARY_SAVED', liveStatusName: '승인반려' });
+  const result = await handleCoupangApprovalCallback({}, telegramConfig, callbackQuery('approve_cp:119'), {
+    requestApprovalImpl: async () => { throw error; },
+    getQueueItemByDraftIdImpl: async () => ({ id: 3 }),
+    updateQueueItemStatusImpl: async (_db, id, patch) => updates.push({ id, ...patch }),
+    answerCallbackQueryImpl: async () => {}, editTelegramMessageTextImpl: async () => {}, sendTelegramMessageImpl: async () => {},
+  });
+  assert.equal(result.queueStatus, 'failed');
+  assert.deepEqual(updates[0], { id: 3, status: 'failed', failureStage: 'coupang_sale_approval', failureMessage: '승인반려' });
 });
 
 test('defer callback performs no Coupang mutation', async () => {
