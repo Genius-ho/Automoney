@@ -114,7 +114,12 @@ class AutoTickBroker(LiveTradingBroker):
         return {"result": {"cashBuyingPower": "100000"}}
 
     def get_daily_candles_raw(self, symbol, count, before=None):
-        return {"result": {"candles": [{"closePrice": "84.5"}, {"closePrice": "82"}]}}
+        today = date.today().isoformat()
+        yesterday = (date.today() - timedelta(days=1)).isoformat()
+        return {"result": {"candles": [
+            {"timestamp": today + "T13:00:00+09:00", "closePrice": "84.5"},
+            {"timestamp": yesterday + "T13:00:00+09:00", "closePrice": "82"},
+        ]}}
 
     def submit_order(self, order, client_order_id):
         if order.reason.startswith("New-cycle") and any(order.client_order_id.startswith(symbol) for symbol in self.reject_symbols):

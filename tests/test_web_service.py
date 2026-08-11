@@ -1,10 +1,14 @@
 import tempfile
 import unittest
+from datetime import date, timedelta
 from decimal import Decimal
 from pathlib import Path
 from unittest.mock import patch
 
 from web_gui.web_service import WebService
+
+_TODAY = date.today().isoformat()
+_YESTERDAY = (date.today() - timedelta(days=1)).isoformat()
 
 
 class FakeBroker:
@@ -20,7 +24,10 @@ class FakeBroker:
         return {"result": {"cashBuyingPower": "1200"}}
 
     def get_daily_candles_raw(self, symbol, count):
-        return {"result": {"candles": [{"closePrice": "84.5"}, {"closePrice": "82"}]}}
+        return {"result": {"candles": [
+            {"timestamp": _TODAY + "T13:00:00+09:00", "closePrice": "84.5"},
+            {"timestamp": _YESTERDAY + "T13:00:00+09:00", "closePrice": "82"},
+        ]}}
 
 
 class FakeEmptyBroker(FakeBroker):
@@ -100,6 +107,45 @@ class WebServiceTests(unittest.TestCase):
 
             self.assertAlmostEqual(Decimal(by_symbol["TQQQ"]["day_change_pct"]), Decimal("2.5") / Decimal("82") * 100)
             self.assertAlmostEqual(Decimal(by_symbol["SOXL"]["day_change_pct"]), Decimal("2.5") / Decimal("82") * 100)
+
+    def test_previous_close_is_found_by_date_not_by_position(self):
+        """Regression test: the previous code assumed the second candle in
+        the response was always "yesterday" (candles[1]), which silently
+        breaks -- including flipping the sign of day_change_pct -- if the
+        API ever returns candles in a different order or without today's
+        entry. It must find "yesterday" by its own timestamp."""
+        class OldestFirstBroker(FakeMixedBroker):
+            def get_daily_candles_raw(self, symbol, count):
+                return {"result": {"candles": [
+                    {"timestamp": _YESTERDAY + "T13:00:00+09:00", "closePrice": "82"},
+                    {"timestamp": _TODAY + "T13:00:00+09:00", "closePrice": "84.5"},
+                ]}}
+
+        with tempfile.TemporaryDirectory() as temp:
+            service = WebService(Path(temp), broker_factory=OldestFirstBroker)
+            with patch("web_gui.web_service.time.sleep"):
+                result = service.refresh_account("TQQQ")
+            by_symbol = {row["symbol"]: row for row in result["holdings"]}
+
+            self.assertAlmostEqual(Decimal(by_symbol["TQQQ"]["day_change_pct"]), Decimal("2.5") / Decimal("82") * 100)
+
+    def test_previous_close_skips_over_a_missing_todays_candle(self):
+        class NoTodayCandleBroker(FakeMixedBroker):
+            def get_daily_candles_raw(self, symbol, count):
+                two_days_ago = (date.today() - timedelta(days=2)).isoformat()
+                return {"result": {"candles": [
+                    {"timestamp": _YESTERDAY + "T13:00:00+09:00", "closePrice": "82"},
+                    {"timestamp": two_days_ago + "T13:00:00+09:00", "closePrice": "70"},
+                ]}}
+
+        with tempfile.TemporaryDirectory() as temp:
+            service = WebService(Path(temp), broker_factory=NoTodayCandleBroker)
+            with patch("web_gui.web_service.time.sleep"):
+                result = service.refresh_account("TQQQ")
+            by_symbol = {row["symbol"]: row for row in result["holdings"]}
+
+            # Must pick yesterday's close (82), not two-days-ago (70).
+            self.assertAlmostEqual(Decimal(by_symbol["TQQQ"]["day_change_pct"]), Decimal("2.5") / Decimal("82") * 100)
 
     def test_previous_close_is_fetched_at_most_once_per_symbol_per_day(self):
         """Previous close never changes intraday, so a second refresh the same

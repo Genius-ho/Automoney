@@ -1,9 +1,13 @@
 import tempfile
 import unittest
+from datetime import date, timedelta
 from unittest.mock import patch
 from pathlib import Path
 
 from application_engine import ApplicationEngine
+
+_TODAY = date.today().isoformat()
+_YESTERDAY = (date.today() - timedelta(days=1)).isoformat()
 
 
 class MixedAccountBroker:
@@ -37,8 +41,8 @@ class MixedAccountBroker:
         return {
             "result": {
                 "candles": [
-                    {"closePrice": "84.5"},
-                    {"closePrice": "82"},
+                    {"timestamp": _TODAY + "T13:00:00+09:00", "closePrice": "84.5"},
+                    {"timestamp": _YESTERDAY + "T13:00:00+09:00", "closePrice": "82"},
                 ]
             }
         }

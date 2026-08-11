@@ -3,7 +3,7 @@ from __future__ import annotations
 
 import time
 from dataclasses import asdict, replace
-from datetime import date
+from datetime import date, datetime
 from decimal import Decimal, InvalidOperation
 from pathlib import Path
 from typing import Any, Callable
@@ -80,17 +80,25 @@ class WebService:
         self._previous_close_cache: dict[str, tuple[str, Decimal]] = {}
 
     def _previous_close(self, broker: TossBroker, ticker: str) -> Decimal | None:
-        today_key = date.today().isoformat()
+        today = date.today()
+        today_key = today.isoformat()
         cached = self._previous_close_cache.get(ticker)
         if cached and cached[0] == today_key:
             return cached[1]
-        candles = broker.get_daily_candles_raw(ticker, 2).get("result", {}).get("candles", [])
+        # Find the most recent candle strictly before today by its own
+        # timestamp rather than assuming index 1 is "yesterday" -- if
+        # today's candle isn't in the response yet (or is missing for any
+        # other reason), a fixed index silently grabs the wrong day and
+        # caches it wrong for the rest of the day.
+        candles = broker.get_daily_candles_raw(ticker, 5).get("result", {}).get("candles", [])
         time.sleep(0.25)
-        if len(candles) < 2:
-            return None
-        previous = _text_decimal(candles[1].get("closePrice"))
-        self._previous_close_cache[ticker] = (today_key, previous)
-        return previous
+        for candle in candles:
+            candle_date = datetime.fromisoformat(candle["timestamp"]).date()
+            if candle_date < today:
+                previous = _text_decimal(candle.get("closePrice"))
+                self._previous_close_cache[ticker] = (today_key, previous)
+                return previous
+        return None
 
     def _reconcile_known_symbols(self) -> None:
         """known_symbols must include every ETF that has ever been saved, not

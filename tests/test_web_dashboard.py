@@ -3,6 +3,7 @@ import os
 import tempfile
 import threading
 import unittest
+from datetime import date, timedelta
 from decimal import Decimal
 from http.server import ThreadingHTTPServer
 from pathlib import Path
@@ -14,6 +15,9 @@ from application_engine import ApplicationEngine
 from secure_credentials import TossCredentials
 from web_gui.dashboard.server import Auth, Handler
 from web_gui.dashboard.service import DashboardService, EngineDashboardService
+
+_TODAY = date.today().isoformat()
+_YESTERDAY = (date.today() - timedelta(days=1)).isoformat()
 
 
 class FakeBroker:
@@ -41,7 +45,10 @@ class FakeBroker:
     closed_orders = []
 
     def get_daily_candles_raw(self, symbol, count):
-        return {"result": {"candles": [{"closePrice": "84.5"}, {"closePrice": "82"}]}}
+        return {"result": {"candles": [
+            {"timestamp": _TODAY + "T13:00:00+09:00", "closePrice": "84.5"},
+            {"timestamp": _YESTERDAY + "T13:00:00+09:00", "closePrice": "82"},
+        ]}}
 
     def get_all_orders_raw(self, status, symbol, from_date, to_date):
         return list(self.open_orders if status == "OPEN" else self.closed_orders)
