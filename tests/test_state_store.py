@@ -109,6 +109,32 @@ class FinalTakeProfitPctPersistenceTests(unittest.TestCase):
 
             self.assertEqual(store.load("SOXL").final_tp_pct, Decimal("20"))
 
+    def test_legacy_file_without_second_tier_fields_defaults_to_the_old_single_tier_split(self):
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory) / "state.json"
+            path.write_text(json.dumps({
+                "version": 2,
+                "last_symbol": "SOXL",
+                "portfolios": {"SOXL": {"symbol": "SOXL", "position_qty": 5}},
+            }), encoding="utf-8")
+            store = StateStore(path)
+
+            state = store.load("SOXL")
+            self.assertEqual(state.final_tp_qty_pct, Decimal("100"))
+            self.assertEqual(state.second_tp_pct, Decimal("25"))
+
+    def test_second_tier_fields_survive_save_and_reload(self):
+        with tempfile.TemporaryDirectory() as directory:
+            store = StateStore(Path(directory) / "state.json")
+            state = store.load("TQQQ")
+            state.final_tp_qty_pct = Decimal("60")
+            state.second_tp_pct = Decimal("25")
+            store.save(state)
+
+            reloaded = store.load("TQQQ")
+            self.assertEqual(reloaded.final_tp_qty_pct, Decimal("60"))
+            self.assertEqual(reloaded.second_tp_pct, Decimal("25"))
+
 
 class SavedSymbolsTests(unittest.TestCase):
     def test_returns_symbols_that_have_been_saved(self):

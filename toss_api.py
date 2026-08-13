@@ -25,10 +25,11 @@ LIVE_ACKNOWLEDGEMENT = "I_UNDERSTAND_LIVE_TRADING"
 def order_time_in_force(order: OrderIntent) -> str:
     """Return the broker time-in-force used for a strategy order.
 
-    The final take-profit is a regular DAY limit sell; all other strategy
-    orders, including buys and the quarter sell, remain LOC/CLS orders.
-    Keeping this policy in one helper lets auto_tick schedule the two sell
-    legs without drifting from the actual broker payload.
+    The final (first-tier) take-profit is a regular DAY limit sell; all other
+    strategy orders, including buys, the quarter sell, and the second-tier
+    take-profit, remain LOC/CLS orders. Keeping this policy in one helper
+    lets auto_tick schedule the sell legs without drifting from the actual
+    broker payload.
     """
     return "DAY" if order.reason.startswith("Final take-profit") else "CLS"
 

@@ -97,6 +97,13 @@ class StrategyState:
     # symbol's SYMBOL_PROFILES value (see state_store._decode / load), but is
     # user-editable per symbol from here on.
     final_tp_pct: Decimal = Decimal("15")
+    # Share of the post-quarter-sell remainder sold at final_tp_pct; the rest
+    # (100 - this) is sold at second_tp_pct instead. Defaults to 100 so an
+    # unconfigured second tier reproduces the old single-tier behavior exactly.
+    final_tp_qty_pct: Decimal = Decimal("100")
+    # Second take-profit percentage above average cost, for whatever quantity
+    # final_tp_qty_pct leaves unsold. Must exceed final_tp_pct.
+    second_tp_pct: Decimal = Decimal("25")
     updated_at: str = ""
 
     def validate(self) -> None:
@@ -112,6 +119,12 @@ class StrategyState:
             raise ValueError("Big-number buffer must be between 5% and 30%.")
         if not Decimal("1") <= self.final_tp_pct <= Decimal("100"):
             raise ValueError("최종 익절 %는 1~100 사이여야 합니다.")
+        if not Decimal("0") <= self.final_tp_qty_pct <= Decimal("100"):
+            raise ValueError("1단계 익절 수량 비율은 0~100 사이여야 합니다.")
+        if not Decimal("1") <= self.second_tp_pct <= Decimal("100"):
+            raise ValueError("2단계 익절 %는 1~100 사이여야 합니다.")
+        if self.second_tp_pct <= self.final_tp_pct:
+            raise ValueError("2단계 익절 %는 1단계 익절 %보다 커야 합니다.")
         levels = self.down_ladder_enabled_levels
         if sorted(set(levels)) != list(levels):
             raise ValueError("Down ladder 단계는 중복 없이 오름차순이어야 합니다.")
@@ -177,6 +190,11 @@ def attempt_amount(state: StrategyState) -> Money:
 def final_take_profit_price(state: StrategyState) -> Money:
     state.validate()
     return money(state.avg_cost * (Decimal("1") + state.final_tp_pct / 100))
+
+
+def second_take_profit_price(state: StrategyState) -> Money:
+    state.validate()
+    return money(state.avg_cost * (Decimal("1") + state.second_tp_pct / 100))
 
 
 def down_ladder_prices(attempt: Money, anchor_price: Money, steps: int = 5) -> tuple[Money, ...]:
@@ -252,8 +270,12 @@ def build_plan(state: StrategyState, current_price: Money, today: date | None = 
     if quarter_qty:
         orders.append(OrderIntent(_order_id(state, today, "quarter-sell"), "sell", quarter_qty, star, OrderKind.LIMIT, "Star-price quarter LOC sell"))
     remaining_qty = state.position_qty - quarter_qty
-    if remaining_qty:
-        orders.append(OrderIntent(_order_id(state, today, "take-profit"), "sell", remaining_qty, final_take_profit_price(state), OrderKind.LIMIT, f"Final take-profit limit sell (+{state.final_tp_pct}% from average)"))
+    first_tp_qty = int(remaining_qty * state.final_tp_qty_pct / 100)
+    if first_tp_qty:
+        orders.append(OrderIntent(_order_id(state, today, "take-profit"), "sell", first_tp_qty, final_take_profit_price(state), OrderKind.LIMIT, f"Final take-profit limit sell (+{state.final_tp_pct}% from average)"))
+    second_tp_qty = remaining_qty - first_tp_qty
+    if second_tp_qty:
+        orders.append(OrderIntent(_order_id(state, today, "second-take-profit"), "sell", second_tp_qty, second_take_profit_price(state), OrderKind.LIMIT, f"Second take-profit sell (+{state.second_tp_pct}% from average)"))
 
     buy_notional = sum((order.limit_price or Decimal("0")) * order.quantity for order in orders if order.side == "buy")
     if buy_notional > amount:

@@ -14,6 +14,7 @@ from mumae_core import (
     down_ladder_prices,
     final_take_profit_price,
     normalize_down_ladder_levels,
+    second_take_profit_price,
     star_price,
 )
 
@@ -40,6 +41,61 @@ class StrategyFormulaTests(unittest.TestCase):
             StrategyState(final_tp_pct=Decimal("0")).validate()
         with self.assertRaises(ValueError):
             StrategyState(final_tp_pct=Decimal("101")).validate()
+
+    def test_second_take_profit_is_avg_plus_second_tp_pct(self):
+        self.state.second_tp_pct = Decimal("25")
+        self.assertEqual(second_take_profit_price(self.state), Decimal("62.50"))
+
+    def test_validate_rejects_out_of_range_second_tp_pct(self):
+        with self.assertRaises(ValueError):
+            StrategyState(second_tp_pct=Decimal("0")).validate()
+        with self.assertRaises(ValueError):
+            StrategyState(second_tp_pct=Decimal("101")).validate()
+
+    def test_validate_rejects_second_tp_pct_not_above_first_tier(self):
+        with self.assertRaises(ValueError):
+            StrategyState(final_tp_pct=Decimal("20"), second_tp_pct=Decimal("20")).validate()
+        with self.assertRaises(ValueError):
+            StrategyState(final_tp_pct=Decimal("20"), second_tp_pct=Decimal("15")).validate()
+
+    def test_validate_rejects_out_of_range_final_tp_qty_pct(self):
+        with self.assertRaises(ValueError):
+            StrategyState(final_tp_qty_pct=Decimal("-1")).validate()
+        with self.assertRaises(ValueError):
+            StrategyState(final_tp_qty_pct=Decimal("101")).validate()
+
+    def test_unconfigured_second_tier_reproduces_the_old_single_tier_split(self):
+        """Default final_tp_qty_pct=100 must send the whole post-quarter
+        remainder to the first tier, exactly like the old single-tier
+        behavior, for any position size -- not just multiples of 4."""
+        for qty in (8, 10, 13):
+            with self.subTest(qty=qty):
+                state = StrategyState(cash_usd=Decimal("4000"), position_qty=qty, avg_cost=Decimal("50"), t_value=Decimal("10"), cycle_id="test")
+                plan = build_plan(state, Decimal("51"), date(2026, 7, 14), ladder_steps=1)
+                sells = [order for order in plan.orders if order.side == "sell"]
+                take_profit = next(order for order in sells if order.reason.startswith("Final take-profit"))
+                self.assertEqual(take_profit.quantity, qty - qty // 4)
+                self.assertFalse(any(order.reason.startswith("Second take-profit") for order in sells))
+
+    def test_configured_second_tier_splits_the_remainder_between_both_prices(self):
+        self.state.final_tp_qty_pct = Decimal("60")
+        self.state.second_tp_pct = Decimal("25")
+        plan = build_plan(self.state, Decimal("51"), date(2026, 7, 14), ladder_steps=1)
+        quarter = next(order for order in plan.orders if order.reason.startswith("Star-price quarter"))
+        first_tier = next(order for order in plan.orders if order.reason.startswith("Final take-profit"))
+        second_tier = next(order for order in plan.orders if order.reason.startswith("Second take-profit"))
+
+        remaining = self.state.position_qty - quarter.quantity
+        self.assertEqual(quarter.quantity, self.state.position_qty // 4)
+        self.assertEqual(first_tier.quantity, int(remaining * Decimal("0.60")))
+        self.assertEqual(second_tier.quantity, remaining - first_tier.quantity)
+        self.assertEqual(first_tier.limit_price, final_take_profit_price(self.state))
+        self.assertEqual(second_tier.limit_price, second_take_profit_price(self.state))
+
+    def test_second_tier_leg_is_omitted_when_it_would_be_zero_quantity(self):
+        self.state.final_tp_qty_pct = Decimal("100")
+        plan = build_plan(self.state, Decimal("51"), date(2026, 7, 14), ladder_steps=1)
+        self.assertFalse(any(order.reason.startswith("Second take-profit") for order in plan.orders))
 
     def test_verified_down_ladder_example(self):
         prices = down_ladder_prices(Decimal("629.63"), Decimal("185.18"), steps=7)

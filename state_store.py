@@ -36,6 +36,8 @@ class StateStore:
             if raw.get("final_tp_pct") not in (None, "")
             else symbol_profile(symbol)[1]
         )
+        raw["final_tp_qty_pct"] = Decimal(str(raw.get("final_tp_qty_pct", "100")))
+        raw["second_tp_pct"] = Decimal(str(raw.get("second_tp_pct", "25")))
         known = {field.name for field in fields(StrategyState)}
         state = StrategyState(**{key: value for key, value in raw.items() if key in known})
         state.validate()
@@ -79,5 +81,5 @@ class StateStore:
     @staticmethod
     def _serialize(state: StrategyState) -> dict:
         raw = asdict(state)
-        raw.update({"t_value": str(state.t_value), "avg_cost": str(state.avg_cost), "cash_usd": str(state.cash_usd), "big_number_pct": str(state.big_number_pct), "final_tp_pct": str(state.final_tp_pct), "mode": state.mode.value, "updated_at": datetime.now(timezone.utc).isoformat()})
+        raw.update({"t_value": str(state.t_value), "avg_cost": str(state.avg_cost), "cash_usd": str(state.cash_usd), "big_number_pct": str(state.big_number_pct), "final_tp_pct": str(state.final_tp_pct), "final_tp_qty_pct": str(state.final_tp_qty_pct), "second_tp_pct": str(state.second_tp_pct), "mode": state.mode.value, "updated_at": datetime.now(timezone.utc).isoformat()})
         return raw

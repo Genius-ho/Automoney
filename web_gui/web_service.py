@@ -119,6 +119,8 @@ class WebService:
             big_number_pct=_text_decimal(payload.get("big_number_pct"), str(current.big_number_pct)),
             big_number_enabled=bool(payload.get("big_number_enabled", current.big_number_enabled)),
             final_tp_pct=_text_decimal(payload.get("final_tp_pct"), str(current.final_tp_pct)),
+            final_tp_qty_pct=_text_decimal(payload.get("final_tp_qty_pct"), str(current.final_tp_qty_pct)),
+            second_tp_pct=_text_decimal(payload.get("second_tp_pct"), str(current.second_tp_pct)),
             mode=Mode(str(payload.get("mode", current.mode.value))),
             down_ladder_enabled_levels=levels,
         )

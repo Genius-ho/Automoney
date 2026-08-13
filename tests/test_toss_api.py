@@ -7,10 +7,19 @@ from unittest.mock import MagicMock, patch
 from urllib.error import HTTPError
 
 from mumae_core import OrderIntent, OrderKind
-from toss_api import TossApiError, TossBroker
+from toss_api import TossApiError, TossBroker, order_time_in_force
 
 
 class TossRateLimitTests(unittest.TestCase):
+    def test_only_the_first_tier_take_profit_is_a_day_order(self):
+        first_tier = OrderIntent("a", "sell", 1, Decimal("60"), OrderKind.LIMIT, "Final take-profit limit sell (+15% from average)")
+        second_tier = OrderIntent("b", "sell", 1, Decimal("70"), OrderKind.LIMIT, "Second take-profit sell (+25% from average)")
+        quarter_sell = OrderIntent("c", "sell", 1, Decimal("55"), OrderKind.LIMIT, "Star-price quarter LOC sell")
+
+        self.assertEqual(order_time_in_force(first_tier), "DAY")
+        self.assertEqual(order_time_in_force(second_tier), "CLS")
+        self.assertEqual(order_time_in_force(quarter_sell), "CLS")
+
     def test_price_limits_uses_documented_symbol_query(self):
         broker = TossBroker.__new__(TossBroker)
         broker._request = MagicMock(return_value={'result': {}})

@@ -278,6 +278,27 @@ class FinalTakeProfitPctUpdateTests(unittest.TestCase):
             with self.assertRaises(ValueError):
                 service.update_state({"symbol": "TQQQ", "final_tp_pct": "0"})
 
+    def test_update_state_persists_the_second_tier_fields(self):
+        with tempfile.TemporaryDirectory() as temp:
+            service = WebService(Path(temp))
+
+            state = service.update_state({
+                "symbol": "TQQQ", "final_tp_pct": "15", "final_tp_qty_pct": "60", "second_tp_pct": "25",
+            })
+
+            self.assertEqual(state.final_tp_qty_pct, Decimal("60"))
+            self.assertEqual(state.second_tp_pct, Decimal("25"))
+            reloaded = service.load_state("TQQQ")
+            self.assertEqual(reloaded.final_tp_qty_pct, Decimal("60"))
+            self.assertEqual(reloaded.second_tp_pct, Decimal("25"))
+
+    def test_update_state_rejects_second_tp_pct_not_above_first_tier(self):
+        with tempfile.TemporaryDirectory() as temp:
+            service = WebService(Path(temp))
+
+            with self.assertRaises(ValueError):
+                service.update_state({"symbol": "TQQQ", "final_tp_pct": "20", "second_tp_pct": "20"})
+
 
 class KnownSymbolsReconciliationTests(unittest.TestCase):
     def test_startup_adds_previously_saved_symbols_to_known_symbols(self):
