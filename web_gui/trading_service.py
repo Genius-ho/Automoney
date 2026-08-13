@@ -1059,7 +1059,7 @@ class TradingWebService(WebService):
                 regular_start, regular_end = start, end
                 day_market_start = day_start or session_start
                 cls_sell_start = pre_start or start
-                session_key = start.date().isoformat()
+                session_key = str(today.get("date") or target)
                 break
         if not session_key:
             return
