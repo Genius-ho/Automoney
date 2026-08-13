@@ -1087,7 +1087,7 @@ test('fillNaverForm materializes remote images as ordered safe Playwright file p
 
 test('fillNaverForm preserves absolute, root-relative, and file URL image paths', async (t) => {
   const harness = fakeBrowserHarness();
-  const browser = createSpeedgoBrowser({ chromiumImpl: harness.chromium, rootDir: 'C:/repo' });
+  const browser = createSpeedgoBrowser({ chromiumImpl: harness.chromium, rootDir: '/repo' });
   t.after(() => browser.close());
   await browser.open();
 
@@ -1097,14 +1097,14 @@ test('fillNaverForm preserves absolute, root-relative, and file URL image paths'
     deliveryFee: 3000,
     detailContent: '<p>detail</p>',
     mainImageUrl: 'C:/assets/main.jpg',
-    detailImageUrls: ['/generated/detail.jpg', 'file:///C:/assets/detail.jpg'],
+    detailImageUrls: ['/generated/detail.jpg', 'file:///repo/assets/detail.jpg'],
     options: [],
   });
 
   assert.deepEqual(harness.uploadedFiles.get('mainImage'), ['C:/assets/main.jpg']);
   assert.deepEqual(harness.uploadedFiles.get('detailImage'), [
-    'C:\\repo\\generated\\detail.jpg',
-    'C:\\assets\\detail.jpg',
+    '/repo/generated/detail.jpg',
+    '/repo/assets/detail.jpg',
   ]);
 });
 

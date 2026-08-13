@@ -9,8 +9,8 @@ test('processProduct saves raw response and successful product draft to PostgreS
     async fetchProductDetail() {
       return {
         productName: '고급 바나나',
-        supplyPrice: '20000',
-        deliveryFee: '3000',
+        supplyPrice: '6000',
+        deliveryFee: '1000',
         images: ['https://example.test/a.jpg'],
         detailHtml: '<p>상세</p>',
       };
@@ -28,8 +28,8 @@ test('processProduct saves raw response and successful product draft to PostgreS
 
   assert.equal(result.status, 'SUCCESS');
   assert.equal(result.productNo, '49168396');
-  assert.equal(result.coupangPrice, 32310);
-  assert.equal(result.smartstorePrice, 30590);
+  assert.equal(result.coupangPrice, 9840);
+  assert.equal(result.smartstorePrice, 9310);
   assert.ok(db.calls.some((call) => call.sql.includes('insert into supplier_products')));
   assert.ok(db.calls.some((call) => call.sql.includes('insert into product_drafts')));
   assert.ok(db.calls.some((call) => call.sql.includes('insert into product_images')));
@@ -65,7 +65,7 @@ test('processProducts continues after a failed product', async () => {
       if (productNo === '50307216') throw new Error('temporary API error');
       return {
         productName: '고급 바나나',
-        supplyPrice: '20000',
+        supplyPrice: '6000',
         images: ['https://example.test/a.jpg'],
       };
     },

@@ -65,11 +65,6 @@ export function filterProduct(product) {
   if (product.priceParseStatus === 'invalid_range') blockReasons.push('price_invalid_range');
   if (!product.name) blockReasons.push('missing_name');
   if (!Number.isFinite(product.cost) || product.cost <= 0) blockReasons.push('missing_or_invalid_cost');
-  const unitCostPrice = Number(product.unitCostPrice ?? product.cost);
-  const saleUnitCost = Number(product.bundleCostPrice ?? product.cost);
-  if (Number.isFinite(saleUnitCost) && saleUnitCost > 0 && saleUnitCost < 3000) {
-    blockReasons.push('blocked_low_cost');
-  }
   if (!Array.isArray(product.images) || product.images.length === 0) blockReasons.push('missing_images');
   if (product.isSoldOut) blockReasons.push('sold_out');
   if (product.sourceMarket === 'domeggook') reviewReasons.push('needs_review_source_market');
@@ -110,11 +105,27 @@ export function filterProduct(product) {
     if (haystack.includes(keyword.toLowerCase())) reviewReasons.push(`risk_keyword:${keyword}`);
   }
 
+  // 2026-08-14 strategy change: target low-cost, high-turnover items priced
+  // 5,000~20,000원 (both bounds set by the user directly) rather than the
+  // previous flat 3,000원 raw-cost floor -- cost itself is no longer checked
+  // directly; whether it's viable is entirely a function of what sale price
+  // it implies. Scoped to single items -- bundles have their own 35,000원
+  // sale-price ceiling above (Plan 8.2) with different economics.
+  if (product.sellUnitType !== 'bundle') {
+    const estimatedSale = estimateSalePrice(product);
+    if (estimatedSale !== null && (estimatedSale < 5000 || estimatedSale > 20000)) {
+      blockReasons.push('blocked_sale_price_out_of_target_range');
+    }
+  }
+
   const minProfit = estimateMinimumProfit(product);
-  // "예상 순이익 5,000원 이상" is the documented pass bar (both the retired
-  // roadmap's 7.1 and the current plan's 7.3) -- this used a different,
-  // undocumented 3,000 threshold.
-  if (minProfit !== null && minProfit < 5000) {
+  // Absolute-profit floor lowered from 5,000원 to 1,500원 alongside the
+  // 20,000원 target sale-price ceiling above: at the default 25% margin rate
+  // and 11% Coupang fee, 5,000원 profit requires a ~28,000원 sale price,
+  // which is above that ceiling and would leave nothing passing both checks
+  // at once. 1,500원 still rejects near-zero-margin items while remaining
+  // reachable within the 5,000~20,000원 band.
+  if (minProfit !== null && minProfit < 1500) {
     if (product.sellUnitType === 'bundle') reviewReasons.push('needs_review_low_margin');
     else blockReasons.push('blocked_low_margin');
   }

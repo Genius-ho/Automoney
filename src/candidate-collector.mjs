@@ -151,7 +151,7 @@ export async function saveEvaluatedCandidate(pool, candidate, { importBatchId, c
 
 export function isImportableCandidate(filter, { includeNeedsReview, includeDomeggook, product } = {}) {
   const excluded = new Set([
-    'blocked_low_cost',
+    'blocked_sale_price_out_of_target_range',
     'blocked_low_margin',
     'price_parsing_error',
     'price_invalid_range',

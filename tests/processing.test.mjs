@@ -256,8 +256,8 @@ test('normalizeProduct prefers domeggook tiered dome price over the misleading f
 test('filterProduct returns status and reasons for pass and blocked products', () => {
   const good = {
     name: '수납함',
-    cost: 20000,
-    shippingFee: 3000,
+    cost: 6000,
+    shippingFee: 1000,
     priceParseStatus: 'ok',
     images: ['https://example.test/a.jpg'],
     options: [],
@@ -283,12 +283,12 @@ test('filterProduct returns status and reasons for pass and blocked products', (
   assert.equal(filterProduct({ ...good, images: [] }).filterStatus, 'blocked');
 });
 
-test('filterProduct blocks parsing errors and low cost, reviews risk keywords and complex options', () => {
+test('filterProduct blocks parsing errors and out-of-range sale price, reviews risk keywords and complex options', () => {
   const base = {
     name: '일반 상품',
     categoryText: '생활용품',
-    cost: 20000,
-    shippingFee: 3000,
+    cost: 6000,
+    shippingFee: 1000,
     priceParseStatus: 'ok',
     images: ['https://example.test/a.jpg'],
     options: [],
@@ -298,9 +298,16 @@ test('filterProduct blocks parsing errors and low cost, reviews risk keywords an
   assert.deepEqual(filterProduct({ ...base, priceParseStatus: 'parsing_error' }).filterReasons, [
     'price_parsing_error',
   ]);
-  assert.deepEqual(filterProduct({ ...base, cost: 1500 }).filterReasons, [
-    'blocked_low_cost',
+  // cost 1000 + shipping 1000 -> estimated sale ~2,660원, below the 5,000원
+  // target floor and (at that size) also under the 1,500원 profit floor.
+  assert.deepEqual(filterProduct({ ...base, cost: 1000 }).filterReasons, [
+    'blocked_sale_price_out_of_target_range',
     'blocked_low_margin',
+  ]);
+  // cost 20000 + shipping 3000 -> estimated sale ~30,586원, above the
+  // 20,000원 target ceiling.
+  assert.deepEqual(filterProduct({ ...base, cost: 20000, shippingFee: 3000 }).filterReasons, [
+    'blocked_sale_price_out_of_target_range',
   ]);
   assert.deepEqual(filterProduct({ ...base, name: '릴랙시아 옴므 스킨 로션' }).filterReasons, [
     'risk_keyword:스킨',
@@ -309,18 +316,20 @@ test('filterProduct blocks parsing errors and low cost, reviews risk keywords an
   assert.deepEqual(filterProduct({ ...base, options: Array.from({ length: 11 }, () => ({})) }).filterReasons, [
     'needs_review_complex_options',
   ]);
+  // cost 3000 + shipping 1000 -> estimated sale ~5,320원 (still in the
+  // 5,000~20,000원 target band) but only ~1,320원 profit, under the 1,500원 floor.
   assert.deepEqual(
-    filterProduct({ ...base, cost: 5400, shippingFee: 2800, options: Array.from({ length: 11 }, () => ({})) })
+    filterProduct({ ...base, cost: 3000, shippingFee: 1000, options: Array.from({ length: 11 }, () => ({})) })
       .filterReasons,
     ['blocked_low_margin', 'needs_review_complex_options'],
   );
   assert.deepEqual(
-    filterProduct({ ...base, cost: 5400, shippingFee: 2800, options: Array.from({ length: 11 }, () => ({})) })
+    filterProduct({ ...base, cost: 3000, shippingFee: 1000, options: Array.from({ length: 11 }, () => ({})) })
       .blockReasons,
     ['blocked_low_margin'],
   );
   assert.deepEqual(
-    filterProduct({ ...base, cost: 5400, shippingFee: 2800, options: Array.from({ length: 11 }, () => ({})) })
+    filterProduct({ ...base, cost: 3000, shippingFee: 1000, options: Array.from({ length: 11 }, () => ({})) })
       .reviewReasons,
     ['needs_review_complex_options'],
   );
@@ -332,7 +341,7 @@ test('filterProduct blocks parsing errors and low cost, reviews risk keywords an
 test('normalizeProduct and filterProduct classify supplier market and order quantities', () => {
   const domeme = normalizeProduct(
     '49168396',
-    { productName: 'sample', supplyPrice: '20000', images: ['https://example.test/a.jpg'], minOrderQty: 1 },
+    { productName: 'sample', supplyPrice: '6000', images: ['https://example.test/a.jpg'], minOrderQty: 1 },
     { requestedMarket: 'dome' },
   );
   const domemeMoq = normalizeProduct(
@@ -343,13 +352,13 @@ test('normalizeProduct and filterProduct classify supplier market and order quan
   const domeggook = normalizeProduct('49168398', {
     productName: 'sample',
     market: 'domeggook',
-    supplyPrice: '20000',
+    supplyPrice: '6000',
     images: ['https://example.test/a.jpg'],
     minOrderQty: 1,
   });
   const unknown = normalizeProduct('49168399', {
     productName: 'sample',
-    supplyPrice: '20000',
+    supplyPrice: '6000',
     images: ['https://example.test/a.jpg'],
   });
 

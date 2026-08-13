@@ -27,7 +27,22 @@ const FINAL_DECISION_SQL = `
   end
 `;
 
-export async function listProductDrafts(db, { status, importBatchId, collectedOnly, naverWinnerStatus, finalDecision, limit } = {}) {
+// Whitelisted (never string-interpolated from user input) so `sortBy` can
+// only ever select one of these known-safe SQL expressions.
+const SORT_COLUMNS = {
+  updatedAt: 'd.updated_at',
+  name: 'coalesce(d.selling_title, d.cleaned_name, d.raw_name)',
+  coupangSalePrice: 'd.coupang_sale_price',
+  naverSalePrice: 'd.naver_sale_price',
+  coupangExpectedProfit: 'd.coupang_expected_profit',
+  naverExpectedProfit: 'd.naver_expected_profit',
+  coupangWinnerScore: 'cmr.winner_score',
+  naverWinnerScore: 'nmr.winner_score',
+};
+
+// Shared by listProductDrafts and countProductDrafts so the two queries can
+// never drift apart on what counts as a "match" for a given filter set.
+function buildDraftFilterWhere({ status, importBatchId, collectedOnly, naverWinnerStatus, finalDecision, search } = {}) {
   const params = [];
   const where = [];
   if (status) {
@@ -42,6 +57,10 @@ export async function listProductDrafts(db, { status, importBatchId, collectedOn
   if (collectedOnly) {
     where.push('d.collected_at is not null');
   }
+  if (search) {
+    params.push(`%${String(search).trim()}%`);
+    where.push(`(d.selling_title ilike $${params.length} or d.cleaned_name ilike $${params.length} or d.raw_name ilike $${params.length} or d.supplier_product_no ilike $${params.length})`);
+  }
   if (naverWinnerStatus) {
     params.push(naverWinnerStatus);
     where.push(`nmr.winner_status = $${params.length}`);
@@ -51,10 +70,48 @@ export async function listProductDrafts(db, { status, importBatchId, collectedOn
     params.push(finalDecision);
     where.push(`${FINAL_DECISION_SQL} = $${params.length}`);
   }
+  return { params, where };
+}
+
+export async function countProductDrafts(db, filters = {}) {
+  const { params, where } = buildDraftFilterWhere(filters);
+  const result = await db.query(
+    `
+      select count(*)::int as total
+      from product_drafts d
+      join supplier_products sp on sp.id = d.supplier_product_id
+      left join market_research_results nmr on nmr.product_draft_id = d.id and nmr.marketplace = 'naver'
+      ${where.length ? `where ${where.join(' and ')}` : ''}
+    `,
+    params,
+  );
+  return result.rows[0].total;
+}
+
+export async function listProductDrafts(db, { status, importBatchId, collectedOnly, naverWinnerStatus, finalDecision, limit, page, pageSize, search, sortBy, sortDir } = {}) {
+  const { params, where } = buildDraftFilterWhere({ status, importBatchId, collectedOnly, naverWinnerStatus, finalDecision, search });
+
   let parsedLimit = null;
-  if (limit !== undefined && limit !== null) {
+  if (pageSize !== undefined && pageSize !== null) {
+    parsedLimit = Number(pageSize);
+    if (!Number.isInteger(parsedLimit) || parsedLimit <= 0) throw new Error(`Invalid pageSize: ${pageSize}`);
+  } else if (limit !== undefined && limit !== null) {
     parsedLimit = Number(limit);
     if (!Number.isInteger(parsedLimit) || parsedLimit <= 0) throw new Error(`Invalid limit: ${limit}`);
+  }
+  let parsedOffset = null;
+  if (page !== undefined && page !== null) {
+    const parsedPage = Number(page);
+    if (!Number.isInteger(parsedPage) || parsedPage <= 0) throw new Error(`Invalid page: ${page}`);
+    if (!parsedLimit) throw new Error('page requires pageSize');
+    parsedOffset = (parsedPage - 1) * parsedLimit;
+  }
+  let sortPrefix = '';
+  if (sortBy !== undefined && sortBy !== null) {
+    const column = SORT_COLUMNS[sortBy];
+    if (!column) throw new Error(`Invalid sortBy: ${sortBy}`);
+    const direction = sortDir === 'asc' ? 'asc' : 'desc';
+    sortPrefix = `${column} ${direction} nulls last,\n        `;
   }
 
   const result = await db.query(
@@ -121,13 +178,14 @@ export async function listProductDrafts(db, { status, importBatchId, collectedOn
       left join market_research_results nmr on nmr.product_draft_id = d.id and nmr.marketplace = 'naver'
       ${where.length ? `where ${where.join(' and ')}` : ''}
       order by
-        case ${FINAL_DECISION_SQL} when '등록후보' then 0 when '검수필요' then 1 else 2 end,
+        ${sortPrefix}case ${FINAL_DECISION_SQL} when '등록후보' then 0 when '검수필요' then 1 else 2 end,
         nmr.winner_score desc nulls last,
         nmr.price_gap_rate asc nulls last,
         d.naver_expected_profit desc nulls last,
         d.updated_at desc,
         d.id desc
       ${parsedLimit ? `limit $${params.push(parsedLimit)}` : ''}
+      ${parsedOffset ? `offset $${params.push(parsedOffset)}` : ''}
     `,
     params,
   );

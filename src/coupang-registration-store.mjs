@@ -13,6 +13,8 @@ function toRegistrationListItem(row) {
     liveStatusName: row.live_status_name,
     liveTotalStockQuantity: row.live_total_stock_quantity,
     liveSalePrice: row.live_sale_price,
+    liveProductId: row.live_product_id ?? null,
+    liveVendorItemId: row.live_item_snapshot_json?.[0]?.vendorItemId ?? null,
     approvalRequestedAt: row.approval_requested_at,
     approvalResponseMessage: row.approval_response_message,
     telegramNotifiedAt: row.telegram_notified_at ?? null,
@@ -182,17 +184,18 @@ export async function recordApprovalRequested(db, productDraftId, { statusName =
   return result.rows[0] ? toRegistrationListItem({ ...result.rows[0], product_draft_id: productDraftId }) : null;
 }
 
-export async function recordLiveSnapshot(db, productDraftId, { statusName, totalStockQuantity, salePrice, itemSnapshotJson }) {
+export async function recordLiveSnapshot(db, productDraftId, { statusName, totalStockQuantity, salePrice, itemSnapshotJson, productId }) {
   const result = await db.query(
     `update coupang_product_registrations set
        live_status_name = $2,
        live_total_stock_quantity = $3,
        live_sale_price = $4,
        live_item_snapshot_json = $5::jsonb,
+       live_product_id = $6,
        last_synced_at = now(),
        updated_at = now()
      where product_draft_id = $1 returning *`,
-    [productDraftId, statusName || null, totalStockQuantity ?? null, salePrice ?? null, JSON.stringify(itemSnapshotJson || [])],
+    [productDraftId, statusName || null, totalStockQuantity ?? null, salePrice ?? null, JSON.stringify(itemSnapshotJson || []), productId ? String(productId) : null],
   );
   return result.rows[0] ? toRegistrationListItem({ ...result.rows[0], product_draft_id: productDraftId }) : null;
 }

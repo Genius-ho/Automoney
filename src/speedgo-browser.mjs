@@ -2,7 +2,7 @@ import { Buffer } from 'node:buffer';
 import { existsSync } from 'node:fs';
 import { readFile } from 'node:fs/promises';
 import { fileURLToPath } from 'node:url';
-import { isAbsolute, join } from 'node:path';
+import { join } from 'node:path';
 
 import { findFirstVisible, SPEEDGO_SELECTORS } from './speedgo-selectors.mjs';
 
@@ -142,10 +142,15 @@ export function extractNaverRegistrationIds(value) {
   return result;
 }
 
+// Windows drive-letter paths (e.g. C:\foo or C:/foo) are absolute on any host OS.
+// node:path's isAbsolute is platform-specific and only recognizes these on win32,
+// so detect them explicitly rather than relying on the host OS's path module.
+const WINDOWS_DRIVE_PATH = /^[a-zA-Z]:[\\/]/;
+
 function resolvedFilePath(rootDir, value) {
   const stringValue = String(value);
   if (stringValue.startsWith('file:')) return fileURLToPath(stringValue);
-  if (isAbsolute(stringValue) && !stringValue.startsWith('/') && !stringValue.startsWith('\\')) return stringValue;
+  if (WINDOWS_DRIVE_PATH.test(stringValue)) return stringValue;
   return join(rootDir, stringValue.replace(/^[/\\]+/, ''));
 }
 

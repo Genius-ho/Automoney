@@ -158,3 +158,23 @@ export async function retryFailedInboxItem(db, queueId) {
   if (!updated) throw inboxError('QUEUE_NOT_APPROVABLE', 'Queue item is no longer failed');
   return { queueItem: updated };
 }
+
+// A "failed" queue item stays in the approval inbox forever unless someone
+// clears it -- including a draft that finished registering successfully
+// through some other path after the queue recorded the failure (e.g. the
+// admin manually completed the raw-mode registration with overrides after
+// the auto-registration attempt failed readiness). There is nothing further
+// for the queue machinery to do with those, so this only marks the queue
+// item 'completed' (never deletes the row -- draft/order history stays
+// intact) and refuses on anything that isn't currently 'failed'.
+export async function dismissFailedInboxItem(db, queueId) {
+  const updated = (await db.query(
+    `update processing_queue
+        set status = 'completed', failure_stage = null, failure_message = null, updated_at = now()
+      where id = $1 and status = 'failed'
+      returning *`,
+    [queueId],
+  )).rows[0];
+  if (!updated) throw inboxError('QUEUE_NOT_APPROVABLE', 'Failed queue item not found');
+  return { queueItem: updated };
+}

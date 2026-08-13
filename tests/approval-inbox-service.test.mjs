@@ -1,7 +1,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 
-import { approveInboxImages, retryFailedInboxItem } from '../src/approval-inbox-service.mjs';
+import { approveInboxImages, retryFailedInboxItem, dismissFailedInboxItem } from '../src/approval-inbox-service.mjs';
 
 function approvalDb({ queue = { id: 2, status: 'awaiting_image_approval' }, main = { id: 21, product_draft_id: 118 }, detail = { id: 31, product_draft_id: 118, image_count: 10 }, detailImages = 10 } = {}) {
   const events = [];
@@ -82,4 +82,26 @@ test('retryFailedInboxItem refuses external registration failures', async () => 
     { code: 'RETRY_NOT_SAFE' },
   );
   assert.equal(queryCount, 1);
+});
+
+test('dismissFailedInboxItem marks a failed queue item completed and clears its failure fields', async () => {
+  const calls = [];
+  const db = { async query(sql, params) {
+    calls.push({ sql, params });
+    return { rows: [{ id: 3, status: 'completed', draft_id: 3 }] };
+  } };
+
+  const result = await dismissFailedInboxItem(db, 3);
+
+  assert.equal(result.queueItem.status, 'completed');
+  assert.equal(calls.length, 1);
+  assert.deepEqual(calls[0].params, [3]);
+  assert.match(calls[0].sql, /set status = 'completed'.*where id = \$1 and status = 'failed'/is);
+});
+
+test('dismissFailedInboxItem refuses a queue item that is not currently failed', async () => {
+  await assert.rejects(
+    () => dismissFailedInboxItem({ query: async () => ({ rows: [] }) }, 9),
+    { code: 'QUEUE_NOT_APPROVABLE' },
+  );
 });

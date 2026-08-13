@@ -1,4 +1,5 @@
 ﻿import http from 'node:http';
+import { gzipSync } from 'node:zlib';
 import { mkdir, readFile, rename, rm, writeFile } from 'node:fs/promises';
 import { extname, join, resolve } from 'node:path';
 import { createHash } from 'node:crypto';
@@ -23,7 +24,7 @@ import { applyProductAnalysis, buildApplyPreview, getAppliedAnalysis, getAnalysi
 import { buildRegistrationPreview, createDirectRegistration, extractList, previewCategoryAndShipping, requestCoupangSaleApproval, selectRegistrationTarget, validateSellerShippingSettings } from './coupang-registration-flow.mjs';
 import { getSellerShippingSettings, saveSellerShippingSettings } from './coupang-seller-settings-store.mjs';
 import { NaverCommerceClient, NaverCommerceApiError } from './naver-commerce-client.mjs';
-import { createNaverDirectRegistration } from './naver-registration-flow.mjs';
+import { createNaverDirectRegistration, uploadImagesToNaver } from './naver-registration-flow.mjs';
 import { buildNaverPriceUpdatePayload } from './naver-registration-post-process.mjs';
 import { getNaverRegistration, linkNaverRegistration, recordImagesSwapped as recordNaverImagesSwapped } from './naver-registration-store.mjs';
 import { mapLiveNaverProductToImageSwapPayload } from './naver-payload-builder.mjs';
@@ -52,7 +53,7 @@ import { approveManualDetailSet, insertDetailSet, listManualDetailSets, rejectMa
 import { generateDetailImageSet, generateMainImage } from './manual-ai/codex-image-runner.mjs';
 import { handleApprovedImages } from './image-approval-registration.mjs';
 import { listApprovalInbox } from './approval-inbox-store.mjs';
-import { approveInboxImages, retryFailedInboxItem } from './approval-inbox-service.mjs';
+import { approveInboxImages, retryFailedInboxItem, dismissFailedInboxItem } from './approval-inbox-service.mjs';
 import {
   exportProductDraft,
   analyzeSeoKeywords,
@@ -66,6 +67,7 @@ import {
   getManualMainImageWorkflowContext,
   getManualDetailWorkflowContext,
   getProductDraft,
+  countProductDrafts,
   listProductDrafts,
   regenerateOptimizedTitles,
   regenerateGeneratedDetailHtml,
@@ -153,6 +155,16 @@ export async function retryApprovalInboxResponse(db, queueId, {
   }
 }
 
+export async function dismissApprovalInboxResponse(db, queueId, {
+  dismissFailedInboxItemImpl = dismissFailedInboxItem,
+} = {}) {
+  try {
+    return { status: 200, body: await dismissFailedInboxItemImpl(db, queueId) };
+  } catch (error) {
+    return approvalInboxErrorResponse(error);
+  }
+}
+
 // Loaded once at startup, not per-tick -- Domeme credentials, pricing rules,
 // and Codex/Python/job-path config don't change during the process
 // lifetime. Missing/invalid config here disables the auto-discovery
@@ -225,7 +237,7 @@ async function handleRequest({ request, response, db, aiSecrets, rootDir }) {
     return;
   }
   if (request.method === 'GET' && url.pathname === '/admin') {
-    sendHtml(response, adminHtml());
+    sendHtml(request, response, adminHtml());
     return;
   }
   if (request.method === 'GET' && isAllowedPublicAssetPath(url.pathname)) {
@@ -246,6 +258,12 @@ async function handleRequest({ request, response, db, aiSecrets, rootDir }) {
   const approvalInboxRetryMatch = url.pathname.match(/^\/api\/approval-inbox\/queue\/(\d+)\/retry$/);
   if (approvalInboxRetryMatch && request.method === 'POST') {
     const result = await retryApprovalInboxResponse(db, Number(approvalInboxRetryMatch[1]));
+    sendJson(response, result.status, result.body);
+    return;
+  }
+  const approvalInboxDismissMatch = url.pathname.match(/^\/api\/approval-inbox\/queue\/(\d+)\/dismiss$/);
+  if (approvalInboxDismissMatch && request.method === 'POST') {
+    const result = await dismissApprovalInboxResponse(db, Number(approvalInboxDismissMatch[1]));
     sendJson(response, result.status, result.body);
     return;
   }
@@ -649,7 +667,7 @@ async function handleRequest({ request, response, db, aiSecrets, rootDir }) {
       const mainImage = await getApprovedManualMainImage(db, draftId);
       const detailSet = await getApprovedManualDetailSet(db, draftId);
       if (!mainImage || !detailSet) { sendJson(response, 409, { error: 'Approved main image and/or approved detail-page image set are missing', code: 'IMAGES_NOT_APPROVED' }); return; }
-      const { mainImageUrl, detailImageUrls } = await uploadApprovedImagesToR2({
+      const { mainImageUrl: r2MainImageUrl, detailImageUrls: r2DetailImageUrls } = await uploadApprovedImagesToR2({
         rootDir,
         draftId,
         mainImageLocalUrl: mainImage.coupangStoredUrl,
@@ -657,6 +675,14 @@ async function handleRequest({ request, response, db, aiSecrets, rootDir }) {
       });
       const config = await loadNaverCommerceConfig(rootDir);
       const client = new NaverCommerceClient(config);
+      // createOriginProduct's own comment (naver-registration-flow.mjs) applies here too:
+      // Naver rejects externally-hosted URLs outright ("올바른 이미지 파일이 아닙니다") --
+      // confirmed live 2026-08-13 on this exact endpoint -- so the R2 URLs need the same
+      // second hop through Naver's own upload API that the create flow already does.
+      const { mainImageUrl, detailImageUrls } = await uploadImagesToNaver(client, {
+        mainImageUrl: r2MainImageUrl,
+        detailImageUrls: r2DetailImageUrls,
+      });
       const live = await client.getProduct(registration.originProductNo);
       const payload = mapLiveNaverProductToImageSwapPayload(live, { mainImageUrl, detailImageUrls });
 
@@ -687,7 +713,7 @@ async function handleRequest({ request, response, db, aiSecrets, rootDir }) {
     const items = live.data.items || [];
     const totalStockQuantity = items.reduce((sum, item) => sum + (Number(item.maximumBuyCount) || 0), 0);
     const salePrice = items[0]?.salePrice ?? null;
-    const updated = await recordLiveSnapshot(db, draftId, { statusName: live.data.statusName, totalStockQuantity, salePrice, itemSnapshotJson: items });
+    const updated = await recordLiveSnapshot(db, draftId, { statusName: live.data.statusName, totalStockQuantity, salePrice, itemSnapshotJson: items, productId: live.data.productId });
     sendJson(response, 200, { registration: updated });
     return;
   }
@@ -985,9 +1011,10 @@ async function handleRequest({ request, response, db, aiSecrets, rootDir }) {
     if (!target) { sendJson(response, 404, { error: 'Queue item not found', code: 'QUEUE_ITEM_NOT_FOUND' }); return; }
     if (!target.draftId) { sendJson(response, 409, { error: '아직 draft가 준비되지 않은 큐 항목입니다', code: 'DRAFT_NOT_READY' }); return; }
     try {
+      const body = await readJson(request);
       const naverConfig = await loadNaverCommerceConfig(rootDir);
       const client = new NaverCommerceClient(naverConfig);
-      const result = await createNaverDirectRegistration(db, rootDir, target.draftId, { confirm: true, naverConfig, clientImpl: client });
+      const result = await createNaverDirectRegistration(db, rootDir, target.draftId, { confirm: true, naverConfig, clientImpl: client, overrides: body.overrides || {} });
       sendJson(response, 200, { result });
     } catch (error) {
       sendJson(response, error.code === 'REGISTRATION_NOT_READY' ? 422 : 500, { error: error.message, code: error.code || 'REGISTER_FAILED', readiness: error.readiness });
@@ -1066,15 +1093,23 @@ async function handleRequest({ request, response, db, aiSecrets, rootDir }) {
 
   const [, id, action] = match;
   if (!id && request.method === 'GET') {
-    const drafts = await listProductDrafts(db, {
+    const filters = {
       status: url.searchParams.get('status') || undefined,
       importBatchId: url.searchParams.get('importBatchId') || undefined,
       collectedOnly: url.searchParams.get('collectedOnly') === 'true',
       naverWinnerStatus: url.searchParams.get('naverWinnerStatus') || undefined,
       finalDecision: url.searchParams.get('finalDecision') || undefined,
-      limit: url.searchParams.get('limit') || undefined,
-    });
-    sendJson(response, 200, { drafts });
+      search: url.searchParams.get('search') || undefined,
+    };
+    const page = url.searchParams.get('page') || undefined;
+    const pageSize = url.searchParams.get('pageSize') || undefined;
+    const sortBy = url.searchParams.get('sortBy') || undefined;
+    const sortDir = url.searchParams.get('sortDir') || undefined;
+    const [drafts, total] = await Promise.all([
+      listProductDrafts(db, { ...filters, limit: url.searchParams.get('limit') || undefined, page, pageSize, sortBy, sortDir }),
+      countProductDrafts(db, filters),
+    ]);
+    sendJson(response, 200, { drafts, total, page: page ? Number(page) : 1, pageSize: pageSize ? Number(pageSize) : total });
     return;
   }
 
@@ -1154,9 +1189,31 @@ function sendRedirect(response, location) {
   response.end();
 }
 
-function sendHtml(response, html) {
-  response.writeHead(200, { 'content-type': 'text/html; charset=utf-8', 'cache-control': 'no-store' });
-  response.end(html);
+// adminHtml() is a static shell (no per-request data -- everything else is
+// fetched separately over /api/*), so the gzip'd bytes and ETag are cheap to
+// memoize across requests: only the first request per server lifetime pays
+// the compression cost, and a matching If-None-Match short-circuits to a
+// bodyless 304 instead of re-sending the ~160KB shell on every admin reload.
+let sendHtmlCache = null;
+function sendHtml(request, response, html) {
+  if (!sendHtmlCache || sendHtmlCache.html !== html) {
+    const etag = `"${createHash('sha256').update(html).digest('hex').slice(0, 16)}"`;
+    sendHtmlCache = { html, gzip: gzipSync(Buffer.from(html, 'utf8')), etag };
+  }
+  const { gzip, etag } = sendHtmlCache;
+  if (request.headers['if-none-match'] === etag) {
+    response.writeHead(304, { etag, 'cache-control': 'no-cache' });
+    response.end();
+    return;
+  }
+  const headers = { 'content-type': 'text/html; charset=utf-8', 'cache-control': 'no-cache', etag };
+  if (/\bgzip\b/.test(request.headers['accept-encoding'] || '')) {
+    response.writeHead(200, { ...headers, 'content-encoding': 'gzip' });
+    response.end(gzip);
+  } else {
+    response.writeHead(200, headers);
+    response.end(html);
+  }
 }
 
 function sendJson(response, status, value) {
@@ -1284,6 +1341,30 @@ export function adminHtml() {
         <button id="naverCandidateButton">N winner Candidate</button>
         <button id="reloadButton">Reload</button>
       </div>
+      <div class="toolbar" id="paginationToolbar" hidden>
+        <input id="searchFilter" placeholder="검색 (상품명/공급처번호)">
+        <select id="sortByFilter">
+          <option value="">기본 정렬</option>
+          <option value="updatedAt">수정일</option>
+          <option value="name">상품명</option>
+          <option value="coupangSalePrice">쿠팡 판매가</option>
+          <option value="naverSalePrice">네이버 판매가</option>
+          <option value="coupangExpectedProfit">쿠팡 예상마진</option>
+          <option value="naverExpectedProfit">네이버 예상마진</option>
+          <option value="coupangWinnerScore">쿠팡 위너점수</option>
+          <option value="naverWinnerScore">네이버 위너점수</option>
+        </select>
+        <select id="sortDirFilter"><option value="desc">내림차순</option><option value="asc">오름차순</option></select>
+        <span style="display:flex;align-items:center;gap:8px;">
+          <label style="display:flex;align-items:center;gap:3px;margin:0;color:#1f2933;"><input type="radio" name="pageSize" value="5" checked style="width:auto;">5개</label>
+          <label style="display:flex;align-items:center;gap:3px;margin:0;color:#1f2933;"><input type="radio" name="pageSize" value="10" style="width:auto;">10개</label>
+          <label style="display:flex;align-items:center;gap:3px;margin:0;color:#1f2933;"><input type="radio" name="pageSize" value="20" style="width:auto;">20개</label>
+          <label style="display:flex;align-items:center;gap:3px;margin:0;color:#1f2933;"><input type="radio" name="pageSize" value="50" style="width:auto;">50개</label>
+        </span>
+        <button id="prevPageButton" type="button">◀ 이전</button>
+        <span id="pageIndicator" class="muted"></span>
+        <button id="nextPageButton" type="button">다음 ▶</button>
+      </div>
       <div class="tableWrap" hidden><table id="draftTable"><thead><tr id="draftHeaderRow"></tr></thead><tbody id="draftRows"></tbody></table></div>
       <div id="specialView" class="tableWrap"></div>
     </section>
@@ -1293,7 +1374,15 @@ export function adminHtml() {
   <script>
     let selectedId=null;let selectedColIndex=null;let selectedRowIndex=null;const rows=document.getElementById('draftRows');const detail=document.getElementById('detail');
     const statusFilter=document.getElementById('statusFilter');const naverWinnerFilter=document.getElementById('naverWinnerFilter');const finalDecisionFilter=document.getElementById('finalDecisionFilter');const batchFilter=document.getElementById('batchFilter');const collectedOnly=document.getElementById('collectedOnly');
-    document.getElementById('reloadButton').addEventListener('click',loadList);document.getElementById('naverCandidateButton').addEventListener('click',()=>{naverWinnerFilter.value='candidate';loadList();});statusFilter.addEventListener('change',loadList);naverWinnerFilter.addEventListener('change',loadList);finalDecisionFilter.addEventListener('change',loadList);batchFilter.addEventListener('change',loadList);collectedOnly.addEventListener('change',loadList);
+    document.getElementById('reloadButton').addEventListener('click',loadList);document.getElementById('naverCandidateButton').addEventListener('click',()=>{naverWinnerFilter.value='candidate';loadList();});statusFilter.addEventListener('change',()=>{currentPage=1;loadList();});naverWinnerFilter.addEventListener('change',()=>{currentPage=1;loadList();});finalDecisionFilter.addEventListener('change',()=>{currentPage=1;loadList();});batchFilter.addEventListener('change',()=>{currentPage=1;loadList();});collectedOnly.addEventListener('change',()=>{currentPage=1;loadList();});
+    const searchFilter=document.getElementById('searchFilter');const sortByFilter=document.getElementById('sortByFilter');const sortDirFilter=document.getElementById('sortDirFilter');const prevPageButton=document.getElementById('prevPageButton');const nextPageButton=document.getElementById('nextPageButton');const pageIndicator=document.getElementById('pageIndicator');
+    let currentPage=1,currentPageSize=5,currentTotal=0,searchDebounceHandle=null;
+    searchFilter.addEventListener('input',()=>{clearTimeout(searchDebounceHandle);searchDebounceHandle=setTimeout(()=>{currentPage=1;loadList();},300);});
+    sortByFilter.addEventListener('change',()=>{currentPage=1;loadList();});
+    sortDirFilter.addEventListener('change',()=>{currentPage=1;loadList();});
+    for(const radio of document.querySelectorAll('input[name="pageSize"]'))radio.addEventListener('change',(e)=>{currentPageSize=Number(e.target.value);currentPage=1;loadList();});
+    prevPageButton.addEventListener('click',()=>{if(currentPage>1){currentPage-=1;loadList();}});
+    nextPageButton.addEventListener('click',()=>{if(currentPage*currentPageSize<currentTotal){currentPage+=1;loadList();}});
     let currentView='approvalInbox';
     const viewButtons={approvalInbox:document.getElementById('viewApprovalInboxButton'),dashboard:document.getElementById('viewDashboardButton'),all:document.getElementById('viewAllButton'),recommend:document.getElementById('viewRecommendButton'),registrations:document.getElementById('viewRegistrationsButton'),autoBatch:document.getElementById('viewAutoBatchButton'),channelOrders:document.getElementById('viewChannelOrdersButton'),domemePrecheck:document.getElementById('viewDomemePrecheckButton'),purchaseOrders:document.getElementById('viewPurchaseOrdersButton'),orderExceptions:document.getElementById('viewOrderExceptionsButton')};
     for(const [view,button] of Object.entries(viewButtons))button.addEventListener('click',()=>switchView(view));
@@ -1303,6 +1392,7 @@ export function adminHtml() {
       document.querySelector('#draftTable').closest('.tableWrap').hidden=view!=='all';
       document.getElementById('specialView').hidden=view==='all';
       document.querySelector('.toolbar').hidden=view!=='all';
+      document.getElementById('paginationToolbar').hidden=view!=='all';
       detail.hidden=view!=='all';
       document.querySelector('main').classList.toggle('singleView',view!=='all');
       if(view==='approvalInbox')loadApprovalInbox();
@@ -1344,7 +1434,8 @@ export function adminHtml() {
       const images=main||details?'<div class="approvalImages">'+main+details+'</div>':'';
       const failure=card.error?'<div class="approvalError"><strong>'+escapeHtml(card.error.stage||'처리 실패')+'</strong><br>'+escapeHtml(card.error.message||'오류 내용 없음')+'</div>':'';
       const actions=(card.availableActions||[]).map(action=>approvalActionButtonHtml(action,card)).join('');
-      return '<article class="approvalCard '+(card.type==='failed'?'failed':'')+'" data-approval-key="'+attr(card.key)+'"><h2>'+escapeHtml(card.title)+' <small>#'+escapeHtml(card.draftId??'-')+'</small></h2><div><span class="badge status">'+escapeHtml(APPROVAL_TYPE_LABELS[card.type]||card.type)+'</span> '+escapeHtml(card.status||'')+'</div>'+price+images+failure+'<div class="approvalActions">'+(actions||'<span class="muted">자동 재시도할 수 없습니다. 외부 상태 확인이 필요합니다.</span>')+'<span data-action-result class="muted"></span></div></article>';
+      const dismiss=card.type==='failed'?'<button type="button" data-dismiss-queue-id="'+card.queueId+'">삭제 (이미 처리됨)</button>':'';
+      return '<article class="approvalCard '+(card.type==='failed'?'failed':'')+'" data-approval-key="'+attr(card.key)+'"><h2>'+escapeHtml(card.title)+' <small>#'+escapeHtml(card.draftId??'-')+'</small></h2><div><span class="badge status">'+escapeHtml(APPROVAL_TYPE_LABELS[card.type]||card.type)+'</span> '+escapeHtml(card.status||'')+'</div>'+price+images+failure+'<div class="approvalActions">'+(actions||'<span class="muted">자동 재시도할 수 없습니다. 외부 상태 확인이 필요합니다.</span>')+dismiss+'<span data-action-result class="muted"></span></div></article>';
     }
     function approvalActionButtonHtml(action,card){
       if(action==='approve_images')return '<button class="primary" type="button" data-approve-images-draft-id="'+card.draftId+'">전체 이미지 승인</button>';
@@ -1361,6 +1452,7 @@ export function adminHtml() {
         else if(button.dataset.requestSaleApprovalDraftId)path='/api/product-drafts/'+button.dataset.requestSaleApprovalDraftId+'/coupang-registration/request-approval';
         else if(button.dataset.approvePurchaseOrderId){if(!confirm('도매매에 실제 발주합니다. 승인하시겠습니까?'))return;path='/api/purchase-orders/'+button.dataset.approvePurchaseOrderId+'/approve';body=JSON.stringify({confirm:true});}
         else if(button.dataset.retryQueueId)path='/api/approval-inbox/queue/'+button.dataset.retryQueueId+'/retry';
+        else if(button.dataset.dismissQueueId){if(!confirm('이미 처리(등록 등)가 끝난 항목인가요? 승인함 목록에서만 지워집니다.'))return;path='/api/approval-inbox/queue/'+button.dataset.dismissQueueId+'/dismiss';}
         if(!path)return;
         card.querySelectorAll('button').forEach(item=>item.disabled=true);result.textContent='처리 중...';
         try{await api(path,{method:'POST',body});result.textContent='처리 완료';await loadApprovalInbox();}
@@ -1861,7 +1953,8 @@ export function adminHtml() {
     function rowHtml(d){const cols=orderedColumns();return '<tr class="'+(Number(selectedId)===d.id?'active':'')+'">'+cols.map(col=>'<td class="'+col.cls+'">'+col.html(d)+'</td>').join('')+'</tr>';}
     function renderTable(){renderHeader();rows.innerHTML=sortedDrafts().map(rowHtml).join('');for(const el of rows.querySelectorAll('[data-open-detail]'))el.addEventListener('click',e=>{e.preventDefault();loadDetail(el.dataset.openDetail);});bindCellSelection();applyStoredOrAutoWidths();applySelection();}
 
-    async function loadList(){const params=new URLSearchParams();if(statusFilter.value)params.set('status',statusFilter.value);if(naverWinnerFilter.value)params.set('naverWinnerStatus',naverWinnerFilter.value);if(finalDecisionFilter.value)params.set('finalDecision',finalDecisionFilter.value);if(batchFilter.value.trim())params.set('importBatchId',batchFilter.value.trim());if(collectedOnly.checked)params.set('collectedOnly','true');const qs=params.toString()?'?'+params.toString():'';const data=await api('/api/product-drafts'+qs);currentDrafts=data.drafts;renderTable();}
+    async function loadList(){const params=new URLSearchParams();if(statusFilter.value)params.set('status',statusFilter.value);if(naverWinnerFilter.value)params.set('naverWinnerStatus',naverWinnerFilter.value);if(finalDecisionFilter.value)params.set('finalDecision',finalDecisionFilter.value);if(batchFilter.value.trim())params.set('importBatchId',batchFilter.value.trim());if(collectedOnly.checked)params.set('collectedOnly','true');if(searchFilter.value.trim())params.set('search',searchFilter.value.trim());if(sortByFilter.value)params.set('sortBy',sortByFilter.value);if(sortByFilter.value)params.set('sortDir',sortDirFilter.value);params.set('page',String(currentPage));params.set('pageSize',String(currentPageSize));const qs=params.toString()?'?'+params.toString():'';const data=await api('/api/product-drafts'+qs);currentDrafts=data.drafts;currentTotal=data.total;renderPageIndicator();renderTable();}
+    function renderPageIndicator(){const totalPages=Math.max(1,Math.ceil(currentTotal/currentPageSize));pageIndicator.textContent=currentTotal===0?'0건':(currentPage+' / '+totalPages+' 페이지 (총 '+currentTotal+'건)');prevPageButton.disabled=currentPage<=1;nextPageButton.disabled=currentPage*currentPageSize>=currentTotal;}
     function applyStoredOrAutoWidths(){const table=document.getElementById('draftTable');const cols=orderedColumns();const saved=getColumnWidths();cols.forEach((col,index)=>{if(saved[col.key])setColumnWidth(table,index,saved[col.key]);else autoFitColumn(index,false);});}
     function autoFitColumn(index,persist){const table=document.getElementById('draftTable');const col=orderedColumns()[index];if(!col)return;const isName=col.key==='name';let max=isName?190:minColumnWidth(index);for(const row of table.rows){const cell=row.cells[index];if(!cell)continue;const text=(cell.innerText||'').replace(/\s+/g,' ').trim();const estimate=Math.min(isName?360:160,Math.max(minColumnWidth(index),text.length*7+18));max=Math.max(max,estimate);}setColumnWidth(table,index,max);if(persist)saveColumnWidth(col.key,max);}
     function setColumnWidth(table,index,width){const value=Number(width)||80;for(const row of table.rows){const cell=row.cells[index];if(cell){cell.style.width=value+'px';cell.style.minWidth=value+'px';cell.style.maxWidth=value+'px';}}}
@@ -1870,7 +1963,7 @@ export function adminHtml() {
     function saveColumnWidth(key,width){const saved=getColumnWidths();saved[key]=width;localStorage.setItem('automoney.admin.columnWidths',JSON.stringify(saved));}
     function bindCellSelection(){[...rows.querySelectorAll('tr')].forEach((tr,rowIndex)=>{tr.addEventListener('click',e=>{if(e.target.closest('button,a,input,select,textarea'))return;selectedRowIndex=rowIndex;selectedColIndex=e.target.closest('td')?.cellIndex??selectedColIndex;applySelection();});});}
     function applySelection(){const table=document.getElementById('draftTable');for(const cell of table.querySelectorAll('.selectedCol,.selectedCell'))cell.classList.remove('selectedCol','selectedCell');for(const row of table.querySelectorAll('tr.selectedRow'))row.classList.remove('selectedRow');if(selectedColIndex!=null){for(const row of table.rows){row.cells[selectedColIndex]?.classList.add('selectedCol');}}if(selectedRowIndex!=null){rows.rows[selectedRowIndex]?.classList.add('selectedRow');if(selectedColIndex!=null)rows.rows[selectedRowIndex]?.cells[selectedColIndex]?.classList.add('selectedCell');}}
-    async function loadDetail(id,push=true){selectedId=id;if(push)history.replaceState(null,'','/admin?draftId='+encodeURIComponent(id));const data=await api('/api/product-drafts/'+id);const d=data.draft;detail.innerHTML=detailHtml(d);enhanceDetailImageSections(d);bindTabs();document.getElementById('saveButton').addEventListener('click',()=>saveDraft(id));for(const b of detail.querySelectorAll('[data-status-action]'))b.addEventListener('click',()=>setStatus(id,b.dataset.statusAction));const forceApprove=document.getElementById('forceApproveButton');if(forceApprove)forceApprove.addEventListener('click',()=>forceApproveDraft(id));document.getElementById('exportCoupangButton').addEventListener('click',()=>loadExport(id,'coupang'));document.getElementById('exportNaverButton').addEventListener('click',()=>loadExport(id,'naver'));document.getElementById('copyJsonButton').addEventListener('click',copyExportJson);document.getElementById('refreshNaverButton').addEventListener('click',()=>refreshNaver(id));document.getElementById('runSeoAnalysisButton').addEventListener('click',()=>runSeoAnalysis(id));const regenerateTitleButton=document.getElementById('regenerateTitleButton');if(regenerateTitleButton)regenerateTitleButton.addEventListener('click',()=>regenerateOptimizedTitles(id));const saveTitlesButton=document.getElementById('saveTitlesButton');if(saveTitlesButton)saveTitlesButton.addEventListener('click',()=>saveOptimizedTitles(id));const copyCoupangTitleButton=document.getElementById('copyCoupangTitleButton');if(copyCoupangTitleButton)copyCoupangTitleButton.addEventListener('click',()=>copyTitle('optimizedCoupangTitle'));const copyNaverTitleButton=document.getElementById('copyNaverTitleButton');if(copyNaverTitleButton)copyNaverTitleButton.addEventListener('click',()=>copyTitle('optimizedNaverTitle'));const regenerateDetailButton=document.getElementById('regenerateDetailButton');if(regenerateDetailButton)regenerateDetailButton.addEventListener('click',()=>regenerateGeneratedDetail(id));const toggleOriginalButton=document.getElementById('toggleOriginalDetailButton');if(toggleOriginalButton)toggleOriginalButton.addEventListener('click',toggleOriginalDetailImages);const refreshPreviewButton=document.getElementById('refreshPreviewButton');if(refreshPreviewButton)refreshPreviewButton.addEventListener('click',refreshDetailPreview);document.getElementById('saveChecklistButton').addEventListener('click',()=>saveChecklist(id));document.getElementById('preview').srcdoc=d.generatedDetailHtml||'';const naver=await api('/api/product-drafts/'+id+'/market-research/naver');fillNaverResearch(naver.research);const opt=await api('/api/product-drafts/'+id+'/registration-optimization');renderOptimization(opt.optimization);const checklist=await api('/api/product-drafts/'+id+'/registration-checklist');fillChecklist(checklist.checklist);loadCoupangLiveSection(id,d);loadNaverLiveSection(id,d);loadAnalysisSection(id,d);loadList();}
+    async function loadDetail(id,push=true){selectedId=id;if(push)history.replaceState(null,'','/admin?draftId='+encodeURIComponent(id));const data=await api('/api/product-drafts/'+id);const d=data.draft;detail.innerHTML=detailHtml(d);enhanceDetailImageSections(d);bindTabs();document.getElementById('saveButton').addEventListener('click',()=>saveDraft(id));for(const b of detail.querySelectorAll('[data-status-action]'))b.addEventListener('click',()=>setStatus(id,b.dataset.statusAction));const forceApprove=document.getElementById('forceApproveButton');if(forceApprove)forceApprove.addEventListener('click',()=>forceApproveDraft(id));document.getElementById('exportCoupangButton').addEventListener('click',()=>loadExport(id,'coupang'));document.getElementById('exportNaverButton').addEventListener('click',()=>loadExport(id,'naver'));document.getElementById('copyJsonButton').addEventListener('click',copyExportJson);document.getElementById('refreshNaverButton').addEventListener('click',()=>refreshNaver(id));document.getElementById('runSeoAnalysisButton').addEventListener('click',()=>runSeoAnalysis(id));const regenerateTitleButton=document.getElementById('regenerateTitleButton');if(regenerateTitleButton)regenerateTitleButton.addEventListener('click',()=>regenerateOptimizedTitles(id));const saveTitlesButton=document.getElementById('saveTitlesButton');if(saveTitlesButton)saveTitlesButton.addEventListener('click',()=>saveOptimizedTitles(id));const copyCoupangTitleButton=document.getElementById('copyCoupangTitleButton');if(copyCoupangTitleButton)copyCoupangTitleButton.addEventListener('click',()=>copyTitle('optimizedCoupangTitle'));const copyNaverTitleButton=document.getElementById('copyNaverTitleButton');if(copyNaverTitleButton)copyNaverTitleButton.addEventListener('click',()=>copyTitle('optimizedNaverTitle'));const regenerateDetailButton=document.getElementById('regenerateDetailButton');if(regenerateDetailButton)regenerateDetailButton.addEventListener('click',()=>regenerateGeneratedDetail(id));const toggleOriginalButton=document.getElementById('toggleOriginalDetailButton');if(toggleOriginalButton)toggleOriginalButton.addEventListener('click',toggleOriginalDetailImages);const refreshPreviewButton=document.getElementById('refreshPreviewButton');if(refreshPreviewButton)refreshPreviewButton.addEventListener('click',refreshDetailPreview);document.getElementById('saveChecklistButton').addEventListener('click',()=>saveChecklist(id));document.getElementById('preview').srcdoc=d.generatedDetailHtml||'';const[naver,opt,checklist]=await Promise.all([api('/api/product-drafts/'+id+'/market-research/naver'),api('/api/product-drafts/'+id+'/registration-optimization'),api('/api/product-drafts/'+id+'/registration-checklist')]);fillNaverResearch(naver.research);renderOptimization(opt.optimization);fillChecklist(checklist.checklist);loadCoupangLiveSection(id,d);loadNaverLiveSection(id,d);loadAnalysisSection(id,d);loadList();}
     function detailHtml(d){const hasBlockReasons=(d.blockReasons||[]).length>0;const approvalButton=hasBlockReasons?'<button id="forceApproveButton">Force approve</button><span class="badge reasonBlock">overrideReason required</span>':'<button data-status-action="approved">Approved</button>';const warnings=(d.warnings||[]).map(x=>'<span class="badge reasonBlock">'+escapeHtml(x)+'</span>').join('');return '<div class="tabs"><button class="active" data-tab="source">원본/공급처</button><button data-tab="naver">네이버 경쟁분석</button><button data-tab="seo">SEO 키워드</button><button data-tab="title">상품명</button><button data-tab="detail">상세페이지</button><button data-tab="image">이미지 프롬프트</button><button data-tab="analysis">상품정보 분석</button><button data-tab="category">카테고리</button><button data-tab="notice">고시정보</button><button data-tab="shipping">배송정책</button><button data-tab="approval">승인조건</button><button data-tab="coupangLive">쿠팡 라이브 관리</button><button data-tab="naverLive">네이버 라이브 관리</button><button data-tab="export">Export JSON</button></div><div class="tabPanel active" data-panel="source"><div class="section"><h2>#'+d.id+' '+escapeHtml(d.supplierProductNo)+'</h2><div class="grid"><div><div class="muted">Original name</div><strong>'+escapeHtml(d.originalProductName||'')+'</strong></div><div><div class="muted">Status</div>'+escapeHtml(labelStatus(d.status))+' / '+escapeHtml(labelStatus(d.filterStatus))+' '+warnings+'</div><div>Final: <span class="badge status">'+escapeHtml(d.finalDecision||'-')+'</span></div><div>Raw price: '+escapeHtml(d.rawPriceFieldName||'-')+' = '+escapeHtml(d.rawPriceValue||'-')+'</div><div>Shipping: '+escapeHtml(d.shippingRawFieldName||'-')+' = '+escapeHtml(d.shippingRawValue||'-')+'</div><div>Coupang: '+money(d.coupangSalePrice)+' / profit '+money(d.coupangExpectedProfit)+'</div><div>Naver: '+money(d.naverSalePrice)+' / profit '+money(d.naverExpectedProfit)+'</div></div></div>'+sourceInfoHtml(d)+'<div class="section"><h2>Reasons</h2>'+reasonBadges(d.blockReasons).join('')+reasonBadges(d.reviewReasons).join('')+'</div><div class="section"><h2>Images</h2>'+imageGalleryHtml(d)+'</div><div class="section"><h2>Options</h2><table><tbody>'+d.options.map(o=>'<tr><td>'+o.index+'</td><td>'+escapeHtml(o.name||'')+'</td><td>'+escapeHtml(o.value||'')+'</td><td>'+money(o.additionalPrice)+'</td></tr>').join('')+'</tbody></table></div></div><div class="tabPanel" data-panel="naver">'+naverResearchHtml()+'</div><div class="tabPanel" data-panel="seo">'+optimizationHtml()+'</div><div class="tabPanel" data-panel="title"><div class="section"><h2>상품명</h2><div id="optimizedTitleResult" class="muted"></div></div></div><div class="tabPanel" data-panel="detail"><div class="section"><h2>수정</h2><label>sellingTitle</label><input id="sellingTitle" value="'+attr(d.sellingTitle||'')+'"><div class="grid"><div><label>coupangSalePrice</label><input id="coupangSalePrice" type="number" value="'+attr(d.coupangSalePrice??'')+'"></div><div><label>naverSalePrice</label><input id="naverSalePrice" type="number" value="'+attr(d.naverSalePrice??'')+'"></div></div><label>status</label><select id="status"><option>draft</option><option>needs_review</option><option>blocked</option><option>approved</option></select><label>상세페이지 HTML 수정</label><textarea id="generatedDetailHtml">'+escapeHtml(d.generatedDetailHtml||'')+'</textarea><label>reviewMemo</label><textarea id="reviewMemo">'+escapeHtml(d.reviewMemo||'')+'</textarea><p><button class="primary" id="saveButton">Save</button> <button data-status-action="draft">Draft</button> <button data-status-action="needs_review">Needs review</button> <button data-status-action="blocked">Blocked</button> '+approvalButton+' <button id="exportCoupangButton">쿠팡 JSON 보기</button> <button id="exportNaverButton">네이버 JSON 보기</button> <button id="copyJsonButton">JSON 복사</button></p></div><div class="section"><h2>상세페이지 미리보기</h2><iframe id="preview"></iframe></div></div><div class="tabPanel" data-panel="image"><div class="section"><h2>이미지 프롬프트</h2><pre id="imagePromptResult"></pre></div></div><div class="tabPanel" data-panel="analysis"><div class="section"><h2>상품정보 분석 (Python OCR + Codex)</h2><div id="analysisContent" class="muted">불러오는 중...</div></div></div><div class="tabPanel" data-panel="category"><div class="section"><h2>카테고리</h2><div id="categoryResult" class="muted"></div></div></div><div class="tabPanel" data-panel="notice"><div class="section"><h2>고시정보</h2><div id="noticeResult" class="muted"></div></div></div><div class="tabPanel" data-panel="shipping"><div class="section"><h2>배송정책</h2><div id="shippingResult" class="muted"></div></div></div><div class="tabPanel" data-panel="approval">'+approvalChecklistHtml()+'</div><div class="tabPanel" data-panel="coupangLive"><div class="section"><h2>쿠팡 라이브 관리</h2><div id="coupangLiveContent" class="muted">불러오는 중...</div></div></div><div class="tabPanel" data-panel="naverLive"><div class="section"><h2>네이버 라이브 관리</h2><div id="naverLiveContent" class="muted">불러오는 중...</div></div></div><div class="tabPanel" data-panel="export"><div class="section"><h2>Export JSON preview</h2><pre id="exportPreview"></pre></div></div><script>document.getElementById("status").value='+JSON.stringify(d.status)+';<\\/script>';}
     function enhanceDetailImageSections(d){const panel=detail.querySelector('[data-panel="detail"]');if(!panel)return;const preview=panel.querySelector('#preview')?.closest('.section');if(preview){preview.querySelector('h2').textContent='재구성 상세페이지 미리보기';const note=document.createElement('p');note.className='muted';note.textContent='긴 원본 이미지는 참고 자료로 보관하고, 아래 HTML은 상품명/스펙/추천대상/핵심장점/배송안내 구조로 재구성한 내용입니다.';preview.insertBefore(note,preview.querySelector('iframe'));}const edit=panel.querySelector('.section');const save=document.getElementById('saveButton');if(save)save.textContent='HTML 저장';if(edit&&!document.getElementById('regenerateDetailButton')){const controls=document.createElement('p');controls.innerHTML='<button id="regenerateDetailButton" type="button">상세페이지 재생성</button> <button id="toggleOriginalDetailButton" type="button" data-include-original="true">원본 상세 이미지 포함</button> <button id="refreshPreviewButton" type="button">미리보기 새로고침</button>';edit.append(controls);}const source=document.createElement('div');source.className='section';source.innerHTML='<h2>원본 상세 이미지 보기</h2>'+imageGalleryHtml(d);panel.insertBefore(source,preview||null);const usage=document.createElement('div');usage.className='section';usage.innerHTML='<h2>원본 이미지 사용 여부</h2><div class="muted">detail_source_full은 기본적으로 원본 참고 영역에서만 사용합니다. 상세 본문 자동 삽입은 selected_for_detail 또는 regenerated_detail_asset을 우선합니다.</div>';if(preview)panel.insertBefore(usage,preview.nextSibling);const imagePanel=detail.querySelector('[data-panel="image"] h2');if(imagePanel)imagePanel.textContent='AI 이미지 생성 프롬프트';}
     function imageGalleryHtml(d){const images=d.images||[];const main=images.filter(i=>i.imageType==='main');const detailImages=images.filter(i=>i.sourceSection==='detail'&&['detail','regenerated_detail_asset'].includes(i.imageType));const sourceFull=images.filter(i=>['detail_source_full','detail_full'].includes(i.imageType));const slices=images.filter(i=>['detail_source_slice','detail_slice'].includes(i.imageType));const rejected=images.filter(i=>i.qualityStatus==='rejected'||i.rejectReason||['ad','recommendation','header','footer'].includes(i.sourceSection));const warnings=[];if(detailImages.length===0&&sourceFull.length===0&&slices.length===0)warnings.push('detail_images_missing');if(detailImages.length===0&&sourceFull.length>0)warnings.push('using_original_detail_source_only');const warn=warnings.map(x=>'<span class="badge reasonBlock">'+escapeHtml(x)+'</span>').join(' ');function meta(i){const size=(i.width||i.naturalWidth||i.renderedWidth||'-')+'x'+(i.height||i.naturalHeight||i.renderedHeight||'-');const pos=i.renderedX==null?'-':Math.round(i.renderedX)+','+Math.round(i.renderedY);const archived=String(i.storedUrl||'').startsWith('/original-images/')?'로컬 보관됨':'로컬 미보관';return '<div class="muted">'+escapeHtml(i.sourceMethod||'-')+' / '+escapeHtml(i.sourceSection||'-')+' / '+size+' / pos '+pos+' / '+archived+(i.crawlStatus?(' / '+escapeHtml(i.crawlStatus)):'')+(i.crawlError?(' / '+escapeHtml(i.crawlError)):'')+(i.sliceIndex?(' / slice '+i.sliceIndex):'')+(i.rejectReason?(' / reject '+escapeHtml(i.rejectReason)):'')+'</div><div class="muted">original: '+escapeHtml(i.originalUrl||i.url||'-')+'</div><div class="muted">stored: '+escapeHtml(i.storedUrl||'-')+'</div>';}function card(i){const url=i.storedUrl||i.url;const original=i.originalUrl||i.url;const local=i.storedUrl&&i.storedUrl!==original?'<a href="'+attr(i.storedUrl)+'" target="_blank" rel="noopener noreferrer"><button>로컬 이미지 열기</button></a>':'';return '<div style="display:inline-block;vertical-align:top;max-width:170px;margin:4px"><span class="badge">'+escapeHtml(i.imageType||'unknown')+'</span>'+meta(i)+'<a href="'+attr(url)+'" target="_blank" rel="noopener noreferrer"><img src="'+attr(url)+'" alt=""></a><br><a href="'+attr(original)+'" target="_blank" rel="noopener noreferrer"><button>원본 열기</button></a> '+local+'</div>';}function group(title,items){return '<h3>'+escapeHtml(title)+' ('+items.length+')</h3><div>'+items.map(card).join('')+'</div>';}return (warn?'<p>'+warn+'</p>':'')+group('대표 이미지',main)+group('상세페이지 이미지',detailImages)+group('원본 상세 이미지',sourceFull)+group('긴 이미지 분할 이미지',slices)+group('제외된 이미지/debug 이미지',rejected);}    function sourceInfoHtml(d){const link=d.supplierProductUrl?'<a href="'+attr(d.supplierProductUrl)+'" target="_blank" rel="noopener noreferrer"><button>공급처</button></a>':'-';return '<div class="section"><h2>공급처 정보</h2><div class="grid"><div>공급처명: '+escapeHtml(d.supplierName||'-')+'</div><div>공급마켓: '+escapeHtml(labelMarket(d.supplierMarket))+'</div><div>상품번호: '+escapeHtml(d.supplierProductNo||'-')+'</div><div>최소구매수량: '+money(d.minOrderQty)+'</div><div>주문단위: '+money(d.orderUnit)+'</div><div>판매단위: '+escapeHtml(labelSellUnit(d.sellUnitType))+'</div><div>묶음수량: '+money(d.bundleQuantity)+'</div><div>단품원가: '+money(d.unitCostPrice)+'</div><div>묶음원가: '+money(d.bundleCostPrice)+'</div><div>묶음사유: '+escapeHtml(d.bundleReason||'-')+'</div><div>공급처 원본 링크: '+link+'</div></div></div>';}
@@ -1894,8 +1987,10 @@ export function adminHtml() {
     }
     function coupangLiveHtml(draft,reg,approvedMain,approvedDetail){
       const linked=reg&&reg.sellerProductId;
+      const coupangPublicUrl=reg&&reg.liveProductId?('https://www.coupang.com/vp/products/'+encodeURIComponent(reg.liveProductId)+(reg.liveVendorItemId?('?vendorItemId='+encodeURIComponent(reg.liveVendorItemId)):'')):null;
+      const coupangLinkHtml=coupangPublicUrl?' <a href="'+attr(coupangPublicUrl)+'" target="_blank" rel="noopener noreferrer"><button type="button">쿠팡 상품 페이지 열기</button></a>':(linked?' <span class="muted">(새로고침하면 공개 링크가 표시됩니다)</span>':'');
       const linkSection=linked
-        ?'<div><strong>연결됨</strong>: sellerProductId '+escapeHtml(reg.sellerProductId)+' / '+escapeHtml(reg.sellerProductName||'(이름 없음)')+' <span class="badge status">'+escapeHtml(reg.linkedVia||'')+'</span> / status '+escapeHtml(reg.status||'')+'</div>'
+        ?'<div><strong>연결됨</strong>: sellerProductId '+escapeHtml(reg.sellerProductId)+' / '+escapeHtml(reg.sellerProductName||'(이름 없음)')+' <span class="badge status">'+escapeHtml(reg.linkedVia||'')+'</span> / status '+escapeHtml(reg.status||'')+coupangLinkHtml+'</div>'
         :'<div class="muted">아직 쿠팡 상품과 연결되지 않았습니다. 스피드고전송기로 등록한 뒤 상품명으로 찾아 연결하세요.</div><label>검색어 (쿠팡 상품명)</label><input id="coupangLookupName" value="'+attr(draft.optimizedCoupangTitle||draft.sellingTitle||'')+'"><p><button id="coupangLookupButton" type="button">쿠팡에서 찾기</button></p><div id="coupangLookupResults"></div>';
       const imagesReady=approvedMain&&approvedDetail;
       const swapSection='<div class="section"><h3>이미지 반영</h3>'
@@ -2105,8 +2200,10 @@ export function adminHtml() {
     }
     function naverLiveHtml(draft,reg,approvedMain,approvedDetail){
       const linked=reg&&reg.originProductNo;
+      const naverPublicUrl=reg&&reg.channelProductNo?('https://smartstore.naver.com/wowpickmeup/products/'+encodeURIComponent(reg.channelProductNo)):null;
+      const naverLinkHtml=naverPublicUrl?' <a href="'+attr(naverPublicUrl)+'" target="_blank" rel="noopener noreferrer"><button type="button">네이버 상품 페이지 열기</button></a>':(linked?' <span class="muted">(channelProductNo 없음 -- 스마트스토어센터에서 확인)</span>':'');
       const linkSection=linked
-        ?'<div><strong>연결됨</strong>: originProductNo '+escapeHtml(reg.originProductNo)+' <span class="badge status">'+escapeHtml(reg.linkedVia||'')+'</span> / status '+escapeHtml(reg.status||'')+'</div>'
+        ?'<div><strong>연결됨</strong>: originProductNo '+escapeHtml(reg.originProductNo)+' <span class="badge status">'+escapeHtml(reg.linkedVia||'')+'</span> / status '+escapeHtml(reg.status||'')+naverLinkHtml+'</div>'
         :'<div class="muted">아직 네이버 상품과 연결되지 않았습니다. 스피드등록으로 등록한 뒤 네이버 커머스센터에서 originProductNo를 확인해 입력하세요.</div><label>originProductNo</label><input id="naverLinkOriginProductNo"><p><button id="naverLinkButton" type="button">연결하기</button></p>';
       const imagesReady=approvedMain&&approvedDetail;
       const swapSection='<div class="section"><h3>이미지 반영</h3>'

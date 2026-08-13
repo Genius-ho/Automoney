@@ -2,6 +2,7 @@ import assert from 'node:assert/strict';
 import test from 'node:test';
 
 import {
+  countProductDrafts,
   exportProductDraft,
   shouldOverwriteOptimizedTitles,
   shouldCreateGeneratedDetailHtml,
@@ -90,6 +91,58 @@ test('listProductDrafts returns joined draft rows and supports status filtering'
   assert.equal(drafts[0].orderUnit, 1);
   assert.equal(drafts[0].importBatchId, 'batch-1');
   assert.equal(drafts[0].finalDecision, '등록후보');
+});
+
+test('listProductDrafts applies search as an ILIKE match across name/supplier-no columns', async () => {
+  const calls = [];
+  const db = { async query(sql, params) { calls.push({ sql, params }); return { rows: [] }; } };
+
+  await listProductDrafts(db, { search: '옷걸이' });
+
+  assert.equal(calls[0].params[0], '%옷걸이%');
+  assert.match(calls[0].sql, /d\.selling_title ilike \$1/);
+  assert.match(calls[0].sql, /d\.supplier_product_no ilike \$1/);
+});
+
+test('listProductDrafts converts page/pageSize into limit/offset', async () => {
+  const calls = [];
+  const db = { async query(sql, params) { calls.push({ sql, params }); return { rows: [] }; } };
+
+  await listProductDrafts(db, { page: 3, pageSize: 5 });
+
+  assert.deepEqual(calls[0].params, [5, 10]);
+  assert.match(calls[0].sql, /limit \$1/);
+  assert.match(calls[0].sql, /offset \$2/);
+});
+
+test('listProductDrafts rejects page without pageSize', async () => {
+  await assert.rejects(() => listProductDrafts({}, { page: 2 }), /page requires pageSize/);
+});
+
+test('listProductDrafts only accepts whitelisted sortBy columns', async () => {
+  const calls = [];
+  const db = { async query(sql, params) { calls.push({ sql, params }); return { rows: [] }; } };
+
+  await listProductDrafts(db, { sortBy: 'coupangSalePrice', sortDir: 'asc' });
+
+  assert.match(calls[0].sql, /order by\s+d\.coupang_sale_price asc nulls last,/);
+  await assert.rejects(() => listProductDrafts(db, { sortBy: 'dropTableUsers' }), /Invalid sortBy/);
+});
+
+test('countProductDrafts applies the same filters as listProductDrafts and returns a total', async () => {
+  const calls = [];
+  const db = {
+    async query(sql, params) {
+      calls.push({ sql, params });
+      return { rows: [{ total: 42 }] };
+    },
+  };
+
+  const total = await countProductDrafts(db, { status: 'needs_review', search: '선반' });
+
+  assert.equal(total, 42);
+  assert.deepEqual(calls[0].params, ['needs_review', '%선반%']);
+  assert.match(calls[0].sql, /select count\(\*\)::int as total/);
 });
 
 test('updateProductDraft patches editable admin fields', async () => {

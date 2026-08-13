@@ -28,10 +28,10 @@ async function waitForPort(open, timeout = 30000) {
 
 async function stopServer() {
   if (!server?.pid) return;
+  server.kill();
   await new Promise((resolve) => {
-    const killer = spawn('taskkill', ['/PID', String(server.pid), '/T', '/F'], { windowsHide: true, stdio: 'ignore' });
-    killer.on('error', resolve);
-    killer.on('exit', resolve);
+    server.once('exit', resolve);
+    setTimeout(resolve, 5000);
   });
   await waitForPort(false, 10000);
 }

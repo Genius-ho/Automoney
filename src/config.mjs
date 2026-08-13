@@ -68,9 +68,10 @@ export async function loadNaverCommerceConfig(rootDir = process.cwd()) {
   const clientId = pick('NAVER_COMMERCE_CLIENT_ID');
   const clientSecret = pick('NAVER_COMMERCE_CLIENT_SECRET');
   const channelId = pick('NAVER_COMMERCE_CHANNEL_ID') || null;
+  const asPhoneNumber = pick('NAVER_AS_PHONE_NUMBER') || null;
   if (!clientId) throw new Error('NAVER_COMMERCE_CLIENT_ID is missing in .env');
   if (!clientSecret) throw new Error('NAVER_COMMERCE_CLIENT_SECRET is missing in .env');
-  return { clientId, clientSecret, channelId };
+  return { clientId, clientSecret, channelId, asPhoneNumber };
 }
 
 // Alerts are supplementary (22.9) -- missing/partial config disables

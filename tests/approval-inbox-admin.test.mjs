@@ -4,6 +4,7 @@ import assert from 'node:assert/strict';
 import {
   adminHtml,
   approveInboxImagesResponse,
+  dismissApprovalInboxResponse,
   getApprovalInboxResponse,
   retryApprovalInboxResponse,
 } from '../src/admin-server.mjs';
@@ -51,6 +52,26 @@ test('retryApprovalInboxResponse rejects unsafe external retries with HTTP 409',
   assert.deepEqual(response, { status: 409, body: { error: 'external reconciliation required', code: 'RETRY_NOT_SAFE' } });
 });
 
+test('dismissApprovalInboxResponse rejects a queue item that is not failed with HTTP 409', async () => {
+  const error = Object.assign(new Error('Failed queue item not found'), { code: 'QUEUE_NOT_APPROVABLE' });
+
+  const response = await dismissApprovalInboxResponse({}, 9, {
+    dismissFailedInboxItemImpl: async () => { throw error; },
+  });
+
+  assert.deepEqual(response, { status: 409, body: { error: 'Failed queue item not found', code: 'QUEUE_NOT_APPROVABLE' } });
+});
+
+test('dismissApprovalInboxResponse returns the dismissed queue item on success', async () => {
+  const result = { queueItem: { id: 3, status: 'completed' } };
+
+  const response = await dismissApprovalInboxResponse({}, 3, {
+    dismissFailedInboxItemImpl: async () => result,
+  });
+
+  assert.deepEqual(response, { status: 200, body: result });
+});
+
 test('admin HTML opens a one-click approval inbox by default', () => {
   const html = adminHtml();
 
@@ -65,5 +86,6 @@ test('admin HTML opens a one-click approval inbox by default', () => {
   assert.match(html, /data-request-sale-approval-draft-id/);
   assert.match(html, /data-approve-purchase-order-id/);
   assert.match(html, /data-retry-queue-id/);
+  assert.match(html, /data-dismiss-queue-id/);
   assert.match(html, /loadApprovalInbox\(\)/);
 });

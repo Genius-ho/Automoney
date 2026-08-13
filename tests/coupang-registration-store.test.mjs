@@ -108,6 +108,8 @@ test('listCoupangRegistrations maps rows to camelCase', async () => {
     liveStatusName: null,
     liveTotalStockQuantity: null,
     liveSalePrice: null,
+    liveProductId: null,
+    liveVendorItemId: null,
     approvalRequestedAt: null,
     approvalResponseMessage: null,
     telegramNotifiedAt: null,
@@ -151,13 +153,25 @@ test('recordImagesSwapped sets status=images_swapped and stamps images_swapped_a
 test('recordLiveSnapshot writes denormalized stock/price/status fields', async () => {
   const db = {
     async query(sql, params) {
-      assert.deepEqual(params, [46, '승인완료', 10, 33570, JSON.stringify([{ a: 1 }])]);
+      assert.deepEqual(params, [46, '승인완료', 10, 33570, JSON.stringify([{ a: 1 }]), null]);
       return { rows: [{ product_draft_id: 46, live_status_name: '승인완료', live_total_stock_quantity: 10, live_sale_price: 33570 }] };
     },
   };
   const result = await recordLiveSnapshot(db, 46, { statusName: '승인완료', totalStockQuantity: 10, salePrice: 33570, itemSnapshotJson: [{ a: 1 }] });
   assert.equal(result.liveStatusName, '승인완료');
   assert.equal(result.liveTotalStockQuantity, 10);
+});
+
+test('recordLiveSnapshot stores the public Coupang productId when the caller has one', async () => {
+  const db = {
+    async query(sql, params) {
+      assert.deepEqual(params, [46, '승인완료', 10, 33570, JSON.stringify([{ vendorItemId: 999 }]), '7844764811']);
+      return { rows: [{ product_draft_id: 46, live_product_id: '7844764811', live_item_snapshot_json: [{ vendorItemId: 999 }] }] };
+    },
+  };
+  const result = await recordLiveSnapshot(db, 46, { statusName: '승인완료', totalStockQuantity: 10, salePrice: 33570, itemSnapshotJson: [{ vendorItemId: 999 }], productId: 7844764811 });
+  assert.equal(result.liveProductId, '7844764811');
+  assert.equal(result.liveVendorItemId, 999);
 });
 
 test('recordApprovalRequested sets status=approval_requested, requested=true, and stamps approval_requested_at', async () => {

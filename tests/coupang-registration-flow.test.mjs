@@ -141,12 +141,12 @@ test('validateSellerShippingSettings blocks when no code has ever been confirmed
 test('validateSellerShippingSettings matches the stored code exactly, never by display name', async () => {
   const client = fakeCoupangClient({
     outbound: [
-      { shippingPlaceName: '행당', outboundShippingPlaceCode: 25045458, usable: true, placeAddresses: [{ returnAddress: '서울특별시 성동구 행당로 79' }] },
-      { shippingPlaceName: '행당', outboundShippingPlaceCode: 24466172, usable: true, placeAddresses: [{ returnAddress: '서울특별시 성동구 행당동 347' }] },
+      { shippingPlaceName: '행당', outboundShippingPlaceCode: 25045458, usable: true, placeAddresses: [{ returnAddress: '서울특별시 중구 세종대로 110' }] },
+      { shippingPlaceName: '행당', outboundShippingPlaceCode: 24466172, usable: true, placeAddresses: [{ returnAddress: '서울특별시 중구 세종대로 111' }] },
     ],
     returnCenters: [
       { shippingPlaceName: '-', returnCenterCode: '1002571652', usable: true, placeAddresses: [{}] },
-      { shippingPlaceName: '반품지1 ', returnCenterCode: '1002401151', usable: true, placeAddresses: [{ returnAddress: '서울특별시 성동구 행당로 79' }] },
+      { shippingPlaceName: '반품지1 ', returnCenterCode: '1002401151', usable: true, placeAddresses: [{ returnAddress: '서울특별시 중구 세종대로 110' }] },
     ],
   });
   const result = await validateSellerShippingSettings({}, {

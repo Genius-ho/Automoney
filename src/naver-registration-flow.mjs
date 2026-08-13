@@ -18,7 +18,15 @@ import { getNaverRegistration, recordNaverDirectRegistration } from './naver-reg
 // (most specific) name match to avoid single-character false positives.
 export function pickBestNaverCategory(categories, productName) {
   if (!Array.isArray(categories) || !productName) return null;
-  const leaves = categories.filter((category) => category.last && category.name && category.name.length >= 2 && productName.includes(category.name));
+  const leaves = categories.filter((category) => category.last && category.name && category.name.length >= 2
+    && productName.includes(category.name)
+    // A dropshipped physical good is never actually a book -- confirmed live
+    // 2026-08-12: "반려동물" matched longer than "소라" and won, but its own
+    // wholeCategoryName was "도서>건강/취미>취미/레저>반려동물" (a pet-care book
+    // guide), so Naver's createOriginProduct rejected the payload demanding
+    // ISBN/publisher/author fields. Exclude the 도서 root outright rather than
+    // trying to out-rank it by name length.
+    && !String(category.wholeCategoryName || '').startsWith('도서'));
   if (leaves.length === 0) return null;
   leaves.sort((a, b) => b.name.length - a.name.length);
   return leaves[0].id;
@@ -106,6 +114,7 @@ async function buildNaverRegistrationPreview(db, rootDir, draftId, {
   coupangConfig, // unused here, kept only so admin-server.mjs can pass one options object to both flows if it ever wants to
   naverConfig,
   clientImpl,
+  overrides = {},
   exportProductDraftImpl = exportProductDraft,
   getDraftRawImagesImpl = getDraftRawImages,
   uploadImpl = uploadApprovedImagesToR2,
@@ -140,7 +149,7 @@ async function buildNaverRegistrationPreview(db, rootDir, draftId, {
 
   const productName = draft.optimizedTitle || draft.name;
   const categorySearch = await client.searchCategories(productName);
-  const categoryId = pickBestNaverCategory(categorySearch, productName);
+  const categoryId = overrides.categoryId ?? pickBestNaverCategory(categorySearch, productName);
 
   const originAreas = await client.getOriginAreas();
   const originAreaCode = pickOriginAreaCode(originAreas?.originAreaCodeNames, supplierNoticeFields.countryOfOrigin);
@@ -155,6 +164,7 @@ async function buildNaverRegistrationPreview(db, rootDir, draftId, {
     countryOfOrigin: supplierNoticeFields.countryOfOrigin,
     manufacturer: supplierNoticeFields.manufacturer,
     deliveryCharge: draft.deliveryFee || 0,
+    asPhoneNumber: overrides.asPhoneNumber ?? naverConfig?.asPhoneNumber,
     channelId: naverConfig?.channelId,
   });
 
@@ -179,6 +189,7 @@ export async function createNaverDirectRegistration(db, rootDir, draftId, {
   confirm = false,
   naverConfig,
   clientImpl,
+  overrides = {},
   getNaverRegistrationImpl = getNaverRegistration,
   recordNaverDirectRegistrationImpl = recordNaverDirectRegistration,
   buildNaverRegistrationPreviewImpl = buildNaverRegistrationPreview,
@@ -190,7 +201,7 @@ export async function createNaverDirectRegistration(db, rootDir, draftId, {
     throw Object.assign(new Error(`이미 등록된 draft입니다 (status=${existing.status}${existing.originProductNo ? `, originProductNo=${existing.originProductNo}` : ''})`), { code: 'ALREADY_REGISTERED', existing });
   }
 
-  const preview = await buildNaverRegistrationPreviewImpl(db, rootDir, draftId, { naverConfig, clientImpl });
+  const preview = await buildNaverRegistrationPreviewImpl(db, rootDir, draftId, { naverConfig, clientImpl, overrides });
   if (preview.readiness.blocked) {
     throw Object.assign(new Error('미확정 항목이 남아있어 등록할 수 없습니다'), { code: 'REGISTRATION_NOT_READY', readiness: preview.readiness });
   }

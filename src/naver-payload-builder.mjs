@@ -33,9 +33,11 @@ export function buildNaverOriginProductPayload({
   // the detail page instead of blocking on business info Claude can't
   // supply -- but afterServiceTelephoneNumber has its own regex validator
   // ("AfterServicePhoneNumber: 숫자, -, +만 입력 가능합니다", confirmed live) that
-  // rejects free text outright, so it needs an actual phone number; the user
-  // supplied their real AS number (2026-07-24) as this default.
-  asPhoneNumber = '010-8795-2571',
+  // rejects free text outright, so it needs an actual phone number. Read
+  // from NAVER_AS_PHONE_NUMBER in .env (see loadNaverCommerceConfig) rather
+  // than hardcoded here -- this file is committed to a public repo and a
+  // real personal phone number doesn't belong in source.
+  asPhoneNumber = null,
   importer = '상세 페이지 참조',
   deliveryCharge = 0,
   // 선불(PREPAID, 배송비를 상품 결제와 함께 선불로 받는 방식) -- deliveryFeePayType is

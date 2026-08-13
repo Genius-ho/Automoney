@@ -72,7 +72,7 @@ test('collectCandidates falls back to CSV candidates when Domeme returns 403 FOR
 });
 
 test('evaluateCandidates reads includeNeedsReview/includeDomeggook from explicit options, not module-scope globals', async () => {
-  const client = fakeClient({ details: { 1: fakeProductRaw({ supplyPrice: '20000', option: Array.from({ length: 15 }, (_, i) => ({ name: '옵션', values: [`값${i}`] })) }) } });
+  const client = fakeClient({ details: { 1: fakeProductRaw({ supplyPrice: '6000', option: Array.from({ length: 15 }, (_, i) => ({ name: '옵션', values: [`값${i}`] })) }) } });
   const candidates = [{ productNo: '1', requestedMarket: 'dome' }];
 
   const withoutReview = await evaluateCandidates(client, candidates, {}, { includeNeedsReview: false });

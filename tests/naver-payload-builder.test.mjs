@@ -103,11 +103,11 @@ test('buildNaverOriginProductPayload defaults minorPurchasable to true and chann
 // live 2026-07-24). importer has no real business name on file, so per user
 // instruction (2026-07-24) it defaults to pointing the buyer at the product
 // detail page. afterServiceTelephoneNumber has its own regex validator
-// ("숫자, -, +만 입력 가능") that rejects free text, so it defaults to the
-// user's real AS phone number (also supplied 2026-07-24) instead.
-test('buildNaverOriginProductPayload defaults AS phone to the real AS number, importer to "상세 페이지 참조", and deliveryFeePayType to PREPAID', () => {
-  const payload = buildNaverOriginProductPayload({ draft: fakeDraft(), categoryId: '1', mainImageUrl: null, detailImageUrls: [] });
-  assert.equal(payload.originProduct.detailAttribute.afterServiceInfo.afterServiceTelephoneNumber, '010-8795-2571');
+// ("숫자, -, +만 입력 가능") that rejects free text, so callers must pass a real
+// phone number (read from NAVER_AS_PHONE_NUMBER in .env, never hardcoded here).
+test('buildNaverOriginProductPayload defaults importer to "상세 페이지 참조" and deliveryFeePayType to PREPAID, passes through AS phone', () => {
+  const payload = buildNaverOriginProductPayload({ draft: fakeDraft(), categoryId: '1', mainImageUrl: null, detailImageUrls: [], asPhoneNumber: '010-0000-0000' });
+  assert.equal(payload.originProduct.detailAttribute.afterServiceInfo.afterServiceTelephoneNumber, '010-0000-0000');
   assert.equal(payload.originProduct.detailAttribute.originAreaInfo.importer, '상세 페이지 참조');
   assert.equal(payload.originProduct.deliveryInfo.deliveryFee.deliveryFeePayType, 'PREPAID');
 });
@@ -122,9 +122,9 @@ test('buildNaverOriginProductPayload lets real AS phone / importer values overri
 // notice block's afterServiceDirector and customerServicePhoneNumber may not
 // both be set at once.
 test('buildNaverOriginProductPayload only sets one of etc.afterServiceDirector/customerServicePhoneNumber, never both', () => {
-  const payload = buildNaverOriginProductPayload({ draft: fakeDraft(), categoryId: '1', mainImageUrl: null, detailImageUrls: [] });
+  const payload = buildNaverOriginProductPayload({ draft: fakeDraft(), categoryId: '1', mainImageUrl: null, detailImageUrls: [], asPhoneNumber: '010-0000-0000' });
   const etc = payload.originProduct.detailAttribute.productInfoProvidedNotice.etc;
-  assert.equal(etc.afterServiceDirector, '010-8795-2571');
+  assert.equal(etc.afterServiceDirector, '010-0000-0000');
   assert.equal(etc.customerServicePhoneNumber, null);
 });
 
