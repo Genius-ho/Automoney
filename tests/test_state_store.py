@@ -123,6 +123,25 @@ class FinalTakeProfitPctPersistenceTests(unittest.TestCase):
             self.assertEqual(state.final_tp_qty_pct, Decimal("100"))
             self.assertEqual(state.second_tp_pct, Decimal("25"))
 
+    def test_legacy_symbol_with_a_customized_final_tp_pct_above_the_migration_default_still_loads(self):
+        """Regression: a symbol whose final_tp_pct was already customized
+        above the second_tp_pct migration default (25) -- e.g. a real
+        account with final_tp_pct=50 set before this feature existed --
+        must still load without raising, since it never opted into the
+        second tier (final_tp_qty_pct defaults to 100)."""
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory) / "state.json"
+            path.write_text(json.dumps({
+                "version": 2,
+                "last_symbol": "KORU",
+                "portfolios": {"KORU": {"symbol": "KORU", "position_qty": 5, "final_tp_pct": "50"}},
+            }), encoding="utf-8")
+            store = StateStore(path)
+
+            state = store.load("KORU")
+            self.assertEqual(state.final_tp_pct, Decimal("50"))
+            self.assertEqual(state.final_tp_qty_pct, Decimal("100"))
+
     def test_second_tier_fields_survive_save_and_reload(self):
         with tempfile.TemporaryDirectory() as directory:
             store = StateStore(Path(directory) / "state.json")

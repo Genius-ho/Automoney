@@ -52,11 +52,18 @@ class StrategyFormulaTests(unittest.TestCase):
         with self.assertRaises(ValueError):
             StrategyState(second_tp_pct=Decimal("101")).validate()
 
-    def test_validate_rejects_second_tp_pct_not_above_first_tier(self):
+    def test_validate_rejects_second_tp_pct_not_above_first_tier_when_second_tier_is_active(self):
         with self.assertRaises(ValueError):
-            StrategyState(final_tp_pct=Decimal("20"), second_tp_pct=Decimal("20")).validate()
+            StrategyState(final_tp_pct=Decimal("20"), final_tp_qty_pct=Decimal("60"), second_tp_pct=Decimal("20")).validate()
         with self.assertRaises(ValueError):
-            StrategyState(final_tp_pct=Decimal("20"), second_tp_pct=Decimal("15")).validate()
+            StrategyState(final_tp_pct=Decimal("20"), final_tp_qty_pct=Decimal("60"), second_tp_pct=Decimal("15")).validate()
+
+    def test_second_tp_pct_ordering_is_ignored_when_second_tier_is_unconfigured(self):
+        """final_tp_qty_pct=100 (the default/legacy value) means the second
+        tier never sells anything, so an existing symbol with a customized
+        final_tp_pct above the second_tp_pct migration default (e.g. a user
+        who already set final_tp_pct=50%) must still load and save fine."""
+        StrategyState(final_tp_pct=Decimal("50"), final_tp_qty_pct=Decimal("100"), second_tp_pct=Decimal("25")).validate()
 
     def test_validate_rejects_out_of_range_final_tp_qty_pct(self):
         with self.assertRaises(ValueError):

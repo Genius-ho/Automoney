@@ -292,12 +292,24 @@ class FinalTakeProfitPctUpdateTests(unittest.TestCase):
             self.assertEqual(reloaded.final_tp_qty_pct, Decimal("60"))
             self.assertEqual(reloaded.second_tp_pct, Decimal("25"))
 
-    def test_update_state_rejects_second_tp_pct_not_above_first_tier(self):
+    def test_update_state_rejects_second_tp_pct_not_above_first_tier_when_second_tier_is_active(self):
         with tempfile.TemporaryDirectory() as temp:
             service = WebService(Path(temp))
 
             with self.assertRaises(ValueError):
-                service.update_state({"symbol": "TQQQ", "final_tp_pct": "20", "second_tp_pct": "20"})
+                service.update_state({"symbol": "TQQQ", "final_tp_pct": "20", "final_tp_qty_pct": "60", "second_tp_pct": "20"})
+
+    def test_update_state_accepts_a_final_tp_pct_above_the_second_tier_default_when_unconfigured(self):
+        """Regression: a symbol with an existing final_tp_pct above the
+        second_tp_pct migration default (25) must not fail to save just
+        because it never opted into the second tier."""
+        with tempfile.TemporaryDirectory() as temp:
+            service = WebService(Path(temp))
+
+            state = service.update_state({"symbol": "TQQQ", "final_tp_pct": "50"})
+
+            self.assertEqual(state.final_tp_pct, Decimal("50"))
+            self.assertEqual(state.final_tp_qty_pct, Decimal("100"))
 
 
 class KnownSymbolsReconciliationTests(unittest.TestCase):

@@ -123,7 +123,12 @@ class StrategyState:
             raise ValueError("1단계 익절 수량 비율은 0~100 사이여야 합니다.")
         if not Decimal("1") <= self.second_tp_pct <= Decimal("100"):
             raise ValueError("2단계 익절 %는 1~100 사이여야 합니다.")
-        if self.second_tp_pct <= self.final_tp_pct:
+        # Only enforced when the second tier is actually in effect
+        # (final_tp_qty_pct < 100): at 100 the whole remainder sells at
+        # final_tp_pct and second_tp_pct is unused, so an unrelated/legacy
+        # second_tp_pct value (e.g. the migration default) must never block
+        # loading or saving a symbol that never opted into the second tier.
+        if self.final_tp_qty_pct < 100 and self.second_tp_pct <= self.final_tp_pct:
             raise ValueError("2단계 익절 %는 1단계 익절 %보다 커야 합니다.")
         levels = self.down_ladder_enabled_levels
         if sorted(set(levels)) != list(levels):
