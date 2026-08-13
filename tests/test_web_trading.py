@@ -108,7 +108,7 @@ class AutoTickBroker(LiveTradingBroker):
         return {"result": {"holdings": []}}
 
     def get_prices_raw(self, symbols):
-        return {"result": [{"symbol": symbol, "lastPrice": "84.5"} for symbol in symbols]}
+        return {"result": [{"symbol": symbol, "lastPrice": "84.5", "timestamp": date.today().isoformat() + "T13:00:00+09:00"} for symbol in symbols]}
 
     def get_buying_power_raw(self):
         return {"result": {"cashBuyingPower": "100000"}}

@@ -29,7 +29,7 @@ class MixedAccountBroker:
     def get_prices_raw(self, symbols):
         return {
             "result": [
-                {"symbol": symbol, "lastPrice": "84.5"}
+                {"symbol": symbol, "lastPrice": "84.5", "timestamp": _TODAY + "T13:00:00+09:00"}
                 for symbol in symbols
             ]
         }

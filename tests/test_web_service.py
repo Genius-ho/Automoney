@@ -18,7 +18,7 @@ class FakeBroker:
         return {"result": {"holdings": [{"symbol": "TQQQ", "quantity": "8", "averagePrice": "75"}]}}
 
     def get_prices_raw(self, symbols):
-        return {"result": [{"symbol": symbol, "lastPrice": "84.5"} for symbol in symbols]}
+        return {"result": [{"symbol": symbol, "lastPrice": "84.5", "timestamp": _TODAY + "T13:00:00+09:00"} for symbol in symbols]}
 
     def get_buying_power_raw(self):
         return {"result": {"cashBuyingPower": "1200"}}
@@ -140,6 +140,12 @@ class WebServiceTests(unittest.TestCase):
         this test runs) proves the selection no longer depends on the
         local clock at all -- only on the candle data's own relative dates."""
         class PastDatesBroker(FakeMixedBroker):
+            def get_prices_raw(self, symbols):
+                return {"result": [
+                    {"symbol": symbol, "lastPrice": "84.5", "timestamp": "2020-01-02T23:30:00+09:00"}
+                    for symbol in symbols
+                ]}
+
             def get_daily_candles_raw(self, symbol, count):
                 return {"result": {"candles": [
                     {"timestamp": "2020-01-02T13:00:00+09:00", "closePrice": "84.5"},
@@ -167,11 +173,7 @@ class WebServiceTests(unittest.TestCase):
 
             self.assertIsNone(by_symbol["TQQQ"]["day_change_pct"])
 
-    def test_previous_close_is_fetched_at_most_once_per_symbol_per_day(self):
-        """Previous close never changes intraday, so a second refresh the same
-        day must reuse the cached value instead of calling the broker again --
-        this is what keeps adding day-change to every holding cheap even
-        though refresh_account runs every 60s from the auto-tick loop."""
+    def test_previous_close_is_refetched_so_a_session_change_cannot_stay_cached(self):
         with tempfile.TemporaryDirectory() as temp:
             broker = FakeMixedBroker()
             broker.candle_calls = []
@@ -185,7 +187,7 @@ class WebServiceTests(unittest.TestCase):
                 service.refresh_account("TQQQ")
 
             self.assertGreater(first_call_count, 0)
-            self.assertEqual(len(broker.candle_calls), first_call_count)
+            self.assertEqual(len(broker.candle_calls), first_call_count * 2)
 
     def test_t_value_resets_to_zero_once_the_position_fully_exits(self):
         """A take-profit/quarter-sell pair that empties the position ends the

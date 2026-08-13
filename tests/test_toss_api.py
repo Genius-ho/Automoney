@@ -45,6 +45,14 @@ class TossRateLimitTests(unittest.TestCase):
         self.assertIn("count=200", path)
         self.assertIn("before=2025-09-29T00%3A00%3A00Z", path)
 
+    def test_daily_candles_can_request_unadjusted_official_close(self):
+        broker = TossBroker.__new__(TossBroker)
+        broker._request = MagicMock(return_value={"result": {"candles": []}})
+
+        broker.get_daily_candles_raw("TQQQ", 5, adjusted=False)
+
+        self.assertIn("adjusted=false", broker._request.call_args.args[1])
+
     def test_minute_candles_use_1m_interval_and_support_before_cursor(self):
         broker = TossBroker.__new__(TossBroker)
         broker._request = MagicMock(return_value={"result": {"candles": []}})

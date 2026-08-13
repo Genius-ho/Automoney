@@ -206,8 +206,11 @@ class TossBroker:
     def get_price_limits_raw(self, symbol: str) -> dict:
         return self._request('GET', '/api/v1/price-limits?' + urlencode({'symbol': symbol}))
 
-    def get_daily_candles_raw(self, symbol: str, count: int = 2, before: str | None = None) -> dict:
-        params: dict[str, str | int] = {"symbol": symbol, "interval": "1d", "count": count, "adjusted": "true"}
+    def get_daily_candles_raw(self, symbol: str, count: int = 2, before: str | None = None, adjusted: bool = True) -> dict:
+        params: dict[str, str | int] = {
+            "symbol": symbol, "interval": "1d", "count": count,
+            "adjusted": "true" if adjusted else "false",
+        }
         if before:
             params["before"] = before
         return self._request("GET", "/api/v1/candles?" + urlencode(params))

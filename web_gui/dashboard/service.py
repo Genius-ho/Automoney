@@ -4,6 +4,7 @@ from __future__ import annotations
 import json
 import os
 import threading
+import time
 from dataclasses import asdict
 from datetime import date, timedelta
 from decimal import Decimal
@@ -11,6 +12,7 @@ from pathlib import Path
 from typing import Any, Callable
 
 from application_engine import ApplicationEngine
+from market_quote import fetch_unadjusted_daily_candles, resolve_day_quote
 from mumae_core import ETF_UNIVERSE, Mode, StrategyState, build_plan
 from runtime_store import RuntimeStore
 from secure_credentials import SecureCredentialStore, TossCredentials
@@ -312,11 +314,11 @@ class DashboardService:
             symbols = sorted(set(holding_rows) | {symbol})
             price_rows = _rows(broker.get_prices_raw(symbols))
             buying_power = broker.get_buying_power_raw()
-            candles = broker.get_daily_candles_raw(symbol, 2)
             cash = _decimal((buying_power.get("result") or {}).get("cashBuyingPower"))
 
             selected = self.state_store.load(symbol)
             holdings: list[dict[str, Any]] = []
+            resolved_quotes = {}
             holdings_value = Decimal("0")
             for ticker in symbols:
                 row = holding_rows.get(ticker, {})
@@ -337,7 +339,10 @@ class DashboardService:
                     "purchaseAveragePrice",
                     "averageCost",
                 )
-                price = _number(quote, "lastPrice", "price", "currentPrice")
+                resolved = resolve_day_quote(quote, fetch_unadjusted_daily_candles(broker, ticker))
+                time.sleep(0.25)
+                resolved_quotes[ticker] = resolved
+                price = resolved.current_price
                 value = quantity * price
                 cost = quantity * average
                 pnl = value - cost
@@ -348,6 +353,7 @@ class DashboardService:
                     "quantity": quantity,
                     "average_price": average,
                     "current_price": price,
+                    "day_change_pct": resolved.day_change_pct,
                     "total_value": value,
                     "pnl": pnl,
                     "pnl_pct": pnl / cost * 100 if cost else Decimal("0"),
@@ -363,8 +369,7 @@ class DashboardService:
             self.state_store.save(selected)
 
             selected_price = _number(price_rows.get(symbol, {}), "lastPrice", "price", "currentPrice")
-            daily = (candles.get("result") or {}).get("candles") or []
-            previous = _decimal(daily[1].get("closePrice")) if len(daily) > 1 else selected_price
+            previous = resolved_quotes[symbol].previous_close or selected_price
             invested = selected.avg_cost * selected.position_qty
             selected_value = selected_price * selected.position_qty
             metrics = _json({

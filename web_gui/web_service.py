@@ -3,12 +3,13 @@ from __future__ import annotations
 
 import time
 from dataclasses import asdict, replace
-from datetime import date, datetime
+from datetime import date
 from decimal import Decimal, InvalidOperation
 from pathlib import Path
 from typing import Any, Callable
 
 from etf_info import ETF_INFO
+from market_quote import fetch_unadjusted_daily_candles, resolve_day_quote
 from mumae_core import ETF_UNIVERSE, Mode, OrderIntent, StrategyState, attempt_amount, build_big_number_plan, build_plan, normalize_down_ladder_levels, star_price, symbol_profile
 from runtime_store import RuntimeStore, prune_order_tracking
 from state_store import StateStore
@@ -74,44 +75,6 @@ class WebService:
         self._broker: TossBroker | None = None
         self.plan_cache: dict[str, list[OrderIntent]] = {}
         self.quote_cache: dict[str, tuple[Decimal, Decimal]] = {}
-        # Previous close never changes intraday, so it's fetched via a broker
-        # call at most once per symbol per calendar day (not on every
-        # refresh/auto-tick) -- keyed by ticker, value is (date, close).
-        self._previous_close_cache: dict[str, tuple[str, Decimal]] = {}
-
-    def _previous_close(self, broker: TossBroker, ticker: str) -> Decimal | None:
-        # Cache key is our local (KST) calendar date -- purely a "don't
-        # refetch more than once a day" throttle. It must NOT be used to
-        # decide which candle counts as "previous": KST is far enough ahead
-        # of US market hours that the most recent US trading session is
-        # still labeled "yesterday" by KST clock time for much of the US
-        # session, so comparing candle dates against date.today() picks the
-        # in-progress session itself and reports 0% change against it.
-        today_key = date.today().isoformat()
-        cached = self._previous_close_cache.get(ticker)
-        if cached and cached[0] == today_key:
-            return cached[1]
-        # The candle with the latest date is "the current session" (whatever
-        # calendar date it happens to be labeled with -- never our own
-        # clock), and the next-latest *distinct* date is "previous close".
-        # Computed from the data itself so it doesn't depend on response
-        # order either.
-        candles = broker.get_daily_candles_raw(ticker, 5).get("result", {}).get("candles", [])
-        time.sleep(0.25)
-        dated = sorted(
-            ((datetime.fromisoformat(candle["timestamp"]).date(), candle) for candle in candles),
-            key=lambda item: item[0],
-            reverse=True,
-        )
-        distinct_dates = sorted({candle_date for candle_date, _ in dated}, reverse=True)
-        if len(distinct_dates) < 2:
-            return None
-        previous_date = distinct_dates[1]
-        previous_candle = next(candle for candle_date, candle in dated if candle_date == previous_date)
-        previous = _text_decimal(previous_candle.get("closePrice"))
-        self._previous_close_cache[ticker] = (today_key, previous)
-        return previous
-
     def _reconcile_known_symbols(self) -> None:
         """known_symbols must include every ETF that has ever been saved, not
         just ones started in the current runtime.json (e.g. after migrating
@@ -321,16 +284,19 @@ class WebService:
             quote = price_rows.get(ticker, {})
             quantity = _find_decimal(row, ("quantity", "holdingQuantity", "holdingQty", "availableQuantity", "sellableQuantity"))
             average = _find_decimal(row, ("averagePrice", "avgPrice", "averagePurchasePrice", "purchaseAveragePrice", "averageCost"))
-            price = _find_decimal(quote, ("lastPrice", "price", "currentPrice"))
+            candles = fetch_unadjusted_daily_candles(broker, ticker)
+            time.sleep(0.25)
+            resolved = resolve_day_quote(quote, candles)
+            price = resolved.current_price
             value = quantity * price
             cost = quantity * average
             pnl = value - cost
             rate = pnl / cost * 100 if cost else Decimal("0")
             ticker_state = selected if ticker == symbol else self.store.load(ticker)
-            previous_close = self._previous_close(broker, ticker)
+            previous_close = resolved.previous_close
             if ticker == symbol:
                 selected_previous_close = previous_close
-            day_change_pct = (price - previous_close) / previous_close * 100 if previous_close and price > 0 else None
+            day_change_pct = resolved.day_change_pct
             holdings.append(_json_value({
                 "symbol": ticker,
                 "quantity": quantity,

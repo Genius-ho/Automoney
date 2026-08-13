@@ -36,7 +36,7 @@ class FakeBroker:
 
     def get_prices_raw(self, symbols):
         prices = {"TQQQ": "84.5", "SOXL": "35"}
-        return {"result": [{"symbol": symbol, "lastPrice": prices.get(symbol, "1")} for symbol in symbols]}
+        return {"result": [{"symbol": symbol, "lastPrice": prices.get(symbol, "1"), "timestamp": _TODAY + "T13:00:00+09:00"} for symbol in symbols]}
 
     def get_buying_power_raw(self):
         return {"result": {"cashBuyingPower": "1200"}}
@@ -145,6 +145,10 @@ class DashboardServiceTests(unittest.TestCase):
             self.assertEqual(result["state"]["position_qty"], 8)
             self.assertEqual(result["state"]["avg_cost"], "75")
             self.assertEqual(result["state"]["cash_usd"], "1200")
+            self.assertAlmostEqual(
+                Decimal(next(row for row in result["holdings"] if row["symbol"] == "TQQQ")["day_change_pct"]),
+                (Decimal("84.5") - Decimal("82")) / Decimal("82") * 100,
+            )
             self.assertEqual(result["metrics"]["total_asset"], "2016.0")
             self.assertEqual(result["metrics"]["selected_value"], "676.0")
             self.assertEqual({order["side"] for order in result["orders"]}, {"buy", "sell"})
