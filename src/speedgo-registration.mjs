@@ -234,9 +234,24 @@ export async function runSpeedgoNaverRegistration(db, rootDir, draftId, options 
 
       let ids;
       if (reservation?.action === 'reserved') {
-        await recordBrowserStage('submitted', async () => {
-          ids = await browser.submitAndResolveIds();
-        });
+        try {
+          await recordBrowserStage('submitted', async () => {
+            ids = await browser.submitAndResolveIds();
+          });
+        } catch (error) {
+          // submitAndResolveIds' live capture (network response / URL
+          // pattern / popup success text) reliably misses Speedgo's
+          // confirmation signal even when the transfer itself already
+          // succeeded -- confirmed live 2026-08-14 across 4/4 real
+          // registrations, every one recovered cleanly on a second CLI
+          // invocation via this exact recoverRegistration() list lookup.
+          // Fall back to it in the same run instead of making the caller
+          // invoke this twice.
+          if (error?.code !== 'UNRESOLVED_EXTERNAL_RESULT') throw error;
+          await recordBrowserStage('recovered', async () => {
+            ids = await browser.recoverRegistration(input);
+          });
+        }
       } else if (reservation?.action === 'recover') {
         await recordBrowserStage('recovered', async () => {
           ids = await browser.recoverRegistration(input);

@@ -251,6 +251,34 @@ test('a new confirmed reservation occurs immediately before exactly one submit, 
   assert.equal(count(harness.calls, 'close'), 1);
 });
 
+test('a submit that cannot verify its own result falls back to recovery in the same run, without a second CLI invocation', async () => {
+  const unresolvedSubmit = Object.assign(
+    new Error('Speedgo appeared to submit but no Naver origin product number was verified'),
+    { code: 'UNRESOLVED_EXTERNAL_RESULT' },
+  );
+  const harness = makeHarness({ stageError: { stage: 'submit', error: unresolvedSubmit } });
+
+  const result = await runSpeedgoNaverRegistration({}, 'C:/repo', 501, harness.deps);
+
+  assert.equal(result.originProductNo, '777');
+  assert.equal(result.channelProductNo, '888');
+  assert.equal(count(harness.calls, 'submit'), 1);
+  assert.equal(count(harness.calls, 'recover'), 1);
+  assert.ok(harness.calls.indexOf('submit') < harness.calls.indexOf('recover'));
+  assert.equal(count(harness.calls, 'complete'), 1);
+  assert.equal(count(harness.calls, 'postProcess'), 1);
+});
+
+test('a submit failure other than UNRESOLVED_EXTERNAL_RESULT never falls back to recovery', async () => {
+  const harness = makeHarness({ stageError: { stage: 'submit', error: new Error('boom') } });
+
+  await assert.rejects(() => runSpeedgoNaverRegistration({}, 'C:/repo', 501, harness.deps));
+
+  assert.equal(count(harness.calls, 'submit'), 1);
+  assert.equal(count(harness.calls, 'recover'), 0);
+  assert.equal(count(harness.calls, 'complete'), 0);
+});
+
 test('recovery resolves the existing reservation without submitting and completes it once', async () => {
   const harness = makeHarness({ reservationAction: 'recover' });
 
