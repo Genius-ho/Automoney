@@ -65,9 +65,17 @@ export async function loadSchedulerDeps(rootDir) {
 }
 
 export function tick(label, intervalMs, fn, { setIntervalImpl = setInterval, telegramConfig = null, sendCriticalAlertImpl = sendCriticalAlert } = {}) {
+  // Guards against overlapping runs of this same tick -- without it, a
+  // single invocation that runs longer than intervalMs (e.g. a slow/timed-out
+  // Telegram getUpdates call) lets the next timer firing start a second,
+  // concurrent call before the first finishes. For telegramApprovalPoll that
+  // manifested live 2026-08-14 as Telegram's own "Conflict: terminated by
+  // other getUpdates request" -- two overlapping polls from this one process,
+  // not a second bot instance anywhere else.
+  const runNonOverlapping = createNonOverlappingRunner(fn);
   const handle = setIntervalImpl(async () => {
     try {
-      const result = await fn();
+      const result = await runNonOverlapping();
       console.log(`scheduler.${label}=${JSON.stringify(result)}`);
     } catch (error) {
       console.error(`scheduler.${label}Error=${error.message}`);

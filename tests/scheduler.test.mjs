@@ -51,6 +51,25 @@ test('tick sends a telegram critical alert (labeled scheduler.<label>) when fn r
   assert.deepEqual(alerts, [{ telegramConfig, label: 'scheduler.coupangOrders', message: 'boom' }]);
 });
 
+test('tick skips a second overlapping run instead of starting it concurrently', async () => {
+  let calls = 0;
+  let release;
+  const pending = new Promise((resolve) => { release = resolve; });
+  const fn = async () => { calls += 1; await pending; return { ok: true }; };
+  let callback;
+  const handle = tick('coupangOrders', 1000, fn, {
+    setIntervalImpl: (cb) => { callback = cb; return { unref: () => {}, promise: cb() }; },
+  });
+  // Simulate the interval firing again while the first run is still pending
+  // (e.g. a slow network call outliving intervalMs) -- this must not start a
+  // second concurrent fn() call.
+  const second = callback();
+  release();
+  await handle.promise;
+  await second;
+  assert.equal(calls, 1);
+});
+
 test('tick does not send an alert when fn succeeds', async () => {
   const alerts = [];
   const sendCriticalAlertImpl = async (...args) => alerts.push(args);
