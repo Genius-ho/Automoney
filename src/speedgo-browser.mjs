@@ -9,8 +9,13 @@ import { findFirstVisible, SPEEDGO_SELECTORS } from './speedgo-selectors.mjs';
 const SPEEDGO_HOME_URL = 'https://domemedb.domeggook.com/index/';
 const MAX_RESPONSE_BYTES = 1024 * 1024;
 const MAX_IMAGE_BYTES = 25 * 1024 * 1024;
-const SUBMISSION_TIMEOUT_MS = 15_000;
-const TRANSFER_UI_TIMEOUT_MS = 5_000;
+// Widened from 15s/5s on 2026-08-14: this Linux box is slower than the
+// original Windows machine these were tuned on, and speedgo-registration.mjs
+// now falls back to recoverRegistration()'s list-page lookup on timeout
+// anyway, so a wider margin here only trades a few extra seconds of waiting
+// for a better chance submitAndResolveIds() succeeds outright.
+const SUBMISSION_TIMEOUT_MS = 30_000;
+const TRANSFER_UI_TIMEOUT_MS = 12_000;
 const TRANSFER_FRAME_POLL_MS = 100;
 const POPUP_PRODUCT_URL = /^https:\/\/speedgo\.domeggook\.com\/popup_market\/popup_setProduct\.php(?:\?|$)/i;
 const SPEEDGO_SUCCESS_LIST_URL = 'https://speedgo.domeggook.com/send/send_list.php?status=SUCCESS&types=';

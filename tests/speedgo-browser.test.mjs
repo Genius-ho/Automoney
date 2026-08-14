@@ -929,7 +929,7 @@ test('openSpeedgoTransfer fails safely when the exact popup form never becomes r
 
   assert.equal(harness.calls.filter((call) => call === 'click:cardTransfer').length, 1);
   assert.equal(harness.submitClicks, 0);
-  assert.equal(harness.popupTicks, 50);
+  assert.equal(harness.popupTicks, 120);
 });
 
 test('openSpeedgoTransfer rejects a popup frame whose form action is not mkt_marketIng.php', async (t) => {
@@ -951,7 +951,7 @@ test('openSpeedgoTransfer rejects a popup frame whose form action is not mkt_mar
   assert.equal(harness.submitClicks, 0);
 });
 
-test('openSpeedgoTransfer bounds a hanging form action read by the one five-second deadline', async (t) => {
+test('openSpeedgoTransfer bounds a hanging form action read by the one twelve-second deadline', async (t) => {
   const harness = fakeBrowserHarness({ popupActionReadHang: true });
   const browser = createSpeedgoBrowser({ chromiumImpl: harness.chromium, rootDir: 'C:/repo' });
   t.after(() => browser.close());
@@ -962,13 +962,13 @@ test('openSpeedgoTransfer bounds a hanging form action read by the one five-seco
   await assert.rejects(
     Promise.race([
       browser.openSpeedgoTransfer(),
-      new Promise((_, reject) => setTimeout(() => reject(new Error('adapter exceeded bounded deadline')), 5_750)),
+      new Promise((_, reject) => setTimeout(() => reject(new Error('adapter exceeded bounded deadline')), 12_750)),
     ]),
     { code: 'SPEEDGO_TRANSFER_UI_NOT_FOUND', selectorName: 'popupProductForm' },
   );
 
   const elapsedMs = Date.now() - startedAt;
-  assert.ok(elapsedMs >= 4_500 && elapsedMs < 5_750, `elapsed ${elapsedMs}ms`);
+  assert.ok(elapsedMs >= 10_800 && elapsedMs < 12_750, `elapsed ${elapsedMs}ms`);
   assert.equal(harness.submitClicks, 0);
 });
 
