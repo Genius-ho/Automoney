@@ -4,33 +4,39 @@ import { buildSupplierOrderDraft } from './purchase-order-builder.mjs';
 import { DomemePrivateApiError } from './domeme-private-client.mjs';
 import { getValidDomemeSId } from './domeme-private-session.mjs';
 
-const SHOP_NAME = 'automoney';
+const SHOP_NAME = '와우픽';
 
-// channel_orders.address is one combined string (see order-collector.mjs's
-// normalizeCoupangOrder: addr1+addr2 already joined) -- 도매매's deliinfo wants
-// address1/address2 separately, and requires both. There's no reliable way
-// to split a free-text combined address back into the two without risking
-// getting it wrong, so this puts the whole thing in address1 and leaves
-// address2 empty; if 도매매 rejects that as ORDER_CONSUMER_ERROR, it comes
-// back as a clean, visible failure (recordSupplierOrderFailure) rather than
-// a wrong delivery -- not silently guessed around.
+// order-collector.mjs now stores address1/address2 as collected (Coupang's
+// receiver.addr1/addr2, Naver's shippingAddress.baseAddress/detailedAddress
+// -- both channels already split them; see its header comment). Falls back
+// to channelOrder.address/'' for rows collected before that split was
+// stored -- there's no reliable way to split a free-text combined address
+// back into the two after the fact, so an old row without address1/address2
+// still risks 도매매 rejecting the empty address2 as ORDER_CONSUMER_ERROR --
+// which comes back as a clean, visible failure (recordSupplierOrderFailure)
+// rather than a wrong delivery, not silently guessed around.
 function buildDeliInfoFromChannelOrder(channelOrder) {
   return {
     name: channelOrder.recipientName,
     zipcode: channelOrder.postalCode,
-    address1: channelOrder.address,
-    address2: '',
+    address1: channelOrder.address1 || channelOrder.address,
+    address2: channelOrder.address2 || '',
     mobile: channelOrder.phone,
     shopName: SHOP_NAME,
   };
 }
 
-// The only place in this app allowed to call domemeClient.createOrder() --
-// real money leaves the moment this succeeds. Only ever invoked from an
+// The only place in this app allowed to call domemePrivateClient.createOrder()
+// -- real money leaves the moment this succeeds. Only ever invoked from an
 // explicit admin action (never a sweep/schedule), and re-validates one more
 // time immediately before ordering (13.2) rather than trusting whatever the
-// last background sweep computed.
-export async function approveSupplierOrder(db, domemeClient, supplierOrderId, {
+// last background sweep computed. Needs two distinct Domeme clients:
+// domemeClient (public Open API) for buildSupplierOrderDraft's
+// fetchProductDetail re-check, and domemePrivateClient (session-based) for
+// checkLogin/createOrder -- they are different classes with disjoint method
+// sets (src/domeme-client.mjs vs src/domeme-private-client.mjs), so a single
+// client param here always fails one half or the other.
+export async function approveSupplierOrder(db, domemeClient, domemePrivateClient, supplierOrderId, {
   getSupplierOrderImpl = getSupplierOrder,
   getChannelOrderImpl = getChannelOrder,
   getDraftOrderingContextImpl = getDraftOrderingContext,
@@ -64,8 +70,8 @@ export async function approveSupplierOrder(db, domemeClient, supplierOrderId, {
   const context = await getDraftOrderingContextImpl(db, locked.productDraftId);
 
   try {
-    const sId = await getValidDomemeSIdImpl(db, domemeClient);
-    const result = await domemeClient.createOrder({
+    const sId = await getValidDomemeSIdImpl(db, domemePrivateClient);
+    const result = await domemePrivateClient.createOrder({
       sId,
       receipt: 0,
       items: [{
@@ -73,7 +79,9 @@ export async function approveSupplierOrder(db, domemeClient, supplierOrderId, {
         market: locked.supplierMarket,
         deliveryWho: 'P',
         options: [{ code: locked.supplierOptionCode, qty: locked.supplierOrderQty }],
-        sellerMemo: `automoney ${channelOrder.channel} ${channelOrder.channelOrderId}`.slice(0, 256),
+        // sellerMemo (판매자전달사항) is shown to the supplier -- left blank
+        // rather than an internal tracking note, since there's nothing the
+        // supplier needs from it.
         deliveryRequest: (channelOrder.deliveryMemo || '').slice(0, 256),
       }],
       deliInfo: buildDeliInfoFromChannelOrder(channelOrder),

@@ -117,6 +117,44 @@ test('mapOptionsToMandatoryAttributes applies a supplied size value to every ite
   assert.deepEqual(result.unresolvedMandatoryAttributes, []);
 });
 
+// Confirmed live 2026-08-15 against draft 8's real category ("테이블/멀티트레이",
+// mandatoryOptionNames=[색상,수량], no 사이즈 attribute at all): the old
+// remainingAttributeNames[0] assumption silently wrote a dimension string
+// ("약 21 × 25.5 cm") into 수량, producing "약 21 × 25.5 cm개" once the NUMBER
+// unit got appended. sizeAttributeValue must never land on an attribute
+// that isn't actually a size attribute.
+test('mapOptionsToMandatoryAttributes does not misassign sizeAttributeValue onto an unrelated first-remaining attribute (e.g. 수량) when no 사이즈 attribute exists', () => {
+  const result = mapOptionsToMandatoryAttributes({
+    draftOptions: [{ optionValue: '멀티트레이(블랙)', additionalPrice: 0 }],
+    mandatoryOptionNames: ['색상', '수량'],
+    stockByOptionValue: { '멀티트레이(블랙)': 9990 },
+    sizeAttributeValue: '약 21 × 25.5 cm',
+  });
+
+  assert.deepEqual(result.items[0].attributes, [
+    { attributeTypeName: '색상', attributeValueName: '멀티트레이(블랙)' },
+    { attributeTypeName: '수량', attributeValueName: null },
+  ]);
+  assert.deepEqual(result.unresolvedMandatoryAttributes, ['수량']);
+});
+
+test('mapOptionsToMandatoryAttributes finds a category-specific size attribute name (e.g. "주얼리 사이즈") regardless of its position among remaining attributes', () => {
+  const result = mapOptionsToMandatoryAttributes({
+    draftOptions: [{ optionValue: '아이보리', additionalPrice: 0 }],
+    mandatoryOptionNames: ['색상', '수량', '주얼리 사이즈'],
+    stockByOptionValue: { 아이보리: 10 },
+    sizeAttributeValue: '23.5 x 13.5 x 10.5cm',
+    additionalAttributeValues: { 수량: '1' },
+  });
+
+  assert.deepEqual(result.items[0].attributes, [
+    { attributeTypeName: '색상', attributeValueName: '아이보리' },
+    { attributeTypeName: '수량', attributeValueName: '1' },
+    { attributeTypeName: '주얼리 사이즈', attributeValueName: '23.5 x 13.5 x 10.5cm' },
+  ]);
+  assert.deepEqual(result.unresolvedMandatoryAttributes, []);
+});
+
 test('mapOptionsToMandatoryAttributes fills stock quantities when provided and reports none missing', () => {
   const result = mapOptionsToMandatoryAttributes({
     draftOptions: [
@@ -714,13 +752,80 @@ test('mapLiveProductToUpdatePayload translates maximumBuyCount into stockQuantit
   assert.equal(mapped.items[0].maximumBuyCount, 10);
 });
 
-test('mapLiveProductToUpdatePayload drops blank attribute values and strips the editable flag', () => {
+// Confirmed live 2026-08-15 against sellerProductId 16114463555: dropping
+// blank-valued attributes shrank the resubmitted attributes array versus
+// what Coupang had on file, and was plausibly part of why Coupang kept
+// rejecting the request as an implicit item deletion
+// ("판매중인 상품은 삭제할 수 없습니다") -- attributes (blanks, editable flag,
+// and all) are now passed through unchanged, same as every other item field.
+test('mapLiveProductToUpdatePayload passes attributes through unchanged, including blank values and the editable flag', () => {
   const live = liveGetProductFixture();
   const mapped = mapLiveProductToUpdatePayload(live, { images: [], contents: [] });
-  assert.deepEqual(mapped.items[0].attributes, [
-    { attributeTypeName: '색상', attributeValueName: '그레이', exposed: 'NONE' },
-    { attributeTypeName: '주얼리 사이즈', attributeValueName: '23.5 x 13.5 x 10.5cm', exposed: 'NONE' },
-  ]);
+  assert.deepEqual(mapped.items[0].attributes, live.items[0].attributes);
+});
+
+// Confirmed live 2026-08-15 against sellerProductId 16114463555 -- a
+// product created via Coupang's own seller UI (pre-dating this app's
+// automation) returns shipping/return and per-item price/id fields nested
+// under marketplaceShippingAndReturnInfo / item.marketplaceItemData instead
+// of the flat top-level shape liveGetProductFixture() models above.
+function nestedLiveGetProductFixture(overrides = {}) {
+  const flat = liveGetProductFixture();
+  return {
+    sellerProductId: flat.sellerProductId,
+    displayCategoryCode: flat.displayCategoryCode,
+    sellerProductName: flat.sellerProductName,
+    vendorId: flat.vendorId,
+    vendorUserId: flat.vendorUserId,
+    saleStartedAt: flat.saleStartedAt,
+    saleEndedAt: flat.saleEndedAt,
+    displayProductName: flat.displayProductName,
+    brand: flat.brand,
+    manufacture: flat.manufacture,
+    requested: false,
+    statusName: flat.statusName,
+    marketplaceShippingAndReturnInfo: {
+      deliveryMethod: 'SEQUENCIAL', deliveryCompanyCode: 'DIRECT', deliveryChargeType: 'FREE',
+      deliveryCharge: 0, freeShipOverAmount: 0, deliveryChargeOnReturn: 3000, remoteAreaDeliverable: 'Y',
+      unionDeliveryType: 'NOT_UNION_DELIVERY', returnCenterCode: '1002401151', returnChargeName: '-',
+      companyContactNumber: '010-0000-0000', returnZipCode: '00000', returnAddress: '서울특별시 중구 세종대로 110',
+      returnAddressDetail: '1동 100호', returnCharge: 3000, outboundShippingPlaceCode: 23777733,
+    },
+    items: [{
+      itemName: '그린 15M 1개',
+      maximumBuyCount: 923,
+      maximumBuyForPerson: 0,
+      maximumBuyForPersonPeriod: 1,
+      outboundShippingTimeDay: 1,
+      unitCount: 1,
+      taxType: 'TAX',
+      parallelImported: 'NOT_PARALLEL_IMPORTED',
+      overseasPurchased: 'NOT_OVERSEAS_PURCHASED',
+      adultOnly: 'EVERYONE',
+      attributes: [{ attributeTypeName: '색상', attributeValueName: '그린 15M', exposed: 'EXPOSED', editable: true }],
+      notices: [],
+      searchTags: [],
+      marketplaceItemData: { sellerProductItemId: 37468198876, priceData: { originalPrice: 16740, salePrice: 13760 } },
+    }],
+    ...overrides,
+  };
+}
+
+test('mapLiveProductToUpdatePayload falls back to marketplaceShippingAndReturnInfo when the flat shipping/return fields are absent', () => {
+  const live = nestedLiveGetProductFixture();
+  const mapped = mapLiveProductToUpdatePayload(live, { images: [], contents: [] });
+  assert.equal(mapped.deliveryMethod, 'SEQUENCIAL');
+  assert.equal(mapped.returnCenterCode, '1002401151');
+  assert.equal(mapped.returnAddress, '서울특별시 중구 세종대로 110');
+  assert.equal(mapped.deliveryChargeOnReturn, 3000);
+});
+
+test('mapLiveProductToUpdatePayload falls back to item.marketplaceItemData for sellerProductItemId/prices when the flat item fields are absent', () => {
+  const live = nestedLiveGetProductFixture();
+  const mapped = mapLiveProductToUpdatePayload(live, { images: [], contents: [] });
+  assert.equal(mapped.items[0].sellerProductItemId, 37468198876);
+  assert.equal(mapped.items[0].originalPrice, 16740);
+  assert.equal(mapped.items[0].salePrice, 13760);
 });
 
 test('mapLiveProductToUpdatePayload always submits requested=false regardless of the live value', () => {
@@ -744,6 +849,40 @@ test('mapLiveProductToUpdatePayload drops response-only fields not part of the u
   assert.equal('trackingId' in mapped, false);
   assert.equal('productId' in mapped, false);
   assert.equal('statusName' in mapped, false);
-  assert.equal('vendorItemId' in mapped.items[0], false);
   assert.equal('itemId' in mapped.items[0], false);
+});
+
+// Confirmed live 2026-08-15 against sellerProductId 16114463555: resubmitting
+// rocketGrowthAdditionalInformation/rocketGrowthItemData (Coupang's own
+// informational block about a *separate* parallel Rocket Growth listing
+// entity, with its own distinct sellerProductItemId/vendorItemId) made
+// Coupang reject the modify request as an unintended Rocket Growth
+// registration attempt ("로켓그로스 입고 불가 조건을 확인하시고 동의해주세요").
+test('mapLiveProductToUpdatePayload drops rocketGrowthAdditionalInformation/rocketGrowthItemData rather than resubmitting a separate listing entity', () => {
+  const live = liveGetProductFixture({
+    rocketGrowthAdditionalInformation: { rfmInboundName: 'x' },
+    items: [{ ...liveGetProductFixture().items[0], rocketGrowthItemData: { sellerProductItemId: 999, vendorItemId: 888 } }],
+  });
+  const mapped = mapLiveProductToUpdatePayload(live, { images: [], contents: [] });
+  assert.equal('rocketGrowthAdditionalInformation' in mapped, false);
+  assert.equal('rocketGrowthItemData' in mapped.items[0], false);
+});
+
+// Confirmed live 2026-08-15 (developers.coupang.com "상품 수정 (승인필요)"):
+// vendorItemId is required alongside sellerProductItemId for Coupang to
+// recognize a submitted item as an existing option rather than a
+// delete-and-recreate -- omitting it produced a real
+// "판매중인 상품은 삭제할 수 없습니다" error against a live already-approved
+// product (sellerProductId 16114463555).
+test('mapLiveProductToUpdatePayload keeps vendorItemId so Coupang recognizes existing items instead of treating the update as a delete', () => {
+  const live = liveGetProductFixture();
+  const mapped = mapLiveProductToUpdatePayload(live, { images: [], contents: [] });
+  assert.equal(mapped.items[0].vendorItemId, 95768275023);
+});
+
+test('mapLiveProductToUpdatePayload falls back to item.marketplaceItemData.vendorItemId when the flat field is absent', () => {
+  const live = nestedLiveGetProductFixture();
+  live.items[0].marketplaceItemData.vendorItemId = 95077868164;
+  const mapped = mapLiveProductToUpdatePayload(live, { images: [], contents: [] });
+  assert.equal(mapped.items[0].vendorItemId, 95077868164);
 });

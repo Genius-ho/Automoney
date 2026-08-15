@@ -161,6 +161,18 @@ export class CoupangClient {
   }
 
   // "송장업로드 처리" (automoney_complete_automation_implementation_plan.md
+  // "상품준비중 처리" (발주서 확인) -- confirmed spec, 2026-08-14
+  // (developers.coupang.com/ko/api/shipments/changing-the-status-to-product-in-preparation):
+  // moves shipmentBoxIds from 결제완료(ACCEPT) to 상품준비중(INSTRUCT). Only
+  // ACCEPT-status shipmentBoxIds are accepted; docs recommend 50 or fewer
+  // per call.
+  async acknowledgeOrders(shipmentBoxIds) {
+    return this.request('PATCH', `/v2/providers/openapi/apis/api/v4/vendors/${this.vendorId}/ordersheets/acknowledgement`, {
+      body: { vendorId: this.vendorId, shipmentBoxIds },
+      operation: 'acknowledge_orders',
+    });
+  }
+
   // 14.4) -- confirmed spec, 2026-07-26 (developers.coupang.com): moves a
   // shipmentBoxId from 상품준비중 to 배송지시. orderSheetInvoiceApplyDtos is an
   // array so several shipmentBoxIds could be uploaded in one call, but this

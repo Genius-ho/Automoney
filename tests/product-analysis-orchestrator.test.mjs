@@ -326,6 +326,54 @@ test('applyProductAnalysis blocks a legal field with no evidence even when the c
   assert.deepEqual(result.blockedFields, [{ field: 'manufacturer', reason: 'NO_EVIDENCE_LEGAL_FIELD' }]);
 });
 
+// Confirmed live 2026-08-15, draft 8: Python OCR read material as "면"
+// (cotton -- a misread), Codex read "ABS" off the same product's spec label
+// (confidence 0.99). Forcing the conflicted field through with no fieldValues
+// entry used to silently write null (discarding both candidates); it must
+// now block with a distinct reason instead.
+test('applyProductAnalysis blocks a forced conflict with CONFLICT_VALUE_NOT_SPECIFIED when no fieldValues entry picks a candidate', async () => {
+  const db = makeFakeDb();
+  const run = await runProductAnalysis({
+    db, rootDir: '/repo', draftId: 64,
+    ...baseDeps({
+      codexAnalysis: { ...CODEX_SUCCESS, material: { value: 'ABS', confidence: 0.99, evidence: [{ sourceFile: 'a.jpg', sliceIndex: 19, quote: '재질 ABS', rawJsonPath: null }] } },
+      pythonAnalysis: { ...PYTHON_SUCCESS, material: { value: '면', confidence: 0.6, source: 'ocr', evidence: [{ file: 'a.jpg', sliceIndex: 8, text: '면' }] } },
+    }),
+  });
+
+  const result = await applyProductAnalysis(db, 64, {
+    runId: run.id,
+    fields: { material: true },
+    forceFields: ['material'],
+    getProductDraftImpl: async () => ({ id: 64, options: [] }),
+  });
+
+  assert.deepEqual(result.appliedFields, []);
+  assert.deepEqual(result.blockedFields, [{ field: 'material', reason: 'CONFLICT_VALUE_NOT_SPECIFIED' }]);
+});
+
+test('applyProductAnalysis applies the fieldValues-specified candidate when forcing a genuine conflict', async () => {
+  const db = makeFakeDb();
+  const run = await runProductAnalysis({
+    db, rootDir: '/repo', draftId: 64,
+    ...baseDeps({
+      codexAnalysis: { ...CODEX_SUCCESS, material: { value: 'ABS', confidence: 0.99, evidence: [{ sourceFile: 'a.jpg', sliceIndex: 19, quote: '재질 ABS', rawJsonPath: null }] } },
+      pythonAnalysis: { ...PYTHON_SUCCESS, material: { value: '면', confidence: 0.6, source: 'ocr', evidence: [{ file: 'a.jpg', sliceIndex: 8, text: '면' }] } },
+    }),
+  });
+
+  const result = await applyProductAnalysis(db, 64, {
+    runId: run.id,
+    fields: { material: true },
+    forceFields: ['material'],
+    fieldValues: { material: 'ABS' },
+    getProductDraftImpl: async () => ({ id: 64, options: [] }),
+  });
+
+  assert.deepEqual(result.appliedFields, ['material']);
+  assert.equal(result.applied.material, 'ABS');
+});
+
 test('applyProductAnalysis rejects applying against a run that failed or has no merged result', async () => {
   const db = makeFakeDb();
   const run = await runProductAnalysis({

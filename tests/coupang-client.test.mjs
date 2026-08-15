@@ -204,6 +204,23 @@ test('CoupangClient.uploadInvoice POSTs a single-entry orderSheetInvoiceApplyDto
   assert.equal(result.data.responseList[0].succeed, true);
 });
 
+test('CoupangClient.acknowledgeOrders PATCHes shipmentBoxIds to the v4 ordersheets acknowledgement endpoint', async () => {
+  let captured;
+  const fetchImpl = async (url, init) => {
+    captured = { url: String(url), method: init.method, body: JSON.parse(init.body) };
+    return { ok: true, status: 200, async text() { return JSON.stringify({ code: 200, data: { responseCode: 200, responseList: [{ shipmentBoxId: 64253897, succeed: true }] } }); } };
+  };
+  const client = new CoupangClient({ accessKey: 'ak', secretKey: 'sk', vendorId: 'A00000000', fetchImpl });
+
+  const result = await client.acknowledgeOrders([64253897]);
+
+  assert.equal(captured.method, 'PATCH');
+  assert.match(captured.url, /\/v2\/providers\/openapi\/apis\/api\/v4\/vendors\/A00000000\/ordersheets\/acknowledgement$/);
+  assert.equal(captured.body.vendorId, 'A00000000');
+  assert.deepEqual(captured.body.shipmentBoxIds, [64253897]);
+  assert.equal(result.data.responseList[0].succeed, true);
+});
+
 test('CoupangClient.suspendSale/resumeSale PUT the vendor-items sales stop/resume endpoints with no body', async () => {
   let captured;
   const fetchImpl = async (url, init) => {

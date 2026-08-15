@@ -310,7 +310,7 @@ export function buildApplyPreview(run, draft) {
 // views can surface it as a candidate. DB is left untouched unless this is
 // called, and only touches the fields the caller explicitly selected AND
 // that pass the same gate buildApplyPreview shows in the UI.
-export async function applyProductAnalysis(db, draftId, { runId, fields = {}, forceFields = [], getProductDraftImpl = getProductDraft }) {
+export async function applyProductAnalysis(db, draftId, { runId, fields = {}, forceFields = [], fieldValues = {}, getProductDraftImpl = getProductDraft }) {
   const run = await getAnalysisRun(db, draftId, runId);
   if (!run) throw Object.assign(new Error('Analysis run not found for this draft'), { code: 'RUN_NOT_FOUND' });
   if (run.status !== 'success' || !run.mergedAnalysis) {
@@ -332,7 +332,18 @@ export async function applyProductAnalysis(db, draftId, { runId, fields = {}, fo
       blockedFields.push({ field: key, reason: evaluation.blockedReason });
       continue;
     }
-    appliedValues[key] = evaluation.value;
+    // A genuine conflict (Python and Codex disagree) always evaluates to
+    // value=null (see mergeSingleField) -- forcing past that block with no
+    // fieldValues entry used to silently write null, discarding both
+    // candidates instead of picking one (confirmed live 2026-08-15, draft 8's
+    // material field: forced through with appliedFields reporting success
+    // while the stored value stayed null). Requiring an explicit choice here
+    // turns that into a clear block instead.
+    if (evaluation.conflict && !Object.hasOwn(fieldValues, key)) {
+      blockedFields.push({ field: key, reason: 'CONFLICT_VALUE_NOT_SPECIFIED' });
+      continue;
+    }
+    appliedValues[key] = Object.hasOwn(fieldValues, key) ? fieldValues[key] : evaluation.value;
     appliedFieldNames.push(key);
   }
 

@@ -82,7 +82,20 @@ function nonEmpty(value) {
 export function mapOptionsToMandatoryAttributes({ draftOptions, mandatoryOptionNames, stockByOptionValue = {}, sizeAttributeValue = null, additionalAttributeValues = {}, exposed = null, singleItemStockQuantity = null, attributeMeta = [] }) {
   const colorAttributeName = mandatoryOptionNames.find((name) => name === '색상') || null;
   const remainingAttributeNames = mandatoryOptionNames.filter((name) => name !== colorAttributeName);
-  const sizeAttributeName = remainingAttributeNames[0] || null;
+  // Confirmed live across several categories (2026-08-15): the size/dimension
+  // attribute is not reliably remainingAttributeNames[0] -- some categories'
+  // mandatory attribute order puts an unrelated attribute (e.g. "수량",
+  // piece count) first instead, with no "사이즈"-named attribute at all. The
+  // old index-0 assumption silently misassigned sizeAttributeValue (a
+  // physical dimension string) onto that unrelated attribute in exactly that
+  // case (draft 8's "테이블/멀티트레이" category: 색상/수량, no 사이즈), while
+  // still working by coincidence whenever 사이즈 genuinely was first (draft
+  // 64's "주얼리 사이즈"). Matching by name (contains "사이즈", covering
+  // category-specific variants like "주얼리 사이즈") finds the real size slot
+  // regardless of position, and leaves it null when a category has none --
+  // consistent with this function's own "report unresolved instead of
+  // guessed" contract for every other attribute.
+  const sizeAttributeName = remainingAttributeNames.find((name) => name.includes('사이즈')) || null;
   const exposedField = exposed ? { exposed } : {};
   const hasOptions = (draftOptions || []).length > 0;
 
@@ -419,65 +432,103 @@ export function buildImageOnlyFragments({ mainImageUrl, detailImageUrls = [], de
 // approves one main image + one detail-page set per product draft, not per
 // Coupang item/variant.
 export function mapLiveProductToUpdatePayload(live, { images, contents }) {
+  // Confirmed live 2026-08-15: a product created via Coupang's own seller
+  // UI (pre-dating this app's automation, e.g. sellerProductId 16114463555)
+  // returns shipping/return fields nested under marketplaceShippingAndReturnInfo
+  // and per-item price/id fields nested under item.marketplaceItemData,
+  // instead of the flat top-level shape this module was originally built
+  // against (still confirmed live for every sellerProductId this app itself
+  // registered, e.g. 16343747155). Reading the nested path as a fallback
+  // handles both without guessing values -- everything still comes from
+  // Coupang's own live response, just at whichever path it actually used.
+  const shipping = live.marketplaceShippingAndReturnInfo || {};
+  const {
+    // Confirmed response-only (not part of the modify request schema):
+    // dropped rather than spread back in.
+    marketplaceShippingAndReturnInfo: _marketplaceShippingAndReturnInfo,
+    items: _items,
+    statusName: _statusName,
+    productId: _productId,
+    trackingId: _trackingId,
+    // Confirmed live 2026-08-15: this is Coupang's own informational block
+    // about a *separate*, parallel Rocket Growth-eligible listing entity for
+    // this same product (its own distinct sellerProductItemId/vendorItemId,
+    // confirmed against sellerProductId 16114463555) -- resubmitting it
+    // makes Coupang think this modify request is a Rocket Growth
+    // registration attempt ("로켓그로스 입고 불가 조건을 확인하시고 동의해주세요"),
+    // which this app has no agreement flow for.
+    rocketGrowthAdditionalInformation: _rocketGrowthAdditionalInformation,
+    ...liveRest
+  } = live;
   return {
-    sellerProductId: live.sellerProductId,
-    displayCategoryCode: live.displayCategoryCode,
-    sellerProductName: live.sellerProductName,
-    vendorId: live.vendorId,
-    vendorUserId: live.vendorUserId,
-    saleStartedAt: live.saleStartedAt,
-    saleEndedAt: live.saleEndedAt,
-    displayProductName: live.displayProductName,
-    brand: live.brand,
-    manufacture: live.manufacture,
-    deliveryMethod: live.deliveryMethod,
-    deliveryCompanyCode: live.deliveryCompanyCode,
-    deliveryChargeType: live.deliveryChargeType,
-    deliveryCharge: live.deliveryCharge,
-    freeShipOverAmount: live.freeShipOverAmount,
+    // Coupang's own troubleshooting guidance for "판매중인 상품은 삭제할 수
+    // 없습니다" (developers.coupang.com/hc/ko/articles/900001718566): fetch
+    // the full product via GET, change only the fields that need changing,
+    // and resubmit the full JSON -- not a hand-picked field subset. Spreading
+    // the live response first (rather than rebuilding an explicit allowlist)
+    // follows that literally, so nothing this module's authors didn't know
+    // Coupang wanted gets silently dropped again.
+    ...liveRest,
+    deliveryMethod: live.deliveryMethod ?? shipping.deliveryMethod,
+    deliveryCompanyCode: live.deliveryCompanyCode ?? shipping.deliveryCompanyCode,
+    deliveryChargeType: live.deliveryChargeType ?? shipping.deliveryChargeType,
+    deliveryCharge: live.deliveryCharge ?? shipping.deliveryCharge,
+    freeShipOverAmount: live.freeShipOverAmount ?? shipping.freeShipOverAmount,
     // Not live.deliveryChargeOnReturn -- confirmed by live diffing (see
     // module comment) that field comes back 0 regardless of the real return
     // charge; the original create/modify payloads always set both
     // deliveryChargeOnReturn and returnCharge from the same source value,
     // so returnCharge is the reliable one to mirror it from.
-    deliveryChargeOnReturn: live.returnCharge,
-    remoteAreaDeliverable: live.remoteAreaDeliverable,
-    unionDeliveryType: live.unionDeliveryType,
-    outboundShippingPlaceCode: live.outboundShippingPlaceCode,
-    returnCenterCode: live.returnCenterCode,
-    returnChargeName: live.returnChargeName,
-    returnCharge: live.returnCharge,
-    companyContactNumber: live.companyContactNumber,
-    returnZipCode: live.returnZipCode,
-    returnAddress: live.returnAddress,
-    returnAddressDetail: live.returnAddressDetail,
+    deliveryChargeOnReturn: live.returnCharge ?? shipping.returnCharge,
+    remoteAreaDeliverable: live.remoteAreaDeliverable ?? shipping.remoteAreaDeliverable,
+    unionDeliveryType: live.unionDeliveryType ?? shipping.unionDeliveryType,
+    outboundShippingPlaceCode: live.outboundShippingPlaceCode ?? shipping.outboundShippingPlaceCode,
+    returnCenterCode: live.returnCenterCode ?? shipping.returnCenterCode,
+    returnChargeName: live.returnChargeName ?? shipping.returnChargeName,
+    returnCharge: live.returnCharge ?? shipping.returnCharge,
+    companyContactNumber: live.companyContactNumber ?? shipping.companyContactNumber,
+    returnZipCode: live.returnZipCode ?? shipping.returnZipCode,
+    returnAddress: live.returnAddress ?? shipping.returnAddress,
+    returnAddressDetail: live.returnAddressDetail ?? shipping.returnAddressDetail,
     // Never re-trigger an approval submission as a side effect of an image
     // swap -- always submit as a temp-saved modify, same as every other
     // modify call in this codebase.
     requested: false,
-    items: (live.items || []).map((item) => ({
-      sellerProductItemId: item.sellerProductItemId,
-      itemName: item.itemName,
-      originalPrice: item.originalPrice,
-      salePrice: item.salePrice,
-      stockQuantity: item.maximumBuyCount,
-      maximumBuyCount: item.maximumBuyCount,
-      maximumBuyForPerson: item.maximumBuyForPerson,
-      maximumBuyForPersonPeriod: item.maximumBuyForPersonPeriod,
-      outboundShippingTimeDay: item.outboundShippingTimeDay,
-      unitCount: item.unitCount,
-      taxType: item.taxType,
-      parallelImported: item.parallelImported,
-      overseasPurchased: item.overseasPurchased,
-      adultOnly: item.adultOnly,
-      attributes: (item.attributes || [])
-        .filter((attribute) => String(attribute.attributeValueName || '').trim())
-        .map(({ attributeTypeName, attributeValueName, exposed }) => ({ attributeTypeName, attributeValueName, exposed })),
-      images,
-      notices: item.notices,
-      contents,
-      searchTags: item.searchTags,
-    })),
+    items: (live.items || []).map((item) => {
+      const {
+        itemId: _itemId,
+        marketplaceItemData: _marketplaceItemData,
+        // Same rationale as rocketGrowthAdditionalInformation above, at the
+        // item level -- its own distinct sellerProductItemId/vendorItemId
+        // for a parallel Rocket Growth listing, not this marketplace item.
+        rocketGrowthItemData: _rocketGrowthItemData,
+        ...itemRest
+      } = item;
+      return {
+        ...itemRest,
+        // Confirmed live 2026-08-15 (developers.coupang.com "상품 수정
+        // (승인필요)"): both sellerProductItemId and vendorItemId are
+        // required for Coupang to recognize a submitted item as an
+        // *existing* option rather than a delete-and-recreate -- omitting
+        // vendorItemId is what produced "판매중인 상품은 삭제할 수 없습니다"
+        // on an already-approved item.
+        sellerProductItemId: item.sellerProductItemId ?? item.marketplaceItemData?.sellerProductItemId,
+        vendorItemId: item.vendorItemId ?? item.marketplaceItemData?.vendorItemId,
+        originalPrice: item.originalPrice ?? item.marketplaceItemData?.priceData?.originalPrice,
+        salePrice: item.salePrice ?? item.marketplaceItemData?.priceData?.salePrice,
+        stockQuantity: item.maximumBuyCount,
+        // attributes intentionally NOT filtered/re-mapped -- left as-is via
+        // the ...itemRest spread above. Coupang's own troubleshooting
+        // guidance (see module comment above) is to resubmit the full
+        // retrieved JSON with only the intended fields changed; dropping an
+        // item's blank-valued attributes here previously shrank the
+        // attributes array versus what Coupang had on file, which is
+        // plausibly what a stricter validation pass reads the same way as a
+        // missing option -- "판매중인 상품은 삭제할 수 없습니다".
+        images,
+        contents,
+      };
+    }),
   };
 }
 

@@ -134,6 +134,7 @@ test('collectCoupangOrders pages through nextToken and records one row per flatt
     db: {},
     recordChannelOrderImpl: async (db, order) => { recorded.push(order); return { ...order, isNew: true }; },
     mapChannelOrderImpl: async (db, order) => order,
+    acknowledgeCoupangShipmentBoxIdsImpl: async () => {},
   });
   assert.equal(results.length, 2);
   assert.equal(recorded[0].channelOrderItemId, '64253897:3242596358');
@@ -147,10 +148,74 @@ test('collectCoupangOrders passes the collection client through to the mapper as
     db: {},
     recordChannelOrderImpl: async (db, order) => ({ ...order, id: 1, isNew: true }),
     mapChannelOrderImpl: async (db, order, options) => { mapperArgs = options; return { ...order, supplierMappingStatus: 'mapped' }; },
+    acknowledgeCoupangShipmentBoxIdsImpl: async () => {},
   });
   assert.equal(mapperArgs.coupangClientImpl, client);
   assert.equal(results[0].supplierMappingStatus, 'mapped');
   assert.equal(results[0].isNew, true);
+});
+
+test('collectCoupangOrders acknowledges every distinct shipmentBoxId seen (결제완료 -> 상품준비중), deduped across pages', async () => {
+  const client = {
+    async listOrderSheets({ nextToken }) {
+      if (!nextToken) return { data: [fakeOrderSheet({ shipmentBoxId: 111 })], nextToken: 'page-2' };
+      // Same shipmentBoxId reappearing (e.g. a bundled box with 2 items split
+      // across pages) must only be acknowledged once.
+      return { data: [fakeOrderSheet({ shipmentBoxId: 111 }), fakeOrderSheet({ shipmentBoxId: 222 })], nextToken: undefined };
+    },
+  };
+  const acknowledgedBatches = [];
+  await collectCoupangOrders(client, { createdAtFrom: 'a', createdAtTo: 'b' }, {
+    db: {},
+    recordChannelOrderImpl: async (db, order) => ({ ...order, isNew: true }),
+    mapChannelOrderImpl: async (db, order) => order,
+    acknowledgeCoupangShipmentBoxIdsImpl: async (c, ids) => { acknowledgedBatches.push(ids); },
+  });
+  assert.equal(acknowledgedBatches.length, 1);
+  assert.deepEqual([...acknowledgedBatches[0]].sort(), [111, 222]);
+});
+
+test('collectCoupangOrders does not acknowledge when collecting a non-ACCEPT status', async () => {
+  const client = { async listOrderSheets() { return { data: [fakeOrderSheet()] }; } };
+  let acknowledgeCalled = false;
+  await collectCoupangOrders(client, { createdAtFrom: 'a', createdAtTo: 'b', status: 'DELIVERING' }, {
+    db: {},
+    recordChannelOrderImpl: async (db, order) => ({ ...order, isNew: true }),
+    mapChannelOrderImpl: async (db, order) => order,
+    acknowledgeCoupangShipmentBoxIdsImpl: async () => { acknowledgeCalled = true; },
+  });
+  assert.equal(acknowledgeCalled, false);
+});
+
+test('collectCoupangOrders swallows an acknowledgement failure rather than losing already-recorded orders', async () => {
+  const client = { async listOrderSheets() { return { data: [fakeOrderSheet()] }; } };
+  const results = await collectCoupangOrders(client, { createdAtFrom: 'a', createdAtTo: 'b' }, {
+    db: {},
+    recordChannelOrderImpl: async (db, order) => ({ ...order, isNew: true }),
+    mapChannelOrderImpl: async (db, order) => order,
+    acknowledgeCoupangShipmentBoxIdsImpl: async () => { throw new Error('acknowledge failed'); },
+  });
+  assert.equal(results.length, 1);
+});
+
+test('collectCoupangOrders (default acknowledge implementation) chunks into batches of 50 per Coupang\'s documented recommendation', async () => {
+  // 51 distinct shipmentBoxIds on a single page, exercising the real
+  // (non-injected) acknowledgeCoupangShipmentBoxIds chunking against a
+  // mocked client.acknowledgeOrders.
+  const sheets = Array.from({ length: 51 }, (_, i) => fakeOrderSheet({ shipmentBoxId: 1000 + i, orderId: 2000 + i }));
+  const acknowledgedBatches = [];
+  const client = {
+    async listOrderSheets() { return { data: sheets }; },
+    async acknowledgeOrders(ids) { acknowledgedBatches.push(ids); },
+  };
+  await collectCoupangOrders(client, { createdAtFrom: 'a', createdAtTo: 'b' }, {
+    db: {},
+    recordChannelOrderImpl: async (db, order) => ({ ...order, isNew: true }),
+    mapChannelOrderImpl: async (db, order) => order,
+  });
+  assert.equal(acknowledgedBatches.length, 2);
+  assert.equal(acknowledgedBatches[0].length, 50);
+  assert.equal(acknowledgedBatches[1].length, 1);
 });
 
 test('collectNaverOrders is a no-op (no queryProductOrders call) when last-changed-statuses reports nothing', async () => {

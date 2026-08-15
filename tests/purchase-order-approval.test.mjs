@@ -23,14 +23,14 @@ function fakeChannelOrder(overrides = {}) {
 
 test('approveSupplierOrder throws NOT_FOUND when the supplier order does not exist', async () => {
   await assert.rejects(
-    approveSupplierOrder({}, {}, 1, { getSupplierOrderImpl: async () => null }),
+    approveSupplierOrder({}, {}, {}, 1, { getSupplierOrderImpl: async () => null }),
     (error) => { assert.equal(error.code, 'NOT_FOUND'); return true; },
   );
 });
 
 test('approveSupplierOrder refuses to approve a supplier order that is not awaiting_purchase_approval', async () => {
   await assert.rejects(
-    approveSupplierOrder({}, {}, 1, { getSupplierOrderImpl: async () => fakeSupplierOrder({ status: 'supplier_ordered' }) }),
+    approveSupplierOrder({}, {}, {}, 1, { getSupplierOrderImpl: async () => fakeSupplierOrder({ status: 'supplier_ordered' }) }),
     (error) => { assert.equal(error.code, 'NOT_APPROVABLE'); return true; },
   );
 });
@@ -38,7 +38,7 @@ test('approveSupplierOrder refuses to approve a supplier order that is not await
 test('approveSupplierOrder re-validates immediately before ordering, and refuses to order if that revalidation now blocks it', async () => {
   let createOrderCalled = false;
   const client = { async createOrder() { createOrderCalled = true; } };
-  const result = await approveSupplierOrder({}, client, 5, {
+  const result = await approveSupplierOrder({}, {}, client, 5, {
     getSupplierOrderImpl: async () => fakeSupplierOrder(),
     getChannelOrderImpl: async () => fakeChannelOrder(),
     buildSupplierOrderDraftImpl: async () => ({ id: 5, status: 'validating_supplier', blockReasons: ['SUPPLIER_SOLD_OUT'] }),
@@ -54,7 +54,7 @@ test('approveSupplierOrder locks, places the real order, and records the domeme 
   const client = {
     async createOrder(args) { createOrderArgs = args; return { orders: [{ orderNo: 14207678, itemNo: 40170547, recipientName: '김철수' }] }; },
   };
-  const result = await approveSupplierOrder({}, client, 5, {
+  const result = await approveSupplierOrder({}, {}, client, 5, {
     getSupplierOrderImpl: async () => fakeSupplierOrder(),
     getChannelOrderImpl: async () => fakeChannelOrder(),
     buildSupplierOrderDraftImpl: async () => fakeSupplierOrder(),
@@ -74,6 +74,24 @@ test('approveSupplierOrder locks, places the real order, and records the domeme 
   assert.equal(result.status, 'supplier_ordered');
 });
 
+test('approveSupplierOrder uses channelOrder.address1/address2 for deliInfo when the order was collected with the split already stored', async () => {
+  let createOrderArgs;
+  const client = {
+    async createOrder(args) { createOrderArgs = args; return { orders: [{ orderNo: 1 }] }; },
+  };
+  await approveSupplierOrder({}, {}, client, 5, {
+    getSupplierOrderImpl: async () => fakeSupplierOrder(),
+    getChannelOrderImpl: async () => fakeChannelOrder({ address1: '서울시 강남구', address2: '101동 202호' }),
+    buildSupplierOrderDraftImpl: async () => fakeSupplierOrder(),
+    getDraftOrderingContextImpl: async () => ({ supplierProductNo: '40170547' }),
+    markSupplierOrderingImpl: async () => fakeSupplierOrder({ status: 'supplier_ordering' }),
+    getValidDomemeSIdImpl: async () => 'sess-123',
+    recordSupplierOrderSuccessImpl: async () => ({ ...fakeSupplierOrder(), status: 'supplier_ordered' }),
+  });
+  assert.equal(createOrderArgs.deliInfo.address1, '서울시 강남구');
+  assert.equal(createOrderArgs.deliInfo.address2, '101동 202호');
+});
+
 test('approveSupplierOrder records a DomemePrivateApiError as a dcode-prefixed failure message, not a thrown exception', async () => {
   let recordedFailure;
   const client = {
@@ -81,7 +99,7 @@ test('approveSupplierOrder records a DomemePrivateApiError as a dcode-prefixed f
       throw new DomemePrivateApiError({ status: 200, operation: 'create_order', dcode: 'TOO_LESS_EMONEY_ERROR', dmessage: '현금성 이머니가 부족합니다' });
     },
   };
-  const result = await approveSupplierOrder({}, client, 5, {
+  const result = await approveSupplierOrder({}, {}, client, 5, {
     getSupplierOrderImpl: async () => fakeSupplierOrder(),
     getChannelOrderImpl: async () => fakeChannelOrder(),
     buildSupplierOrderDraftImpl: async () => fakeSupplierOrder(),
@@ -95,9 +113,25 @@ test('approveSupplierOrder records a DomemePrivateApiError as a dcode-prefixed f
   assert.equal(result.status, 'validating_supplier');
 });
 
+test('approveSupplierOrder passes the public domeme client (not the private one) into buildSupplierOrderDraft for its re-validation', async () => {
+  const publicClient = { fetchProductDetail: async () => ({}) };
+  const privateClient = { async createOrder() { return { orders: [{ orderNo: 1 }] }; } };
+  let seenClient;
+  await approveSupplierOrder({}, publicClient, privateClient, 5, {
+    getSupplierOrderImpl: async () => fakeSupplierOrder(),
+    getChannelOrderImpl: async () => fakeChannelOrder(),
+    buildSupplierOrderDraftImpl: async (db, client) => { seenClient = client; return fakeSupplierOrder(); },
+    getDraftOrderingContextImpl: async () => ({ supplierProductNo: '40170547' }),
+    markSupplierOrderingImpl: async () => fakeSupplierOrder({ status: 'supplier_ordering' }),
+    getValidDomemeSIdImpl: async () => 'sess-123',
+    recordSupplierOrderSuccessImpl: async () => ({ ...fakeSupplierOrder(), status: 'supplier_ordered' }),
+  });
+  assert.equal(seenClient, publicClient);
+});
+
 test('approveSupplierOrder throws ALREADY_IN_PROGRESS when markSupplierOrdering loses the race (status already moved on)', async () => {
   await assert.rejects(
-    approveSupplierOrder({}, {}, 5, {
+    approveSupplierOrder({}, {}, {}, 5, {
       getSupplierOrderImpl: async () => fakeSupplierOrder(),
       getChannelOrderImpl: async () => fakeChannelOrder(),
       buildSupplierOrderDraftImpl: async () => fakeSupplierOrder(),

@@ -11,6 +11,8 @@ function toChannelOrder(row) {
     orderStatus: row.order_status,
     recipientName: row.recipient_name,
     address: row.address,
+    address1: row.address1,
+    address2: row.address2,
     postalCode: row.postal_code,
     phone: row.phone,
     deliveryMemo: row.delivery_memo,
@@ -35,9 +37,9 @@ export async function recordChannelOrder(db, order) {
   const result = await db.query(
     `insert into channel_orders
        (channel, channel_order_id, channel_order_item_id, channel_product_id, option_info,
-        quantity, sale_price, order_status, recipient_name, address, postal_code, phone,
+        quantity, sale_price, order_status, recipient_name, address, address1, address2, postal_code, phone,
         delivery_memo, ordered_at, cancelled_at, raw_json)
-     values ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16)
+     values ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18)
      on conflict (channel, channel_order_item_id) do update set
        order_status = excluded.order_status,
        cancelled_at = excluded.cancelled_at,
@@ -49,7 +51,8 @@ export async function recordChannelOrder(db, order) {
     [
       order.channel, order.channelOrderId, order.channelOrderItemId, order.channelProductId ?? null,
       order.optionInfo ?? null, order.quantity ?? null, order.salePrice ?? null, order.orderStatus ?? null,
-      order.recipientName ?? null, order.address ?? null, order.postalCode ?? null, order.phone ?? null,
+      order.recipientName ?? null, order.address ?? null, order.address1 ?? null, order.address2 ?? null,
+      order.postalCode ?? null, order.phone ?? null,
       order.deliveryMemo ?? null, order.orderedAt ?? null, order.cancelledAt ?? null, order.rawJson ?? null,
     ],
   );

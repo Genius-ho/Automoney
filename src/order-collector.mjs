@@ -19,6 +19,10 @@ import { mapChannelOrder } from './order-supplier-mapper.mjs';
 // `${shipmentBoxId}:${vendorItemId}` is the real per-line unique key.
 export function normalizeCoupangOrder(orderSheet) {
   const receiver = orderSheet.receiver || {};
+  // Coupang's own receiver already splits addr1/addr2 -- kept separately
+  // (rather than joined-then-discarded) so purchase-order-approval.mjs's
+  // deliInfo can supply Domeme's required address2 without having to guess
+  // a split back out of free text later.
   const address = [receiver.addr1, receiver.addr2].filter(Boolean).join(' ') || null;
   return (orderSheet.orderItems || []).map((item) => ({
     channel: 'coupang',
@@ -31,6 +35,8 @@ export function normalizeCoupangOrder(orderSheet) {
     orderStatus: orderSheet.status ?? null,
     recipientName: receiver.name ?? null,
     address,
+    address1: receiver.addr1 ?? null,
+    address2: receiver.addr2 ?? null,
     postalCode: receiver.postCode ?? null,
     phone: receiver.safeNumber ?? null,
     deliveryMemo: null,
@@ -55,6 +61,8 @@ export function normalizeNaverOrder(record) {
   const order = record.order || {};
   const po = record.productOrder || {};
   const shipping = po.shippingAddress || {};
+  // Same split-then-discard fix as normalizeCoupangOrder above -- Naver's
+  // shippingAddress already separates baseAddress/detailedAddress.
   const address = [shipping.baseAddress, shipping.detailedAddress].filter(Boolean).join(' ') || null;
   // 15.1 (Phase 10): the current claim (if any) on this line is right here
   // on the same object Phase 7 already fetches -- no separate collection
@@ -73,6 +81,8 @@ export function normalizeNaverOrder(record) {
     orderStatus: po.productOrderStatus || null,
     recipientName: shipping.name || null,
     address,
+    address1: shipping.baseAddress || null,
+    address2: shipping.detailedAddress || null,
     postalCode: shipping.zipCode || null,
     phone: shipping.tel1 || shipping.tel2 || null,
     deliveryMemo: po.shippingMemo || null,
@@ -82,21 +92,38 @@ export function normalizeNaverOrder(record) {
   };
 }
 
+// "상품준비중 처리" (발주서 확인) -- confirmed spec, 2026-08-14
+// (developers.coupang.com/ko/api/shipments/changing-the-status-to-product-in-preparation):
+// Coupang only accepts still-ACCEPT shipmentBoxIds, and recommends 50 or
+// fewer per call, hence the chunking.
+async function acknowledgeCoupangShipmentBoxIds(client, shipmentBoxIds) {
+  for (let i = 0; i < shipmentBoxIds.length; i += 50) {
+    await client.acknowledgeOrders(shipmentBoxIds.slice(i, i + 50));
+  }
+}
+
 // Coupang requires createdAtFrom/createdAtTo/status all explicit, with a
 // 24-hour max window per call -- 'ACCEPT' (결제완료) is the one status
 // Phase 7 actually needs to collect ("결제완료 신규 주문 식별"); other
 // lifecycle statuses (DEPARTURE/DELIVERING/...) matter to Phase 9's
-// shipment sync, not this collection step.
+// shipment sync, not this collection step. Every ACCEPT shipmentBoxId seen
+// here also gets acknowledged (결제완료 -> 상품준비중) so a human never has to
+// do that step manually in WING -- best-effort: a failure here must not
+// roll back orders already recorded/mapped above, since it only blocks
+// shipping prep timing, not correctness of what got collected.
 export async function collectCoupangOrders(client, { createdAtFrom, createdAtTo, status = 'ACCEPT' }, {
   recordChannelOrderImpl = recordChannelOrder,
   mapChannelOrderImpl = mapChannelOrder,
+  acknowledgeCoupangShipmentBoxIdsImpl = acknowledgeCoupangShipmentBoxIds,
   db,
 } = {}) {
   const saved = [];
+  const shipmentBoxIds = new Set();
   let nextToken;
   do {
     const response = await client.listOrderSheets({ createdAtFrom, createdAtTo, status, nextToken });
     for (const orderSheet of response.data || []) {
+      if (orderSheet.shipmentBoxId != null) shipmentBoxIds.add(Number(orderSheet.shipmentBoxId));
       for (const normalized of normalizeCoupangOrder(orderSheet)) {
         const recorded = await recordChannelOrderImpl(db, normalized);
         const mapped = await mapChannelOrderImpl(db, recorded, { coupangClientImpl: client });
@@ -105,6 +132,14 @@ export async function collectCoupangOrders(client, { createdAtFrom, createdAtTo,
     }
     nextToken = response.nextToken || undefined;
   } while (nextToken);
+
+  if (status === 'ACCEPT' && shipmentBoxIds.size > 0) {
+    try {
+      await acknowledgeCoupangShipmentBoxIdsImpl(client, [...shipmentBoxIds]);
+    } catch (error) {
+      console.error(`orderCollector.acknowledgeFailed=${error.message}`);
+    }
+  }
   return saved;
 }
 

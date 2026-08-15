@@ -350,7 +350,18 @@ export async function buildRegistrationPreview(db, rootDir, draftId, {
   const stockByOptionValue = Object.fromEntries(
     (draft.options || []).filter((option) => option.stockQuantity != null).map((option) => [option.optionValue, option.stockQuantity]),
   );
+  // Confirmed live 2026-08-15 (draft 8, category 78691 "테이블/멀티트레이"):
+  // Coupang can offer several notice templates for one category, and
+  // templates[0] is not necessarily the best fit -- that category's first
+  // template was "자동차용품 (자동차부품/기타 자동차용품 등)", requiring fields
+  // only a real regulated auto part has (KC 인증, 적용차종, 연료절감장치 위험,
+  // 촉매제 검사합격증) for a plain plastic accessory, while "기타 재화" (Coupang's
+  // own generic catch-all, offered on the same category) needed none of
+  // that. "기타 재화" is never a wrong choice when Coupang itself lists it as
+  // an option for the category, so it's preferred over blindly taking
+  // templates[0] whenever it's present.
   const noticeCategoryTemplateName = overrides.noticeCategoryTemplateName
+    ?? categoryMeta?.noticeCategoryTemplates?.find((t) => t.noticeCategoryName === '기타 재화')?.noticeCategoryName
     ?? categoryMeta?.noticeCategoryTemplates?.[0]?.noticeCategoryName ?? null;
 
   const optionMapping = categoryMeta

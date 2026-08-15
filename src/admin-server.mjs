@@ -883,9 +883,10 @@ async function handleRequest({ request, response, db, aiSecrets, rootDir }) {
     const body = await readJson(request);
     if (body.confirm !== true) { sendJson(response, 400, { error: 'confirm: true is required to place a real order', code: 'CONFIRM_REQUIRED' }); return; }
     try {
-      const config = await loadDomemePrivateConfig(rootDir);
-      const client = new DomemePrivateClient(config);
-      const result = await approveSupplierOrder(db, client, supplierOrderId);
+      const [config, envConfig] = await Promise.all([loadDomemePrivateConfig(rootDir), loadEnvConfig(rootDir)]);
+      const privateClient = new DomemePrivateClient(config);
+      const publicClient = new DomemeClient({ apiKey: envConfig.domemeApiKey, endpoint: envConfig.domemeEndpoint });
+      const result = await approveSupplierOrder(db, publicClient, privateClient, supplierOrderId);
       sendJson(response, 200, { order: result });
     } catch (error) {
       if (error instanceof DomemePrivateApiError) { sendJson(response, 502, { error: error.message, dcode: error.dcode, dmessage: error.dmessage }); return; }
@@ -1075,7 +1076,7 @@ async function handleRequest({ request, response, db, aiSecrets, rootDir }) {
     const draftId = Number(analysisApplyMatch[1]);
     try {
       const body = await readJson(request);
-      const result = await applyProductAnalysis(db, draftId, { runId: Number(body.runId), fields: body.fields || {}, forceFields: body.forceFields || [] });
+      const result = await applyProductAnalysis(db, draftId, { runId: Number(body.runId), fields: body.fields || {}, forceFields: body.forceFields || [], fieldValues: body.fieldValues || {} });
       sendJson(response, 200, result);
     } catch (error) {
       if (error.code === 'RUN_NOT_FOUND' || error.code === 'DRAFT_NOT_FOUND') { sendJson(response, 404, { error: error.message, code: error.code }); return; }
@@ -2292,7 +2293,12 @@ export function adminHtml() {
       const tier=p?p.tier:'unresolved';
       const badge='<span class="badge status">'+escapeHtml(ANALYSIS_TIER_LABELS[tier]||tier)+'</span>'+(p?.legalField?' <span class="badge reasonReview">법적/제조정보</span>':'');
       const checkbox=p&&!p.blockedReason?'<input type="checkbox" data-apply-field="'+key+'" '+(p.autoSelected?'checked':'')+'>':'';
-      const blocked=p?.blockedReason?'<div class="muted">'+escapeHtml(ANALYSIS_BLOCK_LABELS[p.blockedReason]||p.blockedReason)+(p.forceable?' <label><input type="checkbox" data-force-field="'+key+'"> 그래도 적용</label>':'')+'</div>':'';
+      // A conflict has no single merged value to force through (see
+      // product-analysis-orchestrator.mjs's applyProductAnalysis) -- forcing
+      // it requires explicitly picking which candidate (Python vs Codex) to
+      // use, via this select rather than silently discarding both.
+      const conflictPicker=p?.conflict?' <select data-conflict-value-select="'+key+'"><option value="">값 선택...</option>'+(field.python?.value!=null?'<option value="'+attr(String(field.python.value))+'">Python: '+escapeHtml(String(field.python.value))+'</option>':'')+(field.codex?.value!=null?'<option value="'+attr(String(field.codex.value))+'">Codex: '+escapeHtml(String(field.codex.value))+'</option>':'')+'</select>':'';
+      const blocked=p?.blockedReason?'<div class="muted">'+escapeHtml(ANALYSIS_BLOCK_LABELS[p.blockedReason]||p.blockedReason)+(p.forceable?' <label><input type="checkbox" data-force-field="'+key+'"> 그래도 적용</label>'+conflictPicker:'')+'</div>':'';
       return '<div class="section"><h3>'+checkbox+' '+escapeHtml(label)+' '+badge+'</h3>'
         +'<table><tbody><tr><td class="muted">Python</td><td>'+escapeHtml(String(pythonVal))+'</td></tr><tr><td class="muted">Codex</td><td>'+escapeHtml(String(codexVal))+'</td></tr><tr><td class="muted">병합 최종값</td><td><strong>'+escapeHtml(String(mergedVal))+'</strong> (confidence '+(field.merged?.confidence??0)+')</td></tr></tbody></table>'
         +blocked+'<details><summary>근거 보기</summary>'+analysisEvidenceHtml(field.merged?.evidence)+'</details></div>';
@@ -2367,8 +2373,10 @@ export function adminHtml() {
         const fields={};
         for(const cb of container.querySelectorAll('[data-apply-field]:checked'))fields[cb.dataset.applyField]=true;
         const forceFields=[...container.querySelectorAll('[data-force-field]:checked')].map(cb=>cb.dataset.forceField);
+        const fieldValues={};
+        for(const sel of container.querySelectorAll('[data-conflict-value-select]'))if(sel.value)fieldValues[sel.dataset.conflictValueSelect]=sel.value;
         const resultEl=container.querySelector('#analysisApplyResult');
-        const result=await api('/api/product-drafts/'+id+'/analysis/apply',{method:'POST',body:JSON.stringify({runId,fields,forceFields})});
+        const result=await api('/api/product-drafts/'+id+'/analysis/apply',{method:'POST',body:JSON.stringify({runId,fields,forceFields,fieldValues})});
         resultEl.innerHTML='적용됨: '+(result.appliedFields.length?result.appliedFields.join(', '):'없음')+(result.blockedFields.length?' / 차단됨: '+result.blockedFields.map(b=>b.field+'('+(ANALYSIS_BLOCK_LABELS[b.reason]||b.reason)+')').join(', '):'');
         await loadAnalysisSection(id,draft);
       };

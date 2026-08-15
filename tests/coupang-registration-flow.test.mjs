@@ -372,6 +372,35 @@ test('buildRegistrationPreview blocks on an unresolved MANDATORY notice field ev
   assert.ok(!preview.readiness.missing.some((line) => line.includes('주요 소재')));
 });
 
+// Confirmed live 2026-08-15 against draft 8's real category (78691,
+// "테이블/멀티트레이"): its first-listed template required real-auto-part-only
+// fields (KC 인증/적용차종/etc.) for a plain plastic accessory, while "기타
+// 재화" -- listed second -- needed none of that. Preferring "기타 재화"
+// whenever the category offers it (rather than blindly taking templates[0])
+// avoids blocking registration on notice fields that plainly don't apply.
+test('buildRegistrationPreview prefers the "기타 재화" notice template over templates[0] when the category offers both', async () => {
+  const db = makeDraftsDb([]);
+  const autoPartsAndGenericCategoryMeta = {
+    ...CATEGORY_META,
+    noticeCategoryTemplates: [
+      {
+        noticeCategoryName: '자동차용품 (자동차부품/기타 자동차용품 등)',
+        noticeCategoryDetailNames: [
+          { noticeCategoryDetailName: 'KC 인증정보(자동차관리법에 따른 자기인증 대상 자동차부품에 한함)', required: 'MANDATORY' },
+          { noticeCategoryDetailName: '적용차종', required: 'MANDATORY' },
+        ],
+      },
+      { noticeCategoryName: '기타 재화', noticeCategoryDetailNames: [{ noticeCategoryDetailName: '품명 및 모델명', required: 'MANDATORY' }] },
+    ],
+  };
+  const preview = await buildRegistrationPreview(db, '/repo', 46, commonPreviewDeps({
+    categoryAdapterImpl: fakeCategoryAdapter({ categoryMeta: autoPartsAndGenericCategoryMeta }),
+  }));
+
+  assert.ok(preview.readiness.ready.some((line) => line.includes('고시정보 템플릿 선택: 기타 재화')));
+  assert.ok(!preview.readiness.missing.some((line) => line.includes('KC 인증정보')));
+});
+
 test('buildRegistrationPreview forwards overrides.noticeContentOverrides into the payload notices and unblocks readiness', async () => {
   const db = makeDraftsDb([]);
   const furnitureCategoryMeta = {
