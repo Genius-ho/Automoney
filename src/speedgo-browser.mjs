@@ -60,11 +60,18 @@ function hasVerifiedOriginProductNo(ids) {
 
 function channelProductNoFromSpeedgoSuccessEntries(entries, input) {
   const supplierProductNo = String(input?.supplierProductNo || '').trim();
-  const productName = String(input?.productName || '').trim();
   const matches = new Set();
   for (const entry of entries || []) {
+    // supplierProductNo alone is already the exact, unique real-world
+    // identifier of the submitted product (the same value findSupplierProduct
+    // searched for at the start of this run) -- an additional exact
+    // productName match is NOT reliable on top of it: Speedgo's own list page
+    // has a "상품명중복단어제거" (duplicate-word removal) feature that can
+    // silently drop a repeated word from the displayed name (confirmed live
+    // 2026-08-17, draft 11: our title had "캠핑" twice, the live listing only
+    // shows it once), so an exact string match against our own title
+    // permanently failed to recover an otherwise-successful registration.
     if (String(entry?.supplierProductNo || '').trim() !== supplierProductNo) continue;
-    if (String(entry?.productName || '').trim() !== productName) continue;
     if (!/전송완료/.test(String(entry?.statusText || ''))) continue;
     const match = String(entry?.itemChangeOnclick || '').match(
       /itemChange\(\s*['"]ss['"]\s*,\s*['"](\d+)['"]\s*,\s*['"](\d+)['"]/,
@@ -940,11 +947,23 @@ export function createSpeedgoBrowser({
       if (hasVerifiedOriginProductNo(linkIds)) return linkIds;
 
       try {
-        await page.goto(SPEEDGO_SUCCESS_LIST_URL, {
-          waitUntil: 'domcontentloaded',
-          timeout: SUBMISSION_TIMEOUT_MS,
-        });
-        if (typeof page.waitForTimeout === 'function') await page.waitForTimeout(1_000);
+        // Confirmed live 2026-08-17 (draft 11): a raw page.goto() to this URL
+        // drops the speedgo.domeggook.com subdomain session and bounces to a
+        // domeggook login page, even with a freshly-authenticated persistent
+        // profile -- that subdomain's session is only established via the
+        // real click-through submit flow (submitAndResolveIds' submit.click()
+        // above), not by a bare top-level navigation. submitAndResolveIds
+        // already lands the page on this exact URL as a side effect of that
+        // click before throwing UNRESOLVED_EXTERNAL_RESULT, so skip the
+        // redundant (session-breaking) re-navigation whenever we're already
+        // there, and only fall back to goto for the cases that aren't.
+        if (!page.url().startsWith(SPEEDGO_SUCCESS_LIST_URL)) {
+          await page.goto(SPEEDGO_SUCCESS_LIST_URL, {
+            waitUntil: 'domcontentloaded',
+            timeout: SUBMISSION_TIMEOUT_MS,
+          });
+          if (typeof page.waitForTimeout === 'function') await page.waitForTimeout(1_000);
+        }
         const entries = await page.locator('input[name="item[]"]').evaluateAll((inputs) => inputs.map((input) => {
           const row = input.closest('tr');
           const nameInput = row?.querySelector('input[name^="itemName["]');

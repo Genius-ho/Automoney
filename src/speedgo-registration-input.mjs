@@ -16,7 +16,6 @@ export function buildSpeedgoRegistrationInput(draft, { draftId } = {}) {
   if (draft.exportBlocked) throw draftError('DRAFT_BLOCKED', 'Product draft is blocked');
 
   const productName = String(draft.displayProductName || draft.name || '').trim();
-  const salePrice = Number(draft.salePrice);
   const mainImageUrl = draft.mainImages?.[0] || null;
   const detailImageUrls = draft.approvedAiDetailImages?.length
     ? [...draft.approvedAiDetailImages]
@@ -25,12 +24,22 @@ export function buildSpeedgoRegistrationInput(draft, { draftId } = {}) {
       : [...(draft.detailSliceImages || [])];
   const detailContent = String(draft.detailContent || '');
   const deliveryFee = Number(draft.deliveryFee ?? 0);
-  const options = (draft.options || []).map((option) => ({
+  const rawOptions = (draft.options || []).map((option) => ({
     groupName: option.groupName || '옵션',
     optionName: option.optionName,
     additionalPrice: Number(option.price ?? 0),
     stockQuantity: Number(option.stockQuantity ?? 999),
   }));
+  // Naver/Speedgo rejects a negative additionalPrice outright, but a
+  // per-option discount relative to the reference price (e.g. draft 11's
+  // "소형" priced 1800원 below "중형") is a normal, real price structure, not
+  // invalid data. Re-anchoring salePrice down to the cheapest option's real
+  // price -- and re-deriving every option's additionalPrice as its own real
+  // price's delta from that new floor -- keeps every option's actual price
+  // unchanged while making every additionalPrice >= 0.
+  const lowestAdditionalPrice = rawOptions.length ? Math.min(0, ...rawOptions.map((option) => option.additionalPrice)) : 0;
+  const salePrice = Number(draft.salePrice) + lowestAdditionalPrice;
+  const options = rawOptions.map((option) => ({ ...option, additionalPrice: option.additionalPrice - lowestAdditionalPrice }));
   const hasValidNumbers = Number.isFinite(deliveryFee) && deliveryFee >= 0
     && options.every((option) => Number.isFinite(option.additionalPrice)
       && option.additionalPrice >= 0

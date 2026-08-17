@@ -12,8 +12,9 @@ import { approveInboxImages } from './approval-inbox-service.mjs';
 import { listTaskRouting } from './ai/provider-settings-store.mjs';
 import { getProvider } from './ai/provider-registry.mjs';
 import { checkClaudeCliAvailability } from './claude-cli-client.mjs';
-import { loadClaudeCliConfig, loadCodexConfig, loadJobPathsConfig } from './config.mjs';
+import { loadClaudeCliConfig, loadCodexConfig, loadJobPathsConfig, loadNaverCommerceConfig } from './config.mjs';
 import { insertImageQaReview } from './image-qa-store.mjs';
+import { runSpeedgoNaverRegistration } from './speedgo-registration.mjs';
 
 const TASK_TYPE = 'generated_image_review';
 const DEFAULT_MAX_ATTEMPTS = 2;
@@ -147,6 +148,8 @@ export async function reviewGeneratedImages(db, rootDir, draftId, {
   loadRemoteImageForVisionImpl = loadRemoteImageForVision,
   generateMainImageImpl = generateMainImage,
   generateDetailImageSetImpl = generateDetailImageSet,
+  runSpeedgoNaverRegistrationImpl = runSpeedgoNaverRegistration,
+  loadNaverCommerceConfigImpl = loadNaverCommerceConfig,
 } = {}) {
   const { routes } = await listTaskRoutingImpl(db);
   const route = routes.find((r) => r.taskType === TASK_TYPE);
@@ -227,6 +230,8 @@ export async function reviewGeneratedImages(db, rootDir, draftId, {
     });
 
     if (verdict.pass) {
+      let approved = true;
+      let registrationError = null;
       try {
         await approveInboxImagesImpl(db, rootDir, draftId);
       } catch (error) {
@@ -237,9 +242,28 @@ export async function reviewGeneratedImages(db, rootDir, draftId, {
         // tick(), firing a critical Telegram alert meant for real infra
         // outages. The failed queue item already surfaces this in the human
         // approval inbox, so report it here instead of throwing.
-        return { verdict: 'pass', approved: false, registrationError: error.message, attempt };
+        approved = false;
+        registrationError = error.message;
       }
-      return { verdict: 'pass', approved: true, attempt };
+
+      // Naver's Speedgo path has a much lower registration bar than Coupang's
+      // (no mandatory category-attribute mapping, no certification notice) and
+      // already prefers the same approved image set (approvedAiDetailImages)
+      // -- so it's always worth attempting, regardless of whether the Coupang
+      // attempt above just succeeded or failed, rather than letting a
+      // Coupang-blocked product's image-generation spend go to waste.
+      // headless:true here (unattended path) -- distinct from the CLI
+      // script's interactive headless:false default, which is unchanged.
+      let naverOutcome;
+      try {
+        const naverConfig = await loadNaverCommerceConfigImpl(rootDir);
+        const result = await runSpeedgoNaverRegistrationImpl(db, rootDir, draftId, { confirm: true, headless: true, naverConfig });
+        naverOutcome = { ok: true, result };
+      } catch (error) {
+        naverOutcome = { ok: false, error: error.message, code: error.code };
+      }
+
+      return { verdict: 'pass', approved, registrationError, naverOutcome, attempt };
     }
 
     lastResult = { verdict: 'fail', issues: verdict.issues, attempt };

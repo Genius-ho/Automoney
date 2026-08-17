@@ -307,6 +307,34 @@ test('channel-only recovery resolves one exact Naver origin product before compl
   assert.equal(count(harness.calls, 'postProcess'), 1);
 });
 
+// Confirmed live 2026-08-17 (draft 11): Speedgo's own duplicate-word removal
+// changed the live product name Naver stored (dropped a repeated "캠핑"), so
+// requiring an exact channel.name match on top of the already-exact
+// channelProductNo + sellerManagementCode match permanently failed to
+// recover an otherwise-successful registration.
+test('channel-only recovery still resolves when the live Naver channel name differs from what was submitted', async () => {
+  const harness = makeHarness({
+    reservationAction: 'recover',
+    recoverIds: { channelProductNo: '888' },
+    searchResult: {
+      contents: [{
+        originProductNo: 777,
+        channelProducts: [{
+          originProductNo: 777,
+          channelProductNo: 888,
+          sellerManagementCode: '49168396',
+          name: '무타공 정리 정리 선반', // Naver/Speedgo's own altered name, not our exact submitted title
+        }],
+      }],
+    },
+  });
+
+  const result = await runSpeedgoNaverRegistration({}, 'C:/repo', 501, harness.deps);
+
+  assert.equal(result.originProductNo, '777');
+  assert.equal(result.channelProductNo, '888');
+});
+
 test('an already-linked registration never submits, recovers, or completes again', async () => {
   const harness = makeHarness({ reservationAction: 'already_linked' });
 

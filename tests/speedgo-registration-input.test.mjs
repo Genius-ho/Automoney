@@ -70,12 +70,43 @@ test('rejects invalid delivery fee, option price, and explicit stock quantity', 
     { ...validDraft, deliveryFee: 'not-a-number' },
     { ...validDraft, deliveryFee: -1 },
     { ...validDraft, options: [{ ...validDraft.options[0], price: 'not-a-number' }] },
-    { ...validDraft, options: [{ ...validDraft.options[0], price: -1 }] },
     { ...validDraft, options: [{ ...validDraft.options[0], stockQuantity: 'not-a-number' }] },
     { ...validDraft, options: [{ ...validDraft.options[0], stockQuantity: -1 }] },
   ]) {
     assert.throws(() => buildSpeedgoRegistrationInput(draft, { draftId: 501 }), { code: 'DRAFT_NOT_READY' });
   }
+});
+
+// A negative option price is a real, normal price structure (that option is
+// genuinely cheaper than the reference salePrice), not invalid data -- see
+// draft 11, 2026-08-17: 소형 priced 1800원 below 중형 blocked Naver
+// registration outright even though Coupang (a different additionalPrice
+// contract) accepted the exact same real prices unmodified.
+test('re-anchors salePrice to the cheapest option instead of rejecting a negative option price, preserving every option\'s real price', () => {
+  const input = buildSpeedgoRegistrationInput({
+    ...validDraft,
+    salePrice: 32270,
+    options: [
+      { groupName: '선택', optionName: '소형', price: -1800 },
+      { groupName: '선택', optionName: '중형', price: 0 },
+      { groupName: '선택', optionName: '대형', price: 6880 },
+    ],
+  }, { draftId: 501 });
+
+  assert.equal(input.salePrice, 30470); // 32270 - 1800, the real price of 소형
+  assert.deepEqual(input.options.map((o) => o.additionalPrice), [0, 1800, 8680]);
+  // real per-option price (salePrice + additionalPrice) is unchanged from the input
+  assert.deepEqual(input.options.map((o) => input.salePrice + o.additionalPrice), [30470, 32270, 39150]);
+});
+
+test('leaves salePrice/additionalPrice untouched when no option price is negative', () => {
+  const input = buildSpeedgoRegistrationInput({
+    ...validDraft,
+    salePrice: 19800,
+    options: [{ groupName: '색상', optionName: '화이트', price: 0 }, { groupName: '색상', optionName: '블랙', price: 500 }],
+  }, { draftId: 501 });
+  assert.equal(input.salePrice, 19800);
+  assert.deepEqual(input.options.map((o) => o.additionalPrice), [0, 500]);
 });
 
 test('rejects explicit NaN delivery fee, option price, and stock quantity', () => {

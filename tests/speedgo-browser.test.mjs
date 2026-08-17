@@ -50,6 +50,7 @@ function fakeBrowserHarness({
   popupRecoveryReady = false,
   popupExactSubmitAvailable = true,
   speedgoSuccessEntries = [],
+  alreadyOnSuccessList = false,
 } = {}) {
   const responseListeners = new Set();
   const values = new Map();
@@ -385,11 +386,13 @@ function fakeBrowserHarness({
 
   const page = {
     goto: async (url) => calls.push(`goto:${url}`),
-    url: () => hasSuccessUrlTransition
-      ? 'https://domemedb.domeggook.com/speedgo/result'
-      : searchSubmitted
-        ? 'https://domemedb.domeggook.com/index/item/supplyList.php?sf=no&sw=49168396'
-        : 'https://domemedb.domeggook.com/index/',
+    url: () => alreadyOnSuccessList
+      ? 'https://speedgo.domeggook.com/send/send_list.php?status=SUCCESS&types='
+      : hasSuccessUrlTransition
+        ? 'https://domemedb.domeggook.com/speedgo/result'
+        : searchSubmitted
+          ? 'https://domemedb.domeggook.com/index/item/supplyList.php?sf=no&sw=49168396'
+          : 'https://domemedb.domeggook.com/index/',
     locator: (css) => css === '.sub_cont_bane1' ? cardLocator : makeLocator({ css }),
     getByRole: (role, { name } = {}) => makeLocator({ role, name }),
     getByText: (text, options = {}) => {
@@ -1638,6 +1641,89 @@ test('recoverRegistration reads one exact completed Speedgo row without resubmit
   assert.equal(
     harness.calls.includes('goto:https://speedgo.domeggook.com/send/send_list.php?status=SUCCESS&types='),
     true,
+  );
+});
+
+// Confirmed live 2026-08-17 (draft 11): Speedgo's own list page silently
+// drops a repeated word from the displayed product name ("상품명중복단어제거"),
+// so the live entry's productName can legitimately differ from what we
+// submitted even for the correct row -- matching must rely on
+// supplierProductNo (the same unique id findSupplierProduct searched for)
+// instead of requiring an exact productName match too.
+test('recoverRegistration matches by supplierProductNo alone, tolerating a productName Speedgo itself altered (duplicate-word removal)', async (t) => {
+  const harness = fakeBrowserHarness({
+    successText: '',
+    popupSuccessText: '',
+    speedgoSuccessEntries: [{
+      supplierProductNo: '21169791',
+      productName: 'LW 캠핑 폴딩 테이블 박스 우드 스토리지 수납 공간 이동식 정리함 낚시 차박 2개 세트',
+      statusText: '전송완료 2026-08-17 22:45:52',
+      itemChangeOnclick: "itemChange('ss','21169791','13724274680');",
+    }],
+  });
+  const browser = createSpeedgoBrowser({ chromiumImpl: harness.chromium, rootDir: 'C:/repo' });
+  t.after(() => browser.close());
+  await openLivePopup(browser);
+
+  const ids = await browser.recoverRegistration({
+    supplierProductNo: '21169791',
+    productName: 'LW 캠핑 폴딩 테이블 박스 우드 스토리지 수납 공간 이동식 정리함 캠핑 낚시 차박 2개 세트',
+  });
+
+  assert.deepEqual(ids, { channelProductNo: '13724274680' });
+});
+
+test('recoverRegistration ignores a success-list row whose supplierProductNo does not match, even if everything else looks right', async (t) => {
+  const harness = fakeBrowserHarness({
+    successText: '',
+    popupSuccessText: '',
+    speedgoSuccessEntries: [{
+      supplierProductNo: '99999999',
+      productName: '다른 상품',
+      statusText: '전송완료 2026-08-17 22:45:52',
+      itemChangeOnclick: "itemChange('ss','99999999','111');",
+    }],
+  });
+  const browser = createSpeedgoBrowser({ chromiumImpl: harness.chromium, rootDir: 'C:/repo' });
+  t.after(() => browser.close());
+  await openLivePopup(browser);
+
+  await assert.rejects(browser.recoverRegistration({ supplierProductNo: '21169791', productName: 'LW 캠핑' }), { code: 'UNRESOLVED_EXTERNAL_RESULT' });
+});
+
+// Confirmed live 2026-08-17 (draft 11): submitAndResolveIds' own submit
+// click already lands the page on this exact URL before throwing
+// UNRESOLVED_EXTERNAL_RESULT (Speedgo's natural post-submit redirect) -- a
+// second, redundant page.goto() to the same URL right after drops the
+// speedgo.domeggook.com session and bounces to a domeggook login page
+// instead of the list, permanently losing an otherwise-successful
+// registration's ids. recoverRegistration must read the page it's already
+// on instead of re-navigating whenever it's already there.
+test('recoverRegistration reads the success list from the current page without re-navigating when already there', async (t) => {
+  const harness = fakeBrowserHarness({
+    successText: '',
+    popupSuccessText: '',
+    alreadyOnSuccessList: true,
+    speedgoSuccessEntries: [{
+      supplierProductNo: '49168396',
+      productName: '드래프트 119 상품',
+      statusText: '전송완료 2026-08-10 23:15:31',
+      itemChangeOnclick: "itemChange('ss','49168396','13716234819');",
+    }],
+  });
+  const browser = createSpeedgoBrowser({ chromiumImpl: harness.chromium, rootDir: 'C:/repo' });
+  t.after(() => browser.close());
+  await openLivePopup(browser);
+
+  const ids = await browser.recoverRegistration({
+    supplierProductNo: '49168396',
+    productName: '드래프트 119 상품',
+  });
+
+  assert.deepEqual(ids, { channelProductNo: '13716234819' });
+  assert.equal(
+    harness.calls.includes('goto:https://speedgo.domeggook.com/send/send_list.php?status=SUCCESS&types='),
+    false,
   );
 });
 

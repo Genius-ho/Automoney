@@ -52,13 +52,19 @@ function normalizedId(value) {
 function originProductNoFromExactChannelSearch(result, channelProductNo, input) {
   const expectedChannel = String(channelProductNo || '');
   const expectedSupplier = String(input?.supplierProductNo || '');
-  const expectedName = String(input?.productName || '');
   const matches = [];
   for (const content of result?.contents || []) {
     for (const channel of content?.channelProducts || []) {
       if (String(channel?.channelProductNo || '') !== expectedChannel) continue;
+      // Not also requiring an exact channel.name match against our own
+      // submitted title -- same reasoning as
+      // channelProductNoFromSpeedgoSuccessEntries in speedgo-browser.mjs:
+      // Speedgo's own duplicate-word removal can alter the live product name
+      // (confirmed live 2026-08-17, draft 11), and channelProductNo (already
+      // the exact search key above) + sellerManagementCode are already two
+      // independent, reliable real identifiers -- an exact name match on top
+      // only adds a false-negative risk, not real safety.
       if (String(channel?.sellerManagementCode || '') !== expectedSupplier) continue;
-      if (String(channel?.name || '') !== expectedName) continue;
       const originProductNo = normalizedId(channel?.originProductNo || content?.originProductNo);
       if (originProductNo) matches.push(originProductNo);
     }

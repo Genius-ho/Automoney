@@ -48,6 +48,8 @@ function commonDeps(overrides = {}) {
     approveInboxImagesImpl: async () => {},
     generateMainImageImpl: async () => {},
     generateDetailImageSetImpl: async () => {},
+    runSpeedgoNaverRegistrationImpl: async () => ({ originProductNo: '123', channelProductNo: '456' }),
+    loadNaverCommerceConfigImpl: async () => ({}),
     ...overrides,
   };
 }
@@ -92,7 +94,7 @@ test('reviewGeneratedImages calls approveInboxImages and records a pass review o
     insertImageQaReviewImpl: async (db, input) => recordedReviews.push(input),
     generateMainImageImpl: async () => { regenerateCalled = true; },
   }));
-  assert.deepEqual(result, { verdict: 'pass', approved: true, attempt: 1 });
+  assert.deepEqual(result, { verdict: 'pass', approved: true, registrationError: null, naverOutcome: { ok: true, result: { originProductNo: '123', channelProductNo: '456' } }, attempt: 1 });
   assert.deepEqual(approveCalled, { rootDir: '/repo', draftId: 8 });
   assert.equal(recordedReviews.length, 1);
   assert.equal(recordedReviews[0].verdict, 'pass');
@@ -104,7 +106,29 @@ test('reviewGeneratedImages reports (rather than throws) when the pass-triggered
     getProviderImpl: () => ({ analyzeImages: async () => passResult() }),
     approveInboxImagesImpl: async () => { throw Object.assign(new Error('Coupang registration failed: REGISTRATION_NOT_READY'), { code: 'REGISTRATION_NOT_READY' }); },
   }));
-  assert.deepEqual(result, { verdict: 'pass', approved: false, registrationError: 'Coupang registration failed: REGISTRATION_NOT_READY', attempt: 1 });
+  assert.deepEqual(result, { verdict: 'pass', approved: false, registrationError: 'Coupang registration failed: REGISTRATION_NOT_READY', naverOutcome: { ok: true, result: { originProductNo: '123', channelProductNo: '456' } }, attempt: 1 });
+});
+
+test('reviewGeneratedImages always attempts Naver/Speedgo registration on a QA pass, regardless of whether the Coupang attempt succeeded or failed', async () => {
+  let naverCalled = null;
+  const failingCoupang = commonDeps({
+    getProviderImpl: () => ({ analyzeImages: async () => passResult() }),
+    approveInboxImagesImpl: async () => { throw Object.assign(new Error('boom'), { code: 'REGISTRATION_NOT_READY' }); },
+    runSpeedgoNaverRegistrationImpl: async (db, rootDir, draftId, opts) => { naverCalled = { draftId, opts }; return { originProductNo: '1', channelProductNo: '2' }; },
+  });
+  const result = await reviewGeneratedImages({}, '/repo', 8, failingCoupang);
+  assert.deepEqual(naverCalled.opts, { confirm: true, headless: true, naverConfig: {} });
+  assert.equal(naverCalled.draftId, 8);
+  assert.deepEqual(result.naverOutcome, { ok: true, result: { originProductNo: '1', channelProductNo: '2' } });
+});
+
+test('reviewGeneratedImages catches a Naver/Speedgo failure (e.g. SPEEDGO_SESSION_EXPIRED) and reports it without throwing', async () => {
+  const result = await reviewGeneratedImages({}, '/repo', 8, commonDeps({
+    getProviderImpl: () => ({ analyzeImages: async () => passResult() }),
+    runSpeedgoNaverRegistrationImpl: async () => { throw Object.assign(new Error('The saved Speedgo session is not authenticated'), { code: 'SPEEDGO_SESSION_EXPIRED' }); },
+  }));
+  assert.equal(result.approved, true);
+  assert.deepEqual(result.naverOutcome, { ok: false, error: 'The saved Speedgo session is not authenticated', code: 'SPEEDGO_SESSION_EXPIRED' });
 });
 
 test('reviewGeneratedImages regenerates and re-reviews after a first-attempt fail, then approves on a second-attempt pass', async () => {
@@ -121,7 +145,7 @@ test('reviewGeneratedImages regenerates and re-reviews after a first-attempt fai
     generateDetailImageSetImpl: async (db, rootDir, jobDir, draftId, opts) => { regenerateArgs.push({ fn: 'detail', opts }); },
     approveInboxImagesImpl: async () => { approveCalled = true; },
   }));
-  assert.deepEqual(result, { verdict: 'pass', approved: true, attempt: 2 });
+  assert.deepEqual(result, { verdict: 'pass', approved: true, registrationError: null, naverOutcome: { ok: true, result: { originProductNo: '123', channelProductNo: '456' } }, attempt: 2 });
   assert.equal(analyzeCallCount, 2);
   assert.equal(approveCalled, true);
   assert.equal(regenerateArgs.length, 2);
