@@ -47,11 +47,34 @@ test('listApprovalInbox exposes one bulk action for a complete uploaded image pa
     pricing: { unitCostPrice: 12000, salePrice: 29900, expectedProfit: 5000 },
     mainImage: { id: 21, url: '/generated/main.jpg' },
     detailImages: ['/generated/01.jpg', '/generated/02.jpg'],
+    qaReview: null,
     error: null,
     updatedAt: '2026-08-11T08:00:00.000Z',
   });
   assert.match(db.calls[0], /awaiting_image_approval/);
   assert.match(db.calls[0], /image_count\s*=\s*10/i);
+});
+
+test('listApprovalInbox surfaces the latest image_qa_reviews verdict/issues on the image card when one exists', async () => {
+  const db = sequentialDb([[
+    {
+      queue_id: 2, draft_id: 118, product_name: '시스맥스 뉴트로 소품박스 3단', queue_status: 'awaiting_image_approval',
+      main_image_id: 21, main_image_url: '/generated/main.jpg', detail_set_id: 31, detail_image_count: 10,
+      detail_image_urls: ['/generated/01.jpg'], unit_cost_price: '12000', coupang_sale_price: '29900', coupang_expected_profit: '5000',
+      updated_at: '2026-08-11T08:00:00.000Z',
+      qa_verdict: 'fail', qa_issues: [{ severity: 'high', description: '7.5m text leaked from a reference image' }], qa_reviewed_at: '2026-08-11T08:05:00.000Z',
+      qa_attempts: 2,
+    },
+  ], [], [], []]);
+
+  const result = await listApprovalInbox(db);
+
+  assert.deepEqual(result.cards[0].qaReview, {
+    verdict: 'fail',
+    attempts: 2,
+    issues: [{ severity: 'high', description: '7.5m text leaked from a reference image' }],
+    reviewedAt: '2026-08-11T08:05:00.000Z',
+  });
 });
 
 test('listApprovalInbox separates sale, purchase, and failed cards with safe actions', async () => {

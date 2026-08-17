@@ -3,6 +3,10 @@ import { sliceLongDetailImagesForDraft } from './image-slicer.mjs';
 import { applyProductAnalysis, getLatestAnalysisRun, runProductAnalysis } from './product-analysis-orchestrator.mjs';
 import { generateDetailImageSet, generateMainImage } from './manual-ai/codex-image-runner.mjs';
 import { findDraftBySupplierProductNo, linkDraftToBatch, updateBatchCandidateStatus } from './batch-run-store.mjs';
+import { regenerateOptimizedTitles } from './admin-store.mjs';
+import { checkAutomatableReadiness } from './coupang-registration-flow.mjs';
+import { loadCoupangConfig } from './config.mjs';
+import { CoupangClient } from './coupang-client.mjs';
 
 const QUOTA_LOG_PATTERN = /rate.?limit|usage limit|quota exceeded|429/i;
 
@@ -91,10 +95,15 @@ export async function analyzeWinnerCandidate(db, candidateRow, {
   codexConfig,
   pythonConfig,
   jobPathsConfig = {},
+  coupangConfig,
   updateBatchCandidateStatusImpl = updateBatchCandidateStatus,
   runProductAnalysisImpl = runProductAnalysis,
   getLatestAnalysisRunImpl = getLatestAnalysisRun,
   applyProductAnalysisImpl = applyProductAnalysis,
+  regenerateOptimizedTitlesImpl = regenerateOptimizedTitles,
+  checkAutomatableReadinessImpl = checkAutomatableReadiness,
+  loadCoupangConfigImpl = loadCoupangConfig,
+  createCoupangClientImpl = (config) => new CoupangClient(config),
 } = {}) {
   const draftId = candidateRow.draftId;
   if (!draftId) {
@@ -132,6 +141,30 @@ export async function analyzeWinnerCandidate(db, candidateRow, {
   // gate (confidence/evidence/conflict) still decides what actually lands;
   // this only requests the 4 safe fields, never manufacturer/countryOfOrigin.
   await applyProductAnalysisImpl(db, draftId, { runId: run.id, fields: AUTO_APPLY_FIELDS }).catch(() => {});
+
+  // Mirrors what a human always did by hand before clicking approve on an
+  // auto-discovered draft (see 2026-08-17 session: drafts #9-11 hit
+  // REGISTRATION_NOT_READY because nobody ever had). regenerateOptimizedTitles
+  // is pure local text processing (no AI call, no cost) so it always runs.
+  // checkAutomatableReadiness runs *after* the AUTO_APPLY_FIELDS call above
+  // so dimensions/material are already known -- running it earlier would
+  // false-reject candidates whose "사이즈" mandatory attribute only resolves
+  // once dimensions are applied. A blocked result here means this category
+  // structurally cannot clear registration (e.g. a mandatory purchase-option
+  // attribute with no real corresponding data) -- fail fast, before Codex
+  // image-generation budget is spent, rather than only discovering this
+  // after images + QA as happened live on 2026-08-17.
+  await regenerateOptimizedTitlesImpl(db, draftId);
+  const coupangCfg = coupangConfig || await loadCoupangConfigImpl(rootDir);
+  const readiness = await checkAutomatableReadinessImpl(db, draftId, { coupangConfig: coupangCfg, clientImpl: createCoupangClientImpl(coupangCfg) });
+  if (readiness.blocked) {
+    await updateBatchCandidateStatusImpl(db, candidateRow.id, {
+      processingStatus: 'failed',
+      failureStage: 'registration_readiness_precheck',
+      failureMessage: readiness.missing.join('; '),
+    });
+    return { outcome: 'failed', stage: 'registration_readiness_precheck', draftId, errorCode: readiness.missing.join('; ') };
+  }
 
   return { outcome: 'success', stage: 'analysis', draftId, analysisRunId: run.id };
 }

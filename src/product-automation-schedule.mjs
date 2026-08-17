@@ -4,6 +4,7 @@ export const PRODUCT_STAGE_SLOTS = Object.freeze({
   draft: 7,
   analysis: 8,
   images: 9,
+  imageQa: 11,
   discovery: 10,
 });
 
@@ -33,6 +34,7 @@ const STAGE_FIELDS = Object.freeze({
   draft: ['draftNextRunAt', 'draftLastServiceDate'],
   analysis: ['analysisNextRunAt', 'analysisLastServiceDate'],
   images: ['imagesNextRunAt', 'imagesLastServiceDate'],
+  imageQa: ['qaNextRunAt', 'qaLastServiceDate'],
   discovery: ['discoveryNextRunAt', 'discoveryLastServiceDate'],
 });
 

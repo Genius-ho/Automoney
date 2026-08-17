@@ -92,6 +92,10 @@ export function renderManualMainImageWorkflowSection({request={},sourceMainImage
 function escapeHtmlForSection(value) { return String(value).replaceAll('&', '&amp;').replaceAll('<', '&lt;').replaceAll('>', '&gt;'); }
 
 const AUTO_BATCH_TICK_INTERVAL_MS = 5 * 60 * 1000;
+// "하루 3개씩" -- how many items each daily stage (draft/analysis/images/imageQa)
+// processes per due-check before marking itself done for the Korea service
+// date, up from the 1-per-day default (product-automation-schedule.mjs).
+const DAILY_PRODUCT_BATCH_SIZE = 3;
 
 const QUEUE_STATUS_LABELS = Object.freeze({
   queued: '대기 중', draft_created: '드래프트 생성 완료', analyzing: '분석 중', analysis_completed: '분석 완료',
@@ -203,8 +207,11 @@ export async function createAdminServer({ rootDir = process.cwd() } = {}) {
   const tickHandle = setInterval(async () => {
     if (!autoBatchDeps) return;
     try {
-      const result = await runDueProductAutomationStage(db, { rootDir, ...autoBatchDeps });
-      if (!result.skipped) console.log(`autoBatch.stageTick=${result.stage}:${result.outcome?.outcome || result.outcome?.reason || 'completed'}`);
+      const result = await runDueProductAutomationStage(db, { rootDir, ...autoBatchDeps }, { dailyBatchSize: DAILY_PRODUCT_BATCH_SIZE });
+      if (!result.skipped) {
+        const message = result.outcome?.message ? ` message=${JSON.stringify(result.outcome.message)}` : '';
+        console.log(`autoBatch.stageTick=${result.stage}:${result.outcome?.outcome || result.outcome?.reason || 'completed'} processed=${result.processedCount ?? 1}${message}`);
+      }
     } catch (error) {
       console.error(`autoBatch.tickError=${error.message}`);
       try {
@@ -1434,9 +1441,21 @@ export function adminHtml() {
       const details=(card.detailImages||[]).length?'<div><div class="muted">상세 이미지 '+card.detailImages.length+'장</div><div class="approvalDetailImages">'+card.detailImages.map((url,index)=>'<a href="'+attr(url)+'" target="_blank"><img src="'+attr(url)+'" alt="상세 이미지 '+(index+1)+'"></a>').join('')+'</div></div>':'';
       const images=main||details?'<div class="approvalImages">'+main+details+'</div>':'';
       const failure=card.error?'<div class="approvalError"><strong>'+escapeHtml(card.error.stage||'처리 실패')+'</strong><br>'+escapeHtml(card.error.message||'오류 내용 없음')+'</div>':'';
+      const qa=card.type==='image'?approvalQaReviewHtml(card.qaReview):'';
       const actions=(card.availableActions||[]).map(action=>approvalActionButtonHtml(action,card)).join('');
       const dismiss=card.type==='failed'?'<button type="button" data-dismiss-queue-id="'+card.queueId+'">삭제 (이미 처리됨)</button>':'';
-      return '<article class="approvalCard '+(card.type==='failed'?'failed':'')+'" data-approval-key="'+attr(card.key)+'"><h2>'+escapeHtml(card.title)+' <small>#'+escapeHtml(card.draftId??'-')+'</small></h2><div><span class="badge status">'+escapeHtml(APPROVAL_TYPE_LABELS[card.type]||card.type)+'</span> '+escapeHtml(card.status||'')+'</div>'+price+images+failure+'<div class="approvalActions">'+(actions||'<span class="muted">자동 재시도할 수 없습니다. 외부 상태 확인이 필요합니다.</span>')+dismiss+'<span data-action-result class="muted"></span></div></article>';
+      return '<article class="approvalCard '+(card.type==='failed'?'failed':'')+'" data-approval-key="'+attr(card.key)+'"><h2>'+escapeHtml(card.title)+' <small>#'+escapeHtml(card.draftId??'-')+'</small></h2><div><span class="badge status">'+escapeHtml(APPROVAL_TYPE_LABELS[card.type]||card.type)+'</span> '+escapeHtml(card.status||'')+'</div>'+price+images+qa+failure+'<div class="approvalActions">'+(actions||'<span class="muted">자동 재시도할 수 없습니다. 외부 상태 확인이 필요합니다.</span>')+dismiss+'<span data-action-result class="muted"></span></div></article>';
+    }
+    // 자동 이미지 검수(generated_image_review) 결과 -- 사람이 사진을 직접 안 봐도
+    // 왜 막혀있는지(또는 통과했는지) 바로 알 수 있게 노출. review가 null이면 아직
+    // 검수 전(task 비활성 또는 아직 순서가 안 옴)이라는 뜻.
+    function approvalQaReviewHtml(review){
+      if(!review)return '<div class="muted">AI 이미지 검수: 대기중</div>';
+      const attempts=review.attempts?' ('+review.attempts+'회 시도)':'';
+      if(review.verdict==='pass')return '<div class="badge status">AI 이미지 검수: 통과'+attempts+'</div>';
+      const issues=(review.issues||[]).map(i=>'<li>['+escapeHtml(i.severity||'')+'] '+escapeHtml(i.description||'')+'</li>').join('');
+      const label=review.verdict==='error'?'AI 이미지 검수 오류':'AI 이미지 검수: 문제 발견';
+      return '<div class="approvalError"><strong>'+label+attempts+'</strong><ul>'+issues+'</ul></div>';
     }
     function approvalActionButtonHtml(action,card){
       if(action==='approve_images')return '<button class="primary" type="button" data-approve-images-draft-id="'+card.draftId+'">전체 이미지 승인</button>';

@@ -26,6 +26,16 @@ const DEFAULT_MAIN_TIMEOUT_MS = 600_000;
 // per section mirrors the pattern that verified successfully for the main
 // image, and a failure in one section no longer costs the other nine.
 const DEFAULT_DETAIL_SECTION_TIMEOUT_MS = 240_000;
+// Confirmed live 2026-08-16: of 10 sections, 9 succeeded and exactly one
+// (a single Codex call) hit sectionTimeoutMs and produced no file --  a
+// transient per-call timeout, not a content/prompt problem (every other
+// section using the same prompt/instructions succeeded). Retrying only the
+// still-missing section(s) for a couple more passes recovers from this
+// without re-spending time on the 9 sections that already succeeded, and
+// without forcing the caller (generated-image-qa.mjs's regenerate-and-
+// re-review loop) to burn one of its own limited attempts on a problem
+// that's really just "try that one call again".
+const DETAIL_SECTION_MAX_PASSES = 3;
 
 function runnerError(code, message, details = {}) {
   const error = new Error(message);
@@ -86,7 +96,11 @@ async function listGeneratedImages(dir) {
     .sort();
 }
 
-function buildMainImagePrompt(request) {
+// extraInstructions (optional): generated-image-qa.mjs's retry loop passes
+// the previous attempt's QA-agent issues here so a regeneration actually
+// targets what was wrong last time, instead of just rerolling the same
+// prompt and hoping for a different random result.
+function buildMainImagePrompt(request, extraInstructions = null) {
   return [
     request.promptRendered,
     '',
@@ -96,6 +110,7 @@ function buildMainImagePrompt(request) {
     '- 이미지 안에 문구, 로고, 워터마크를 넣지 마세요.',
     '- 첨부된 원본 대표이미지를 참고해 원본 제품의 형태와 구조를 왜곡하지 마세요.',
     '- 생성 결과를 정확히 1장만 만들어 이 경로에 저장하세요: generated-main/main.png (다른 경로에 생성했다면 이 경로로 복사하세요)',
+    ...(extraInstructions ? ['', '=== 이전 시도에서 발견된 문제 (반드시 수정) ===', extraInstructions] : []),
   ].join('\n');
 }
 
@@ -105,7 +120,7 @@ function buildMainImagePrompt(request) {
 // the whole thing into ChatGPT would have), but each turn is scoped to a
 // single deliverable so Codex never has to juggle 10 image-tool calls in one
 // long session.
-function buildDetailSectionPrompt(request, section) {
+function buildDetailSectionPrompt(request, section, extraInstructions = null) {
   return [
     request.promptRendered,
     '',
@@ -117,6 +132,7 @@ function buildDetailSectionPrompt(request, section) {
     '- 원본 제품의 형태, 색상, 구조, 실제 옵션 구성을 임의로 바꾸거나 없는 사양을 만들어내지 마세요.',
     '- 첨부된 참고 이미지가 있다면 원본 제품 참고 자료입니다.',
     `- 생성 결과를 정확히 1장만 만들어 이 경로에 저장하세요: generated-detail/${String(section.index).padStart(2, '0')}-${section.key}.png (다른 경로에 생성했다면 이 경로로 복사하세요)`,
+    ...(extraInstructions ? ['', '=== 이전 시도에서 발견된 문제 (반드시 수정) ===', extraInstructions] : []),
   ].join('\n');
 }
 
@@ -131,6 +147,7 @@ export async function generateMainImage(db, rootDir, jobDir, draftId, {
   codexConfig,
   fetchImpl = globalThis.fetch,
   timeoutMs = DEFAULT_MAIN_TIMEOUT_MS,
+  extraInstructions = null,
   checkCodexAvailabilityImpl,
   checkCodexImageGenerationAvailableImpl,
   runCodexImagePromptImpl = runCodexImagePrompt,
@@ -155,7 +172,7 @@ export async function generateMainImage(db, rootDir, jobDir, draftId, {
   const written = await writeEntriesToDisk(entries, paths.inputDir);
   const sourceImage = written.find((item) => item.name.startsWith('01-source-main-image'));
 
-  const prompt = buildMainImagePrompt(context.request);
+  const prompt = buildMainImagePrompt(context.request, extraInstructions);
   const result = await runCodexImagePromptImpl({
     // loadCodexConfig defaults to sandbox:'read-only' for the (never-writes)
     // analysis pipeline; image generation always needs to save its output
@@ -221,6 +238,7 @@ export async function generateDetailImageSet(db, rootDir, jobDir, draftId, {
   codexConfig,
   fetchImpl = globalThis.fetch,
   sectionTimeoutMs = DEFAULT_DETAIL_SECTION_TIMEOUT_MS,
+  extraInstructions = null,
   checkCodexAvailabilityImpl,
   checkCodexImageGenerationAvailableImpl,
   runCodexImagePromptImpl = runCodexImagePrompt,
@@ -255,20 +273,23 @@ export async function generateDetailImageSet(db, rootDir, jobDir, draftId, {
 
   const sections = getDetailPageSections();
   let combinedLog = '';
-  for (const section of sections) {
-    const alreadyExists = (await listGeneratedImages(paths.generatedDetailDir))
-      .some((path) => path.includes(`${String(section.index).padStart(2, '0')}-${section.key}`));
-    if (alreadyExists) continue; // a retry of a partially-completed run should not regenerate sections that already succeeded
-    const prompt = buildDetailSectionPrompt(context.request, section);
-    const sectionResult = await runCodexImagePromptImpl({
-      // Same override as generateMainImage -- must write into this job folder.
-      config: { ...codexConfig, sandbox: 'workspace-write' },
-      cwd: paths.root,
-      images: mainReference ? [mainReference.path] : [],
-      prompt,
-      timeoutMs: sectionTimeoutMs,
-    });
-    combinedLog += `\n\n=== section ${section.index} (${section.label}) success=${sectionResult.success} timedOut=${Boolean(sectionResult.timedOut)} ===\n${sectionResult.log || ''}`;
+  for (let pass = 1; pass <= DETAIL_SECTION_MAX_PASSES; pass += 1) {
+    const existing = await listGeneratedImages(paths.generatedDetailDir);
+    const pending = sections.filter((section) =>
+      !existing.some((path) => path.includes(`${String(section.index).padStart(2, '0')}-${section.key}`)));
+    if (pending.length === 0) break; // every section already has a file on disk (fresh run finished, or a prior interrupted run is being resumed)
+    for (const section of pending) {
+      const prompt = buildDetailSectionPrompt(context.request, section, extraInstructions);
+      const sectionResult = await runCodexImagePromptImpl({
+        // Same override as generateMainImage -- must write into this job folder.
+        config: { ...codexConfig, sandbox: 'workspace-write' },
+        cwd: paths.root,
+        images: mainReference ? [mainReference.path] : [],
+        prompt,
+        timeoutMs: sectionTimeoutMs,
+      });
+      combinedLog += `\n\n=== pass ${pass} section ${section.index} (${section.label}) success=${sectionResult.success} timedOut=${Boolean(sectionResult.timedOut)} ===\n${sectionResult.log || ''}`;
+    }
   }
   await writeFile(paths.detailCodexLogPath, combinedLog);
 

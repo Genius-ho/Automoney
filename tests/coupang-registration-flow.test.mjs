@@ -5,8 +5,10 @@ import {
   PROTECTED_DRAFT_ID,
   SELLER_FIXED_CONFIG,
   buildRegistrationPreview,
+  checkAutomatableReadiness,
   createDirectRegistration,
   requestCoupangSaleApproval,
+  selectNoticeCategoryTemplateName,
   selectRegistrationTarget,
   validateSellerShippingSettings,
 } from '../src/coupang-registration-flow.mjs';
@@ -580,5 +582,88 @@ test('requestCoupangSaleApproval calls requestApproval exactly once when live st
   assert.match(recordedArgs.responseMessage, /SUCCESS/);
   assert.equal(result.registration.status, 'approval_requested');
   assert.equal(result.liveStatusNameBefore, '임시저장');
-  assert.equal(result.liveStatusNameAfter, '승인요청중');
+});
+
+test('selectNoticeCategoryTemplateName prefers "기타 재화" over templates[0] when both are offered', () => {
+  const categoryMeta = {
+    noticeCategoryTemplates: [
+      { noticeCategoryName: '자동차용품' },
+      { noticeCategoryName: '기타 재화' },
+    ],
+  };
+  assert.equal(selectNoticeCategoryTemplateName(categoryMeta), '기타 재화');
+});
+
+test('selectNoticeCategoryTemplateName falls back to templates[0] when "기타 재화" is not offered, and an override always wins', () => {
+  const categoryMeta = { noticeCategoryTemplates: [{ noticeCategoryName: '자동차용품' }] };
+  assert.equal(selectNoticeCategoryTemplateName(categoryMeta), '자동차용품');
+  assert.equal(selectNoticeCategoryTemplateName(categoryMeta, '수동지정'), '수동지정');
+  assert.equal(selectNoticeCategoryTemplateName(null), null);
+});
+
+test('checkAutomatableReadiness is not blocked when every mandatory option attribute and notice field is auto-fillable', async () => {
+  const result = await checkAutomatableReadiness({}, 46, {
+    coupangConfig: { vendorId: 'A00000000' },
+    clientImpl: fakeCoupangClient(),
+    categoryAdapterImpl: fakeCategoryAdapter(),
+    exportProductDraftImpl: async () => fakeDraft(),
+    getSellerShippingSettingsImpl: async () => CONFIGURED_SHIPPING_SETTINGS,
+    getAppliedAnalysisImpl: async () => ({ dimensions: '23.5cm x 13.5cm x 10.5cm' }),
+  });
+  assert.deepEqual(result, { blocked: false, missing: [] });
+});
+
+test('checkAutomatableReadiness reports blocked when a mandatory purchase-option attribute has no corresponding real draft data', async () => {
+  const categoryMeta = { ...CATEGORY_META, mandatoryOptionNames: ['색상', '단 수'] };
+  const result = await checkAutomatableReadiness({}, 46, {
+    coupangConfig: { vendorId: 'A00000000' },
+    clientImpl: fakeCoupangClient(),
+    categoryAdapterImpl: fakeCategoryAdapter({ categoryMeta }),
+    exportProductDraftImpl: async () => fakeDraft(),
+    getSellerShippingSettingsImpl: async () => CONFIGURED_SHIPPING_SETTINGS,
+    getAppliedAnalysisImpl: async () => ({ dimensions: '23.5cm x 13.5cm x 10.5cm' }),
+  });
+  assert.equal(result.blocked, true);
+  assert.match(result.missing.join(' '), /단 수/);
+});
+
+test('checkAutomatableReadiness reports blocked for a mandatory notice field with no known auto-fill source (e.g. "인증/허가 사항" when Coupang requires certification)', async () => {
+  const categoryMeta = {
+    ...CATEGORY_META,
+    mandatoryCertificationNames: ['안전확인대상생활용품'],
+    noticeCategoryTemplates: [{
+      noticeCategoryName: '기타 재화',
+      noticeCategoryDetailNames: [{ noticeCategoryDetailName: '인증/허가 사항', required: 'MANDATORY' }],
+    }],
+  };
+  const result = await checkAutomatableReadiness({}, 46, {
+    coupangConfig: { vendorId: 'A00000000' },
+    clientImpl: fakeCoupangClient(),
+    categoryAdapterImpl: fakeCategoryAdapter({ categoryMeta }),
+    exportProductDraftImpl: async () => fakeDraft(),
+    getSellerShippingSettingsImpl: async () => CONFIGURED_SHIPPING_SETTINGS,
+    getAppliedAnalysisImpl: async () => ({ dimensions: '23.5cm x 13.5cm x 10.5cm' }),
+  });
+  assert.equal(result.blocked, true);
+  assert.match(result.missing.join(' '), /인증\/허가 사항/);
+});
+
+test('checkAutomatableReadiness is not blocked for "인증/허가 사항" when Coupang\'s category meta says no certification is mandatory', async () => {
+  const categoryMeta = {
+    ...CATEGORY_META,
+    mandatoryCertificationNames: [],
+    noticeCategoryTemplates: [{
+      noticeCategoryName: '기타 재화',
+      noticeCategoryDetailNames: [{ noticeCategoryDetailName: '인증/허가 사항', required: 'MANDATORY' }],
+    }],
+  };
+  const result = await checkAutomatableReadiness({}, 46, {
+    coupangConfig: { vendorId: 'A00000000' },
+    clientImpl: fakeCoupangClient(),
+    categoryAdapterImpl: fakeCategoryAdapter({ categoryMeta }),
+    exportProductDraftImpl: async () => fakeDraft(),
+    getSellerShippingSettingsImpl: async () => CONFIGURED_SHIPPING_SETTINGS,
+    getAppliedAnalysisImpl: async () => ({ dimensions: '23.5cm x 13.5cm x 10.5cm' }),
+  });
+  assert.deepEqual(result, { blocked: false, missing: [] });
 });

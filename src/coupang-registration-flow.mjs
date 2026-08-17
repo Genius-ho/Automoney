@@ -2,7 +2,7 @@ import { createHash } from 'node:crypto';
 
 import { CoupangClient } from './coupang-client.mjs';
 import { createCoupangCategoryAdapter } from './coupang-category-adapter.mjs';
-import { buildCoupangProductPayload, extractSupplierNoticeFields, formatKstDateTime, mapOptionsToMandatoryAttributes, resolveBrandIdentifier } from './coupang-payload-builder.mjs';
+import { AUTO_FILLABLE_NOTICE_FIELDS, buildCoupangProductPayload, extractSupplierNoticeFields, formatKstDateTime, mapOptionsToMandatoryAttributes, resolveBrandIdentifier } from './coupang-payload-builder.mjs';
 import { uploadApprovedImagesToR2 } from './r2-publisher.mjs';
 import { exportProductDraft } from './admin-store.mjs';
 import { getAppliedAnalysis } from './product-analysis-orchestrator.mjs';
@@ -276,6 +276,69 @@ function buildReadinessReport({ draft, prediction, categoryMeta, optionMapping, 
   return { ready, missing, blocked: missing.length > 0 };
 }
 
+// Confirmed live 2026-08-15 (draft 8, category 78691 "테이블/멀티트레이"):
+// Coupang can offer several notice templates for one category, and
+// templates[0] is not necessarily the best fit -- that category's first
+// template was "자동차용품 (자동차부품/기타 자동차용품 등)", requiring fields
+// only a real regulated auto part has (KC 인증, 적용차종, 연료절감장치 위험,
+// 촉매제 검사합격증) for a plain plastic accessory, while "기타 재화" (Coupang's
+// own generic catch-all, offered on the same category) needed none of
+// that. "기타 재화" is never a wrong choice when Coupang itself lists it as
+// an option for the category, so it's preferred over blindly taking
+// templates[0] whenever it's present.
+export function selectNoticeCategoryTemplateName(categoryMeta, overrideName = null) {
+  return overrideName
+    ?? categoryMeta?.noticeCategoryTemplates?.find((t) => t.noticeCategoryName === '기타 재화')?.noticeCategoryName
+    ?? categoryMeta?.noticeCategoryTemplates?.[0]?.noticeCategoryName ?? null;
+}
+
+// Cheap, read-only "can this draft ever auto-register without a human typing
+// something in" check, run right after analysis (batch-winner-processor.mjs)
+// -- before Codex image generation is spent on a candidate whose category
+// structurally cannot clear registration readiness (e.g. a mandatory
+// purchase-option attribute, like "단 수", with no corresponding real data
+// anywhere on the draft). Deliberately narrower than buildReadinessReport:
+// it never runs (images/shipping-place already resolved by the time imageQa
+// reaches a draft), so this only checks the two things that depend on real
+// product data rather than seller-account state: option-attribute mapping
+// and notice-field coverage.
+export async function checkAutomatableReadiness(db, draftId, { coupangConfig, clientImpl, categoryAdapterImpl, exportProductDraftImpl = exportProductDraft, getSellerShippingSettingsImpl = getSellerShippingSettings, getAppliedAnalysisImpl = getAppliedAnalysis, previewCategoryAndShippingImpl = previewCategoryAndShipping } = {}) {
+  const client = clientImpl || new CoupangClient(coupangConfig);
+  const { draft, categoryMeta } = await previewCategoryAndShippingImpl(db, draftId, { coupangConfig, clientImpl: client, categoryAdapterImpl, exportProductDraftImpl, getSellerShippingSettingsImpl });
+  const appliedAnalysis = await getAppliedAnalysisImpl(db, draftId);
+
+  const missing = [];
+  if (!categoryMeta) {
+    missing.push('카테고리 메타정보 없음 -- 필수옵션/고시정보 확인 불가');
+    return { blocked: true, missing };
+  }
+
+  const optionMapping = mapOptionsToMandatoryAttributes({
+    draftOptions: draft.options,
+    mandatoryOptionNames: categoryMeta.mandatoryOptionNames,
+    sizeAttributeValue: appliedAnalysis?.dimensions ?? null,
+    attributeMeta: categoryMeta.attributes || [],
+  });
+  if (optionMapping.unresolvedMandatoryAttributes.length > 0) {
+    missing.push(`필수 구매옵션 미해결: ${JSON.stringify(optionMapping.unresolvedMandatoryAttributes)}`);
+  }
+
+  const noticeCategoryTemplateName = selectNoticeCategoryTemplateName(categoryMeta);
+  const template = (categoryMeta.noticeCategoryTemplates || []).find((t) => t.noticeCategoryName === noticeCategoryTemplateName);
+  const unresolvedNoticeFields = (template?.noticeCategoryDetailNames || [])
+    .filter((detail) => detail.required === 'MANDATORY')
+    .filter((detail) => {
+      if (detail.noticeCategoryDetailName === '인증/허가 사항') return categoryMeta.mandatoryCertificationNames.length > 0;
+      return !AUTO_FILLABLE_NOTICE_FIELDS.includes(detail.noticeCategoryDetailName);
+    })
+    .map((detail) => detail.noticeCategoryDetailName);
+  if (unresolvedNoticeFields.length > 0) {
+    missing.push(`고시정보 자동입력 불가: ${JSON.stringify(unresolvedNoticeFields)}`);
+  }
+
+  return { blocked: missing.length > 0, missing };
+}
+
 // Steps 4-7: autofill from product_analysis_applied + supplier raw data +
 // seller-fixed config, R2-publish the approved images, and assemble the
 // final requested=false payload via the existing payload builder. `overrides`
@@ -350,19 +413,7 @@ export async function buildRegistrationPreview(db, rootDir, draftId, {
   const stockByOptionValue = Object.fromEntries(
     (draft.options || []).filter((option) => option.stockQuantity != null).map((option) => [option.optionValue, option.stockQuantity]),
   );
-  // Confirmed live 2026-08-15 (draft 8, category 78691 "테이블/멀티트레이"):
-  // Coupang can offer several notice templates for one category, and
-  // templates[0] is not necessarily the best fit -- that category's first
-  // template was "자동차용품 (자동차부품/기타 자동차용품 등)", requiring fields
-  // only a real regulated auto part has (KC 인증, 적용차종, 연료절감장치 위험,
-  // 촉매제 검사합격증) for a plain plastic accessory, while "기타 재화" (Coupang's
-  // own generic catch-all, offered on the same category) needed none of
-  // that. "기타 재화" is never a wrong choice when Coupang itself lists it as
-  // an option for the category, so it's preferred over blindly taking
-  // templates[0] whenever it's present.
-  const noticeCategoryTemplateName = overrides.noticeCategoryTemplateName
-    ?? categoryMeta?.noticeCategoryTemplates?.find((t) => t.noticeCategoryName === '기타 재화')?.noticeCategoryName
-    ?? categoryMeta?.noticeCategoryTemplates?.[0]?.noticeCategoryName ?? null;
+  const noticeCategoryTemplateName = selectNoticeCategoryTemplateName(categoryMeta, overrides.noticeCategoryTemplateName);
 
   const optionMapping = categoryMeta
     ? mapOptionsToMandatoryAttributes({

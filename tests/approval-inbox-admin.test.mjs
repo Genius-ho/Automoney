@@ -88,4 +88,5 @@ test('admin HTML opens a one-click approval inbox by default', () => {
   assert.match(html, /data-retry-queue-id/);
   assert.match(html, /data-dismiss-queue-id/);
   assert.match(html, /loadApprovalInbox\(\)/);
+  assert.match(html, /AI 이미지 검수/);
 });

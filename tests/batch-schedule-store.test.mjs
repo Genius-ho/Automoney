@@ -33,6 +33,10 @@ function fakeRow(overrides = {}) {
     images_last_run_at: null,
     images_last_service_date: null,
     images_last_outcome: null,
+    qa_next_run_at: '2026-07-21T02:00:00Z',
+    qa_last_run_at: null,
+    qa_last_service_date: null,
+    qa_last_outcome: null,
     discovery_last_service_date: null,
     discovery_last_outcome: null,
     updated_at: '2026-07-20T00:00:00Z',
@@ -51,6 +55,7 @@ test('getBatchScheduleState maps independent fixed stage fields', async () => {
   assert.equal(state.draftNextRunAt, '2026-07-20T22:00:00Z');
   assert.equal(state.analysisNextRunAt, '2026-07-20T23:00:00Z');
   assert.equal(state.imagesNextRunAt, '2026-07-21T00:00:00Z');
+  assert.equal(state.qaNextRunAt, '2026-07-21T02:00:00Z');
   assert.equal(state.discoveryNextRunAt, '2026-07-23T00:00:00Z');
 });
 
@@ -67,6 +72,15 @@ test('completeProductStage updates only the whitelisted stage and releases the l
   assert.match(capturedSql, /is_running = false/);
   assert.deepEqual(capturedParams, ['2026-08-11', '2026-08-11T23:00:00Z', 'no_work']);
   await assert.rejects(() => completeProductStage(db, 'unknown', {}), /unknown product stage/);
+});
+
+test('completeProductStage handles the imageQa stage using the qa_* column prefix', async () => {
+  let capturedSql;
+  const db = { async query(sql) { capturedSql = sql; return { rows: [fakeRow()] }; } };
+  await completeProductStage(db, 'imageQa', { serviceDate: '2026-08-11', nextRunAt: '2026-08-12T02:00:00Z', outcome: 'success' });
+  assert.match(capturedSql, /qa_last_service_date/);
+  assert.match(capturedSql, /qa_next_run_at/);
+  assert.match(capturedSql, /qa_last_outcome/);
 });
 
 test('getBatchScheduleState maps both the discovery and processing schedule fields to camelCase', async () => {

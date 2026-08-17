@@ -8,6 +8,7 @@ import {
   getQueueItemByDraftId,
   getNextAnalysisItem,
   getNextImageItem,
+  getNextQaReviewItem,
   getNextQueuedItem,
   getNextQueueItem,
   isCandidateActiveOrQueued,
@@ -41,6 +42,20 @@ test('stage selectors each query only their eligible queue status', async () => 
   assert.match(sqls[1], /status in \('draft_created', 'analyzing'\)/);
   assert.match(sqls[2], /status in \('analysis_completed', 'generating_images'\)/);
   assert.ok(sqls.every((sql) => !sql.includes('ready_for_registration')));
+});
+
+test('getNextQaReviewItem only selects awaiting_image_approval rows with no existing image_qa_reviews row', async () => {
+  let capturedSql;
+  const db = { async query(sql) { capturedSql = sql; return { rows: [fakeRow({ status: 'awaiting_image_approval' })] }; } };
+  const item = await getNextQaReviewItem(db);
+  assert.match(capturedSql, /status = 'awaiting_image_approval'/);
+  assert.match(capturedSql, /not exists \(select 1 from image_qa_reviews/);
+  assert.equal(item.status, 'awaiting_image_approval');
+});
+
+test('getNextQaReviewItem returns null when nothing is due', async () => {
+  const db = { async query() { return { rows: [] }; } };
+  assert.equal(await getNextQaReviewItem(db), null);
 });
 
 test('isCandidateActiveOrQueued is true when a draft already exists, even if the queue has no active row', async () => {

@@ -15,7 +15,7 @@ test('Korea service dates cross the UTC boundary at 15:00', () => {
 });
 
 test('fixed stage slots map to exact Korea hours', () => {
-  assert.deepEqual(PRODUCT_STAGE_SLOTS, { draft: 7, analysis: 8, images: 9, discovery: 10 });
+  assert.deepEqual(PRODUCT_STAGE_SLOTS, { draft: 7, analysis: 8, images: 9, imageQa: 11, discovery: 10 });
   assert.equal(slotForServiceDate('2026-08-11', 7).toISOString(), '2026-08-10T22:00:00.000Z');
   assert.equal(slotForServiceDate('2026-08-11', 10).toISOString(), '2026-08-11T01:00:00.000Z');
   assert.equal(nextDailySlot(new Date('2026-08-10T21:00:00Z'), 7).toISOString(), '2026-08-10T22:00:00.000Z');
@@ -32,6 +32,17 @@ test('late startup selects only the oldest due stage', () => {
   assert.deepEqual(
     selectOldestDueStage(state, new Date('2026-08-11T01:30:00Z')),
     { stage: 'draft', serviceDate: '2026-08-11', dueAt: new Date('2026-08-10T22:00:00Z') },
+  );
+});
+
+test('imageQa is selected like any other daily stage when its own qaNextRunAt is due', () => {
+  const state = {
+    qaNextRunAt: '2026-08-11T02:00:00Z',
+    draftNextRunAt: '2026-08-11T22:00:00Z',
+  };
+  assert.deepEqual(
+    selectOldestDueStage(state, new Date('2026-08-11T03:00:00Z')),
+    { stage: 'imageQa', serviceDate: '2026-08-11', dueAt: new Date('2026-08-11T02:00:00Z') },
   );
 });
 

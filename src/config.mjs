@@ -132,6 +132,24 @@ export async function loadCodexConfig(rootDir = process.cwd()) {
   };
 }
 
+// Claude Code CLI runs as a local process under the operator's own Claude
+// subscription login (`claude auth status`) -- no API key is read or
+// required here, same reasoning as loadCodexConfig. Never throws; being
+// unconfigured/uninstalled/logged-out is a runtime *capability* check (see
+// claude-cli-client.mjs), not a startup failure.
+export async function loadClaudeCliConfig(rootDir = process.cwd()) {
+  const values = await loadEnvValues(rootDir).catch(() => ({}));
+  const pick = (name) => values[name] || process.env[name];
+  const concurrency = Number(pick('AI_JOB_CONCURRENCY'));
+  return {
+    executable: pick('CLAUDE_CLI_EXECUTABLE') || 'claude',
+    model: pick('CLAUDE_CLI_MODEL') || 'sonnet',
+    effort: pick('CLAUDE_CLI_EFFORT') || 'medium',
+    concurrency: Number.isInteger(concurrency) && concurrency > 0 ? concurrency : 1,
+    timeoutMs: Number(pick('CLAUDE_CLI_TIMEOUT_MS')) || 180_000,
+  };
+}
+
 // Data/job directories are resolved relative to rootDir with path.join/
 // path.resolve only -- no "\\" or "/" literals -- so the same config works
 // unchanged on Windows now and Linux later.

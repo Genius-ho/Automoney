@@ -8,6 +8,7 @@ import {
   runDailyProcessingBatch,
   runDraftPreparationStage,
   runImageGenerationStage,
+  runImageQaReviewStage,
   runDueProductAutomationStage,
   selectRandomCategories,
 } from '../src/auto-discovery-batch.mjs';
@@ -27,6 +28,89 @@ test('due dispatcher runs only the oldest due product stage and records its next
   assert.deepEqual(calls.slice(0, 1), ['draft']);
   assert.equal(calls[1].stage, 'draft');
   assert.equal(calls[1].details.nextRunAt, '2026-08-11T22:00:00.000Z');
+});
+
+test('due dispatcher processes up to dailyBatchSize items when explicitly opted in, stopping early once a call reports skipped', async () => {
+  const calls = [];
+  let draftCallCount = 0;
+  const result = await runDueProductAutomationStage({}, {}, {
+    now: new Date('2026-08-11T01:30:00Z'),
+    dailyBatchSize: 3,
+    getBatchScheduleStateImpl: async () => ({ draftNextRunAt: '2026-08-10T22:00:00Z' }),
+    selectOldestDueStageImpl: () => ({ stage: 'draft', serviceDate: '2026-08-11', dueAt: new Date('2026-08-10T22:00:00Z') }),
+    tryAcquireBatchLockImpl: async () => ({ isRunning: true }),
+    runDraftPreparationStageImpl: async () => {
+      draftCallCount += 1;
+      calls.push('draft');
+      return draftCallCount < 2 ? { outcome: 'ready' } : { skipped: true, reason: 'QUEUE_EMPTY' };
+    },
+    completeProductStageImpl: async (_db, stage, details) => calls.push({ stage, details }),
+  });
+  assert.equal(draftCallCount, 2);
+  assert.equal(result.processedCount, 1);
+  assert.equal(result.outcomes.length, 2);
+  assert.match(calls[2].details.outcome, /ready,skipped:QUEUE_EMPTY/);
+});
+
+test('due dispatcher with dailyBatchSize=3 takes exactly 3 turns when the queue never empties', async () => {
+  let draftCallCount = 0;
+  const result = await runDueProductAutomationStage({}, {}, {
+    dailyBatchSize: 3,
+    getBatchScheduleStateImpl: async () => ({ draftNextRunAt: '2026-08-10T22:00:00Z' }),
+    selectOldestDueStageImpl: () => ({ stage: 'draft', serviceDate: '2026-08-11', dueAt: new Date('2026-08-10T22:00:00Z') }),
+    tryAcquireBatchLockImpl: async () => ({ isRunning: true }),
+    runDraftPreparationStageImpl: async () => { draftCallCount += 1; return { outcome: 'ready' }; },
+    completeProductStageImpl: async () => {},
+  });
+  assert.equal(draftCallCount, 3);
+  assert.equal(result.processedCount, 3);
+});
+
+test('due dispatcher dispatches the imageQa stage to runImageQaReviewStageImpl', async () => {
+  let imageQaCalled = false;
+  const result = await runDueProductAutomationStage({}, {}, {
+    getBatchScheduleStateImpl: async () => ({ qaNextRunAt: '2026-08-10T22:00:00Z' }),
+    selectOldestDueStageImpl: () => ({ stage: 'imageQa', serviceDate: '2026-08-11', dueAt: new Date('2026-08-10T22:00:00Z') }),
+    tryAcquireBatchLockImpl: async () => ({ isRunning: true }),
+    runImageQaReviewStageImpl: async () => { imageQaCalled = true; return { skipped: true, reason: 'QUEUE_EMPTY' }; },
+    completeProductStageImpl: async () => {},
+  });
+  assert.equal(imageQaCalled, true);
+  assert.equal(result.stage, 'imageQa');
+});
+
+test('due dispatcher does not advance the schedule slot when imageQa reports CLAUDE_CLI_UNAVAILABLE -- just releases the lock so the next tick retries', async () => {
+  let completeCalled = false;
+  let releaseCalled = false;
+  const result = await runDueProductAutomationStage({}, {}, {
+    getBatchScheduleStateImpl: async () => ({ qaNextRunAt: '2026-08-10T22:00:00Z' }),
+    selectOldestDueStageImpl: () => ({ stage: 'imageQa', serviceDate: '2026-08-11', dueAt: new Date('2026-08-10T22:00:00Z') }),
+    tryAcquireBatchLockImpl: async () => ({ isRunning: true }),
+    runImageQaReviewStageImpl: async () => ({ skipped: true, reason: 'CLAUDE_CLI_UNAVAILABLE', message: 'Not logged in' }),
+    completeProductStageImpl: async () => { completeCalled = true; },
+    releaseLockOnlyImpl: async () => { releaseCalled = true; },
+  });
+  assert.equal(completeCalled, false);
+  assert.equal(releaseCalled, true);
+  assert.equal(result.processedCount, 0);
+  assert.equal(result.outcome.reason, 'CLAUDE_CLI_UNAVAILABLE');
+  assert.equal(result.outcome.message, 'Not logged in');
+});
+
+test('runImageQaReviewStage skips when no draft is awaiting QA review', async () => {
+  const result = await runImageQaReviewStage({}, { getNextQaReviewItemImpl: async () => null });
+  assert.deepEqual(result, { skipped: true, reason: 'QUEUE_EMPTY' });
+});
+
+test('runImageQaReviewStage calls reviewGeneratedImages with the queue item\'s draftId and rootDir', async () => {
+  let capturedArgs;
+  const result = await runImageQaReviewStage({}, {
+    rootDir: '/repo',
+    getNextQaReviewItemImpl: async () => ({ id: 9, draftId: 8, status: 'awaiting_image_approval' }),
+    reviewGeneratedImagesImpl: async (db, rootDir, draftId) => { capturedArgs = { rootDir, draftId }; return { verdict: 'pass', approved: true }; },
+  });
+  assert.deepEqual(capturedArgs, { rootDir: '/repo', draftId: 8 });
+  assert.deepEqual(result, { queueItemId: 9, draftId: 8, verdict: 'pass', approved: true });
 });
 
 test('due dispatcher returns NOT_DUE without acquiring the lock', async () => {

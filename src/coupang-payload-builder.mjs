@@ -79,6 +79,35 @@ function nonEmpty(value) {
 // quantity coming from the same admin-supplied overrides used for every
 // other unresolved field -- `additionalAttributeValues` keyed by the
 // mandatory attribute's own name, and `singleItemStockQuantity`.
+// Coupang's own limit, confirmed live 2026-08-16 (draft 9, "커튼봉" category):
+// createProduct rejected both option items with "사이즈 옵션값은 최대 30자까지만
+// 입력해 주세요" when each got the full combined dimensions description.
+const MAX_SIZE_ATTRIBUTE_LENGTH = 30;
+
+// A combined dimensions string like "소형 90~160cm, 대형 110~200cm, 봉 지름
+// 22mm" describes every sale option in one free-text field (built for the
+// notice/고시정보 "치수" disclosure, which has no length limit) -- but
+// Coupang's per-item mandatory "사이즈" attribute needs one short value *per
+// option*, not the same full description repeated on every item. When a
+// comma-separated segment starts with the option's own label (e.g. "대형
+// 110~200cm"), pull just that segment's value out; otherwise (a single-
+// option product, or text that doesn't follow this "라벨 값, ..." shape)
+// there is no reliable way to know which part belongs to which option, so
+// it falls back to the full combined text -- truncated to stay under
+// Coupang's limit rather than guessing which part to keep.
+function sizeAttributeValueForOption(combinedValue, optionValue) {
+  if (combinedValue == null) return combinedValue;
+  const text = String(combinedValue);
+  if (optionValue) {
+    const segment = text.split(',').map((part) => part.trim()).find((part) => part.startsWith(optionValue));
+    if (segment) {
+      const extracted = segment.slice(optionValue.length).trim();
+      if (extracted) return extracted.slice(0, MAX_SIZE_ATTRIBUTE_LENGTH);
+    }
+  }
+  return text.slice(0, MAX_SIZE_ATTRIBUTE_LENGTH);
+}
+
 export function mapOptionsToMandatoryAttributes({ draftOptions, mandatoryOptionNames, stockByOptionValue = {}, sizeAttributeValue = null, additionalAttributeValues = {}, exposed = null, singleItemStockQuantity = null, attributeMeta = [] }) {
   const colorAttributeName = mandatoryOptionNames.find((name) => name === '색상') || null;
   const remainingAttributeNames = mandatoryOptionNames.filter((name) => name !== colorAttributeName);
@@ -99,8 +128,8 @@ export function mapOptionsToMandatoryAttributes({ draftOptions, mandatoryOptionN
   const exposedField = exposed ? { exposed } : {};
   const hasOptions = (draftOptions || []).length > 0;
 
-  const valueForAttribute = (name) => (name === sizeAttributeName
-    ? sizeAttributeValue
+  const valueForAttribute = (name, optionValue) => (name === sizeAttributeName
+    ? sizeAttributeValueForOption(sizeAttributeValue, optionValue)
     : (Object.hasOwn(additionalAttributeValues, name) ? additionalAttributeValues[name] : null));
 
   // Coupang rejects a NUMBER-datatype mandatory attribute (e.g. "단 수") that
@@ -113,8 +142,8 @@ export function mapOptionsToMandatoryAttributes({ draftOptions, mandatoryOptionN
     if (!meta || meta.dataType !== 'NUMBER') return null;
     return meta.usableUnits?.[0] || (meta.basicUnit && meta.basicUnit !== '없음' ? meta.basicUnit : null);
   };
-  const formattedValueForAttribute = (name) => {
-    const value = valueForAttribute(name);
+  const formattedValueForAttribute = (name, optionValue) => {
+    const value = valueForAttribute(name, optionValue);
     const unit = unitForAttribute(name);
     if (value == null || !unit) return value;
     const text = String(value).trim();
@@ -128,7 +157,7 @@ export function mapOptionsToMandatoryAttributes({ draftOptions, mandatoryOptionN
       stockQuantity: Object.hasOwn(stockByOptionValue, option.optionValue) ? stockByOptionValue[option.optionValue] : null,
       attributes: [
         colorAttributeName ? { attributeTypeName: colorAttributeName, attributeValueName: option.optionValue, ...exposedField } : null,
-        ...remainingAttributeNames.map((name) => ({ attributeTypeName: name, attributeValueName: formattedValueForAttribute(name), ...exposedField })),
+        ...remainingAttributeNames.map((name) => ({ attributeTypeName: name, attributeValueName: formattedValueForAttribute(name, option.optionValue), ...exposedField })),
       ].filter(Boolean),
     }))
     : [{
@@ -137,12 +166,12 @@ export function mapOptionsToMandatoryAttributes({ draftOptions, mandatoryOptionN
       stockQuantity: singleItemStockQuantity,
       attributes: [
         colorAttributeName ? { attributeTypeName: colorAttributeName, attributeValueName: Object.hasOwn(additionalAttributeValues, colorAttributeName) ? additionalAttributeValues[colorAttributeName] : null, ...exposedField } : null,
-        ...remainingAttributeNames.map((name) => ({ attributeTypeName: name, attributeValueName: formattedValueForAttribute(name), ...exposedField })),
+        ...remainingAttributeNames.map((name) => ({ attributeTypeName: name, attributeValueName: formattedValueForAttribute(name, null), ...exposedField })),
       ].filter(Boolean),
     }];
 
   const unresolvedMandatoryAttributes = hasOptions
-    ? remainingAttributeNames.filter((name) => !valueForAttribute(name))
+    ? remainingAttributeNames.filter((name) => !valueForAttribute(name, null))
     : mandatoryOptionNames.filter((name) => !items[0].attributes.find((attr) => attr.attributeTypeName === name)?.attributeValueName);
   const missingStock = items.filter((item) => item.stockQuantity === null).map((item) => item.optionValue ?? '(단일상품)');
 
@@ -217,6 +246,19 @@ export function formatKstDateTime(date = new Date()) {
 // one) -- so contents can hold all 10 while images[] holds at most 9 DETAIL.
 // `generated_detail_html` (the site's own HTML detail page) is never read or
 // modified here -- `contents` is built fresh from the approved image URLs.
+// Notice-detail field names buildCoupangProductPayload's noticeValues map
+// below can always resolve from real data (draft/material/size/supplier
+// fields), regardless of category. "인증/허가 사항" is deliberately excluded
+// -- it's only conditionally auto-fillable (see noticeValues below), so
+// callers checking coverage (e.g. checkAutomatableReadiness in
+// coupang-registration-flow.mjs) must test that one separately against
+// categoryMeta.mandatoryCertificationNames rather than trusting this list.
+export const AUTO_FILLABLE_NOTICE_FIELDS = [
+  '종류', '품명 및 모델명', '품명', '소재', '주요 소재', '치수', '크기',
+  '제조자(수입자)', '제조국', '제조국(원산지)', '취급시_주의사항', '품질보증기준',
+  'A/S 책임자와 전화번호', '소비자상담 관련 전화번호',
+];
+
 export function buildCoupangProductPayload({
   draft,
   vendorId,
@@ -262,8 +304,8 @@ export function buildCoupangProductPayload({
   // Different Coupang notice templates name the same real-world fact
   // differently (e.g. "제조국" vs "제조국(원산지)"), so common synonyms are
   // covered here directly. `noticeContentOverrides` is the escape hatch for
-  // whatever a specific template needs beyond that (e.g. "인증/허가 사항"),
-  // keyed by the literal noticeCategoryDetailName Coupang returned.
+  // whatever a specific template needs beyond that, keyed by the literal
+  // noticeCategoryDetailName Coupang returned.
   const noticeValues = {
     종류: draft.optimizedTitle || null,
     '품명 및 모델명': supplierNoticeFields.modelName ?? draft.optimizedTitle ?? null,
@@ -284,6 +326,15 @@ export function buildCoupangProductPayload({
     품질보증기준: warrantyStandard,
     'A/S 책임자와 전화번호': asPhoneNumber,
     '소비자상담 관련 전화번호': asPhoneNumber,
+    // categoryMeta.mandatoryCertificationNames is Coupang's own per-category
+    // API answer to "does this category legally require certification" --
+    // when it's empty, "해당사항없음" is a factual consequence of that real
+    // Coupang data, not an invented claim (same bar as manufacturer/
+    // countryOfOrigin above: real structured data only, never AI-guessed).
+    // When Coupang says certification IS required, this stays null so the
+    // readiness check still blocks until a human supplies the real cert via
+    // noticeContentOverrides.
+    '인증/허가 사항': categoryMeta?.mandatoryCertificationNames?.length === 0 ? '해당사항없음' : null,
     ...noticeContentOverrides,
   };
 

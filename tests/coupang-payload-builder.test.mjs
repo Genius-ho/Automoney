@@ -117,6 +117,44 @@ test('mapOptionsToMandatoryAttributes applies a supplied size value to every ite
   assert.deepEqual(result.unresolvedMandatoryAttributes, []);
 });
 
+// Confirmed live 2026-08-16 against draft 9's real category ("커튼봉",
+// mandatoryOptionNames=[사이즈], two size-named sale options 소형/대형): giving
+// every item the same combined dimensions string got both items rejected by
+// Coupang for exceeding its 30-char attribute-value limit. When the combined
+// string has a comma-separated segment starting with the option's own
+// label, only that option's own segment should be used.
+test('mapOptionsToMandatoryAttributes splits a combined per-option dimensions string so each item gets only its own segment', () => {
+  const result = mapOptionsToMandatoryAttributes({
+    draftOptions: [
+      { optionValue: '소형', additionalPrice: 0 },
+      { optionValue: '대형', additionalPrice: 250 },
+    ],
+    mandatoryOptionNames: ['사이즈'],
+    stockByOptionValue: {},
+    sizeAttributeValue: '소형 90~160cm, 대형 110~200cm, 봉 지름 22mm, 끝부분 높이 7cm',
+  });
+
+  assert.deepEqual(result.items[0].attributes, [{ attributeTypeName: '사이즈', attributeValueName: '90~160cm' }]);
+  assert.deepEqual(result.items[1].attributes, [{ attributeTypeName: '사이즈', attributeValueName: '110~200cm' }]);
+});
+
+test('mapOptionsToMandatoryAttributes truncates a combined size value to 30 chars when no per-option segment can be found', () => {
+  const result = mapOptionsToMandatoryAttributes({
+    draftOptions: [
+      { optionValue: '블랙', additionalPrice: 0 },
+      { optionValue: '화이트', additionalPrice: 0 },
+    ],
+    mandatoryOptionNames: ['사이즈'],
+    stockByOptionValue: {},
+    sizeAttributeValue: '가로 90~160cm 세로 110~200cm 봉 지름 22mm 끝부분 높이 7cm (매우 긴 통합 설명문)',
+  });
+
+  for (const item of result.items) {
+    const size = item.attributes.find((attr) => attr.attributeTypeName === '사이즈').attributeValueName;
+    assert.ok(size.length <= 30, `expected size value to be truncated to 30 chars, got ${size.length}: "${size}"`);
+  }
+});
+
 // Confirmed live 2026-08-15 against draft 8's real category ("테이블/멀티트레이",
 // mandatoryOptionNames=[색상,수량], no 사이즈 attribute at all): the old
 // remainingAttributeNames[0] assumption silently wrote a dimension string
@@ -608,6 +646,34 @@ test('buildCoupangProductPayload fills notice fields a different template names 
   assert.equal(notices.find((n) => n.noticeCategoryDetailName === '제조국(원산지)').content, '수입산 / 아시아 / 중국');
   assert.equal(notices.find((n) => n.noticeCategoryDetailName === '제조자(수입자)').content, '와우픽');
   assert.equal(notices.find((n) => n.noticeCategoryDetailName === '소비자상담 관련 전화번호').content, '010-9092-8623');
+});
+
+test('buildCoupangProductPayload auto-fills "인증/허가 사항" with "해당사항없음" only when Coupang\'s own category meta says no certification is mandatory', () => {
+  const draft = draft64Fixture();
+  const template = {
+    noticeCategoryTemplates: [{
+      noticeCategoryName: '기타 재화',
+      noticeCategoryDetailNames: [{ noticeCategoryDetailName: '인증/허가 사항', required: 'MANDATORY' }],
+    }],
+  };
+  const basePayload = {
+    draft,
+    vendorId: 'A01550261',
+    displayCategoryCode: 80704,
+    noticeCategoryTemplateName: '기타 재화',
+    supplierNoticeFields: {},
+    optionMapping: mapOptionsToMandatoryAttributes({ draftOptions: [], mandatoryOptionNames: [], singleItemStockQuantity: 10 }),
+    outboundShippingPlace: {},
+    returnShippingCenter: {},
+    approvedDetailImageUrls: TEN_APPROVED_DETAIL_IMAGES,
+    deliveryCompanyCode: 'CJGLS',
+  };
+
+  const noCertRequired = buildCoupangProductPayload({ ...basePayload, categoryMeta: { ...template, mandatoryCertificationNames: [] } });
+  assert.equal(noCertRequired.items[0].notices.find((n) => n.noticeCategoryDetailName === '인증/허가 사항').content, '해당사항없음');
+
+  const certRequired = buildCoupangProductPayload({ ...basePayload, categoryMeta: { ...template, mandatoryCertificationNames: ['안전확인대상생활용품'] } });
+  assert.equal(certRequired.items[0].notices.find((n) => n.noticeCategoryDetailName === '인증/허가 사항').content, null);
 });
 
 test('buildCoupangProductPayload marks imagesPubliclyHosted true only once every image is a real https URL', () => {

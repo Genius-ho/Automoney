@@ -20,6 +20,10 @@ function toBatchScheduleState(row) {
     imagesLastRunAt: row.images_last_run_at,
     imagesLastServiceDate: row.images_last_service_date,
     imagesLastOutcome: row.images_last_outcome,
+    qaNextRunAt: row.qa_next_run_at,
+    qaLastRunAt: row.qa_last_run_at,
+    qaLastServiceDate: row.qa_last_service_date,
+    qaLastOutcome: row.qa_last_outcome,
     discoveryNextRunAt: row.next_run_at,
     discoveryLastRunAt: row.last_run_at,
     discoveryLastServiceDate: row.discovery_last_service_date,
@@ -113,6 +117,7 @@ const PRODUCT_STAGE_COLUMNS = Object.freeze({
   draft: 'draft',
   analysis: 'analysis',
   images: 'images',
+  imageQa: 'qa',
   discovery: 'discovery',
 });
 

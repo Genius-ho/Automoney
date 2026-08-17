@@ -22,6 +22,14 @@ function imageCard(row) {
     pricing: pricing(row),
     mainImage: { id: Number(row.main_image_id), url: row.main_image_url },
     detailImages: row.detail_image_urls || [],
+    // Null when the generated_image_review agent hasn't reviewed this draft
+    // yet (task disabled, or the tick just hasn't reached it) -- the GUI
+    // falls back to "검수 대기중" rather than assuming pass/fail either way.
+    // qaAttempts counts every image_qa_reviews row (reviewGeneratedImages's
+    // own retry loop, up to its maxAttempts) rather than a fixed "N/2" --
+    // maxAttempts is a runtime default, not a stored setting, so this only
+    // ever shows what actually happened.
+    qaReview: row.qa_verdict ? { verdict: row.qa_verdict, issues: row.qa_issues || [], reviewedAt: row.qa_reviewed_at, attempts: Number(row.qa_attempts) } : null,
     error: null,
     updatedAt: row.updated_at,
   };
@@ -90,7 +98,8 @@ async function listImageApprovals(db) {
            pq.status as queue_status, pq.updated_at, d.unit_cost_price, d.coupang_sale_price,
            d.coupang_expected_profit, main.id as main_image_id,
            main.coupang_stored_url as main_image_url, details.id as detail_set_id,
-           details.image_count as detail_image_count, detail_files.detail_image_urls
+           details.image_count as detail_image_count, detail_files.detail_image_urls,
+           qa.qa_verdict, qa.qa_issues, qa.qa_reviewed_at, coalesce(qa_count.qa_attempts, 0) as qa_attempts
       from processing_queue pq
       join product_drafts d on d.id = pq.draft_id
       join lateral (
@@ -108,6 +117,14 @@ async function listImageApprovals(db) {
         select array_agg(normalized_stored_url order by image_index) as detail_image_urls
           from generated_ai_detail_images where detail_set_id = details.id
       ) detail_files on true
+      left join lateral (
+        select verdict as qa_verdict, issues_json as qa_issues, reviewed_at as qa_reviewed_at from image_qa_reviews
+         where product_draft_id = pq.draft_id
+         order by reviewed_at desc limit 1
+      ) qa on true
+      left join lateral (
+        select count(*) as qa_attempts from image_qa_reviews where product_draft_id = pq.draft_id
+      ) qa_count on true
      where pq.status = 'awaiting_image_approval'
      order by pq.updated_at asc`);
   return rows;

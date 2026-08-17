@@ -22,6 +22,7 @@ import {
   enqueueCandidate as enqueueCandidateReal,
   getNextAnalysisItem as getNextAnalysisItemReal,
   getNextImageItem as getNextImageItemReal,
+  getNextQaReviewItem as getNextQaReviewItemReal,
   getNextQueuedItem as getNextQueuedItemReal,
   getNextQueueItem as getNextQueueItemReal,
   isCandidateActiveOrQueued as isCandidateActiveOrQueuedReal,
@@ -29,19 +30,29 @@ import {
   updateQueueItemStatus as updateQueueItemStatusReal,
 } from './processing-queue-store.mjs';
 import { analyzeWinnerCandidate as analyzeWinnerCandidateReal, generateWinnerCandidateImages as generateWinnerCandidateImagesReal, prepareCandidateDraft as prepareCandidateDraftReal, processWinnerCandidate as processWinnerCandidateReal } from './batch-winner-processor.mjs';
+import { reviewGeneratedImages as reviewGeneratedImagesReal } from './generated-image-qa.mjs';
 
 const CANDIDATES_STORED_PER_CATEGORY = 5;
 
+// dailyBatchSize defaults to 1 (today's exact behavior, and every existing
+// caller/test that doesn't pass it) -- the real scheduler wiring
+// (admin-server.mjs) opts into processing several items per due-check by
+// passing dailyBatchSize explicitly. Loops the single-item stage runner
+// in place, stopping the moment it reports skipped (queue genuinely empty,
+// or a lock conflict) rather than always taking dailyBatchSize turns.
 export async function runDueProductAutomationStage(db, deps = {}, {
   now = new Date(),
   getBatchScheduleStateImpl = getBatchScheduleStateReal,
   selectOldestDueStageImpl = selectOldestDueStageReal,
   tryAcquireBatchLockImpl = tryAcquireBatchLockReal,
   completeProductStageImpl = completeProductStageReal,
+  releaseLockOnlyImpl = releaseLockOnlyReal,
   runDraftPreparationStageImpl = runDraftPreparationStage,
   runAnalysisStageImpl = runAnalysisStage,
   runImageGenerationStageImpl = runImageGenerationStage,
+  runImageQaReviewStageImpl = runImageQaReviewStage,
   runCandidateDiscoveryBatchImpl = runCandidateDiscoveryBatch,
+  dailyBatchSize = 1,
 } = {}) {
   const state = await getBatchScheduleStateImpl(db);
   const due = selectOldestDueStageImpl(state, now);
@@ -50,22 +61,52 @@ export async function runDueProductAutomationStage(db, deps = {}, {
   const days = due.stage === 'discovery' ? Number(state?.intervalDays || 3) : 1;
   const nextRunAt = new Date(due.dueAt.getTime() + days * 24 * 60 * 60 * 1000).toISOString();
   try {
-    let outcome;
+    let outcomes;
     if (due.stage === 'discovery') {
-      outcome = await runCandidateDiscoveryBatchImpl(db, deps);
+      outcomes = [await runCandidateDiscoveryBatchImpl(db, deps)];
     } else {
       const lock = await tryAcquireBatchLockImpl(db);
       if (!lock) return { skipped: true, reason: 'ALREADY_RUNNING' };
-      const runners = { draft: runDraftPreparationStageImpl, analysis: runAnalysisStageImpl, images: runImageGenerationStageImpl };
-      outcome = await runners[due.stage](db, deps);
+      const runners = { draft: runDraftPreparationStageImpl, analysis: runAnalysisStageImpl, images: runImageGenerationStageImpl, imageQa: runImageQaReviewStageImpl };
+      outcomes = [];
+      for (let i = 0; i < dailyBatchSize; i += 1) {
+        const result = await runners[due.stage](db, deps);
+        outcomes.push(result);
+        if (result?.skipped) break;
+      }
     }
-    const outcomeLabel = outcome?.outcome || (outcome?.skipped ? `skipped:${outcome.reason}` : 'completed');
+    const outcome = outcomes[outcomes.length - 1];
+    // An infra hiccup (e.g. a transient Claude CLI availability blip) is not
+    // "nothing to do today" -- advancing next_run_at by a full day here would
+    // strand a draft that's otherwise ready until tomorrow's slot for a
+    // problem that may already be gone by the next 5-minute tick. Leave the
+    // schedule state untouched (just release the lock this stage holds) so
+    // selectOldestDueStage sees the same stage as still due next tick and
+    // retries on its own -- same no-backoff-needed reasoning as the existing
+    // ALREADY_RUNNING/NOT_DUE early returns above.
+    if (due.stage !== 'discovery' && outcome?.reason === 'CLAUDE_CLI_UNAVAILABLE') {
+      await releaseLockOnlyImpl(db);
+      return { stage: due.stage, outcome, outcomes, processedCount: 0 };
+    }
+    const outcomeLabel = outcomes.map((o) => o?.outcome || (o?.skipped ? `skipped:${o.reason}` : 'completed')).join(',');
     await completeProductStageImpl(db, due.stage, { serviceDate: due.serviceDate, nextRunAt, outcome: outcomeLabel });
-    return { stage: due.stage, outcome };
+    return { stage: due.stage, outcome, outcomes, processedCount: outcomes.filter((o) => !o?.skipped).length };
   } catch (error) {
     await completeProductStageImpl(db, due.stage, { serviceDate: due.serviceDate, nextRunAt, outcome: `failed:${error.code || error.message}` });
     throw error;
   }
+}
+
+// Reviews one draft sitting in awaiting_image_approval per call (same
+// "pop the next single item" shape as runAnalysisStage/runImageGenerationStage
+// above) -- does not use runImprovementStage since there's no
+// batch_run_candidates status to mirror here, just a pass/fail/skip result
+// from reviewGeneratedImages.
+export async function runImageQaReviewStage(db, deps = {}) {
+  const item = await (deps.getNextQaReviewItemImpl || getNextQaReviewItemReal)(db);
+  if (!item) return { skipped: true, reason: 'QUEUE_EMPTY' };
+  const result = await (deps.reviewGeneratedImagesImpl || reviewGeneratedImagesReal)(db, deps.rootDir, item.draftId, deps);
+  return { queueItemId: item.id, draftId: item.draftId, ...result };
 }
 
 // "전체 카테고리에서 무작위로 고르되 ... 최근 30일 동안 선택한 카테고리는

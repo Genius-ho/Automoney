@@ -38,6 +38,10 @@ function baseDeps(overrides = {}) {
     applyProductAnalysisImpl: async () => ({ appliedFields: ['material', 'dimensions'], blockedFields: [{ field: 'manufacturer', reason: 'NO_EVIDENCE_LEGAL_FIELD' }] }),
     generateMainImageImpl: async () => ({ result: { id: 1 }, generatedFileCount: 1 }),
     generateDetailImageSetImpl: async () => ({ result: { id: 1 }, generatedFileCount: 10 }),
+    regenerateOptimizedTitlesImpl: async () => ({}),
+    checkAutomatableReadinessImpl: async () => ({ blocked: false, missing: [] }),
+    loadCoupangConfigImpl: async () => ({}),
+    createCoupangClientImpl: () => ({}),
     statusUpdates,
     ...overrides,
   };
@@ -97,6 +101,34 @@ test('analyzeWinnerCandidate completes analysis without generating images', asyn
   assert.equal(outcome.outcome, 'success');
   assert.deepEqual(deps.statusUpdates.map((u) => u.processingStatus).filter(Boolean), ['analysis_running', 'analysis_completed']);
   assert.equal(imageCalled, false);
+});
+
+test('analyzeWinnerCandidate regenerates the optimized title and runs the registration-readiness precheck after a successful analysis', async () => {
+  let titleDraftId = null;
+  let readinessArgs = null;
+  const deps = baseDeps({
+    regenerateOptimizedTitlesImpl: async (_db, draftId) => { titleDraftId = draftId; return {}; },
+    checkAutomatableReadinessImpl: async (_db, draftId, opts) => { readinessArgs = { draftId, ...opts }; return { blocked: false, missing: [] }; },
+    loadCoupangConfigImpl: async () => ({ vendorId: 'A00000000' }),
+  });
+  const outcome = await analyzeWinnerCandidate({}, candidateRow({ draftId: 501 }), deps);
+  assert.equal(outcome.outcome, 'success');
+  assert.equal(titleDraftId, 501);
+  assert.equal(readinessArgs.draftId, 501);
+  assert.deepEqual(readinessArgs.coupangConfig, { vendorId: 'A00000000' });
+});
+
+test('analyzeWinnerCandidate fails fast at registration_readiness_precheck (before any image generation) when the precheck reports blocked', async () => {
+  const deps = baseDeps({
+    checkAutomatableReadinessImpl: async () => ({ blocked: true, missing: ['필수 구매옵션 미해결: ["단 수"]'] }),
+  });
+  const outcome = await analyzeWinnerCandidate({}, candidateRow({ draftId: 501 }), deps);
+  assert.equal(outcome.outcome, 'failed');
+  assert.equal(outcome.stage, 'registration_readiness_precheck');
+  assert.equal(outcome.errorCode, '필수 구매옵션 미해결: ["단 수"]');
+  const finalUpdate = deps.statusUpdates[deps.statusUpdates.length - 1];
+  assert.equal(finalUpdate.processingStatus, 'failed');
+  assert.equal(finalUpdate.failureStage, 'registration_readiness_precheck');
 });
 
 test('generateWinnerCandidateImages generates images without running analysis', async () => {

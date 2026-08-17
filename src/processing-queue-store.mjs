@@ -121,6 +121,22 @@ export function getNextImageItem(db) {
   return getFirstByStatuses(db, ['analysis_completed', 'generating_images'], 'started_at asc nulls last, queued_at asc');
 }
 
+// Picks up drafts sitting in awaiting_image_approval that have never been
+// through image-qa-store.mjs -- reviewed once, not on every tick (a fail
+// verdict just leaves the draft waiting, same as an unreviewed one, so a
+// human/future regeneration pass can act on it without the QA agent
+// re-reviewing the same unchanged images repeatedly).
+export async function getNextQaReviewItem(db) {
+  const result = await db.query(
+    `select pq.* from processing_queue pq
+     where pq.status = 'awaiting_image_approval'
+       and not exists (select 1 from image_qa_reviews iqr where iqr.product_draft_id = pq.draft_id)
+     order by pq.started_at asc nulls last, pq.queued_at asc
+     limit 1`,
+  );
+  return result.rows[0] ? toQueueItem(result.rows[0]) : null;
+}
+
 async function getFirstByStatuses(db, statuses, orderBy) {
   const quoted = statuses.map((status) => `'${status}'`).join(', ');
   const result = await db.query(`select * from processing_queue where status in (${quoted}) order by ${orderBy} limit 1`);
