@@ -64,7 +64,7 @@ export async function loadSchedulerDeps(rootDir) {
   }
 }
 
-export function tick(label, intervalMs, fn, { setIntervalImpl = setInterval, telegramConfig = null, sendCriticalAlertImpl = sendCriticalAlert } = {}) {
+export function tick(label, intervalMs, fn, { setIntervalImpl = setInterval, telegramConfig = null, sendCriticalAlertImpl = sendCriticalAlert, consecutiveFailuresBeforeAlert = 1 } = {}) {
   // Guards against overlapping runs of this same tick -- without it, a
   // single invocation that runs longer than intervalMs (e.g. a slow/timed-out
   // Telegram getUpdates call) lets the next timer firing start a second,
@@ -73,12 +73,25 @@ export function tick(label, intervalMs, fn, { setIntervalImpl = setInterval, tel
   // other getUpdates request" -- two overlapping polls from this one process,
   // not a second bot instance anywhere else.
   const runNonOverlapping = createNonOverlappingRunner(fn);
+  // consecutiveFailuresBeforeAlert defaults to 1 (alert on the very first
+  // failure), unchanged for every tick except telegramApprovalPoll -- see
+  // startScheduledJobs. That one runs every 15s (TELEGRAM_APPROVAL_POLL_INTERVAL_MS),
+  // so an isolated Telegram getUpdates gateway blip (confirmed live
+  // 2026-08-18) self-heals on the very next poll and was firing a critical
+  // alert for something already resolved 15 seconds later. A higher
+  // threshold there still catches a genuinely persistent failure (bad token,
+  // Telegram down) within roughly threshold*intervalMs, just not every
+  // isolated hiccup.
+  let consecutiveFailures = 0;
   const handle = setIntervalImpl(async () => {
     try {
       const result = await runNonOverlapping();
+      consecutiveFailures = 0;
       console.log(`scheduler.${label}=${JSON.stringify(result)}`);
     } catch (error) {
+      consecutiveFailures += 1;
       console.error(`scheduler.${label}Error=${error.message}`);
+      if (consecutiveFailures < consecutiveFailuresBeforeAlert) return;
       try {
         await sendCriticalAlertImpl(telegramConfig, `scheduler.${label}`, error.message);
       } catch (alertError) {
@@ -140,7 +153,10 @@ export async function startScheduledJobs(db, rootDir, {
       if (reconciliationError) throw reconciliationError;
       return notification;
     }, opts),
-    tickImpl('telegramApprovalPoll', TELEGRAM_APPROVAL_POLL_INTERVAL_MS, () => approvalPoller.pollOnce(db, { domemeClient: domemePrivateClient, coupangClient }, telegramConfig), opts),
+    // consecutiveFailuresBeforeAlert: 4 -- roughly a minute of continuous
+    // failure at this tick's 15s interval before paging; see tick()'s own
+    // comment for why this one specifically needs it.
+    tickImpl('telegramApprovalPoll', TELEGRAM_APPROVAL_POLL_INTERVAL_MS, () => approvalPoller.pollOnce(db, { domemeClient: domemePrivateClient, coupangClient }, telegramConfig), { ...opts, consecutiveFailuresBeforeAlert: 4 }),
     tickImpl('dailySummary', DAILY_SUMMARY_TICK_INTERVAL_MS, () => sendDailySummary(db, telegramConfig), opts),
   ];
 }

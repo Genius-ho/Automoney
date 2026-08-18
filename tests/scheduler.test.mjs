@@ -70,6 +70,45 @@ test('tick skips a second overlapping run instead of starting it concurrently', 
   assert.equal(calls, 1);
 });
 
+test('tick with consecutiveFailuresBeforeAlert > 1 stays silent through isolated failures and only alerts once the threshold is reached', async () => {
+  const alerts = [];
+  const sendCriticalAlertImpl = async (...args) => alerts.push(args);
+  let callback;
+  const handle = tick('telegramApprovalPoll', 15_000, () => { throw new Error('gateway timeout'); }, {
+    setIntervalImpl: (cb) => { callback = cb; return { unref: () => {}, promise: cb() }; },
+    sendCriticalAlertImpl,
+    consecutiveFailuresBeforeAlert: 3,
+  });
+  await handle.promise; // failure 1
+  assert.equal(alerts.length, 0);
+  await callback(); // failure 2
+  assert.equal(alerts.length, 0);
+  await callback(); // failure 3 -- threshold reached
+  assert.equal(alerts.length, 1);
+  assert.match(alerts[0][2], /gateway timeout/);
+});
+
+test('tick resets the consecutive-failure count after a success, so a later isolated failure does not immediately alert', async () => {
+  const alerts = [];
+  const sendCriticalAlertImpl = async (...args) => alerts.push(args);
+  let shouldFail = true;
+  let callback;
+  const handle = tick('telegramApprovalPoll', 15_000, () => {
+    if (shouldFail) throw new Error('gateway timeout');
+    return { ok: true };
+  }, {
+    setIntervalImpl: (cb) => { callback = cb; return { unref: () => {}, promise: cb() }; },
+    sendCriticalAlertImpl,
+    consecutiveFailuresBeforeAlert: 2,
+  });
+  await handle.promise; // failure 1 of 2 -- no alert yet
+  shouldFail = false;
+  await callback(); // success -- resets the counter
+  shouldFail = true;
+  await callback(); // failure 1 of 2 again (not failure 2 overall)
+  assert.equal(alerts.length, 0);
+});
+
 test('tick does not send an alert when fn succeeds', async () => {
   const alerts = [];
   const sendCriticalAlertImpl = async (...args) => alerts.push(args);
@@ -88,6 +127,17 @@ test('tick swallows a failure from sendCriticalAlertImpl itself rather than cras
     sendCriticalAlertImpl,
   });
   await assert.doesNotReject(handle.promise);
+});
+
+test('startScheduledJobs raises telegramApprovalPoll\'s consecutiveFailuresBeforeAlert above every other tick\'s default', async () => {
+  const seen = {};
+  await startScheduledJobs({}, '/root', {
+    loadSchedulerDepsImpl: async () => ({ coupangClient: {}, naverClient: {}, domemeClient: {}, domemePrivateClient: {} }),
+    tickImpl: (label, intervalMs, fn, opts) => { seen[label] = opts?.consecutiveFailuresBeforeAlert; return { label }; },
+  });
+  assert.equal(seen.telegramApprovalPoll, 4);
+  assert.equal(seen.coupangOrders, undefined);
+  assert.equal(seen.dailySummary, undefined);
 });
 
 test('startScheduledJobs passes the loaded telegramConfig through to every tickImpl call', async () => {
