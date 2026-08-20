@@ -4,7 +4,14 @@ import unittest
 from datetime import date
 from pathlib import Path
 
-from runtime_store import RuntimeStatus, RuntimeStore, normalize_delay_minutes, prune_order_tracking
+from runtime_store import (
+    RuntimeStatus,
+    RuntimeStore,
+    get_strategy_type,
+    normalize_delay_minutes,
+    prune_order_tracking,
+    set_strategy_type,
+)
 
 
 class RuntimeStoreTests(unittest.TestCase):
@@ -84,6 +91,45 @@ class NewOrderControlFieldsTests(unittest.TestCase):
             self.assertEqual(loaded.active_symbols, ["TQQQ"])
             self.assertEqual(loaded.known_symbols, [])
             self.assertEqual(loaded.auto_order_delay_minutes, 15)
+
+
+class StrategyTypeRoutingTests(unittest.TestCase):
+    def test_defaults_to_mumae_for_unknown_symbols(self):
+        status = RuntimeStatus()
+        self.assertEqual(get_strategy_type(status, "TQQQ"), "MUMAE")
+
+    def test_set_and_get_round_trip_in_memory(self):
+        status = RuntimeStatus()
+        set_strategy_type(status, "TQQQ", "VR_SKILL")
+        self.assertEqual(get_strategy_type(status, "TQQQ"), "VR_SKILL")
+        self.assertEqual(get_strategy_type(status, "SOXL"), "MUMAE")
+
+    def test_rejects_unknown_strategy_type(self):
+        status = RuntimeStatus()
+        with self.assertRaises(ValueError):
+            set_strategy_type(status, "TQQQ", "SOMETHING_ELSE")
+
+    def test_survives_restart(self):
+        with tempfile.TemporaryDirectory() as directory:
+            store = RuntimeStore(Path(directory) / "runtime.json")
+            status = store.load()
+            set_strategy_type(status, "TQQQ", "VR_SKILL")
+            set_strategy_type(status, "SOXL", "MUMAE")
+            set_strategy_type(status, "KORU", "MUMAE")
+            store.save(status)
+
+            reloaded = store.load()
+            self.assertEqual(get_strategy_type(reloaded, "TQQQ"), "VR_SKILL")
+            self.assertEqual(get_strategy_type(reloaded, "SOXL"), "MUMAE")
+            self.assertEqual(get_strategy_type(reloaded, "KORU"), "MUMAE")
+
+    def test_legacy_runtime_file_without_strategy_types_defaults_everything_to_mumae(self):
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory) / "runtime.json"
+            path.write_text(json.dumps({"active_symbols": ["TQQQ"]}), encoding="utf-8")
+            store = RuntimeStore(path)
+            loaded = store.load()
+            self.assertEqual(get_strategy_type(loaded, "TQQQ"), "MUMAE")
 
 
 class NormalizeDelayMinutesTests(unittest.TestCase):

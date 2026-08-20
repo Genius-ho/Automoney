@@ -26,6 +26,11 @@ def normalize_delay_minutes(value: Any) -> int:
     return minutes
 
 
+STRATEGY_MUMAE = "MUMAE"
+STRATEGY_VR_SKILL = "VR_SKILL"
+STRATEGY_TYPES = (STRATEGY_MUMAE, STRATEGY_VR_SKILL)
+
+
 @dataclass
 class RuntimeStatus:
     auto_enabled: bool = False
@@ -78,7 +83,26 @@ class RuntimeStatus:
     # client_order_id. Presence of "replacement_order_id" is the idempotency
     # lock: a given original order may only ever be reregistered once.
     custom_order_history: dict[str, dict] = field(default_factory=dict)
+    # Single authoritative source of "which strategy owns this symbol"
+    # (MUMAE | VR_SKILL). Missing entries default to MUMAE (see
+    # get_strategy_type), so every pre-VR runtime.json keeps behaving
+    # exactly as before. VR's own state file stores a strategy_type copy
+    # too, but only for display/validation -- this dict is the only place
+    # routing decisions (auto_tick, dispatch) may read from.
+    strategy_types: dict[str, str] = field(default_factory=dict)
     updated_at: str = ""
+
+
+def get_strategy_type(status: RuntimeStatus, symbol: str) -> str:
+    """The authoritative strategy_type for symbol. Defaults to MUMAE so
+    every symbol that existed before VR_SKILL was introduced is unaffected."""
+    return status.strategy_types.get(symbol.upper(), STRATEGY_MUMAE)
+
+
+def set_strategy_type(status: RuntimeStatus, symbol: str, strategy_type: str) -> None:
+    if strategy_type not in STRATEGY_TYPES:
+        raise ValueError(f"지원하지 않는 전략입니다: {strategy_type!r}")
+    status.strategy_types[symbol.upper()] = strategy_type
 
 
 _ORDER_DATE_PATTERN = re.compile(r"-(\d{8})-")

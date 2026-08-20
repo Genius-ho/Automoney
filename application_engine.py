@@ -10,7 +10,7 @@ from typing import Any, Callable
 
 from audit_log import AuditLog
 from mumae_core import ETF_UNIVERSE, normalize_down_ladder_levels
-from runtime_store import normalize_delay_minutes
+from runtime_store import get_strategy_type, normalize_delay_minutes
 from secure_credentials import SecureCredentialStore, TossCredentials
 from toss_api import TossBroker
 from web_gui.web_service import _json_value
@@ -225,6 +225,7 @@ class ApplicationEngine(TradingWebService):
                 "last_error": self.runtime.last_auto_error.get(symbol, ""),
                 "pending_orders": self.pending_order_count(symbol),
                 "down_ladder_enabled_levels": self.load_state(symbol).down_ladder_enabled_levels,
+                "strategy_type": get_strategy_type(self.runtime, symbol),
             }
             for symbol in ETF_UNIVERSE
         ]
@@ -236,6 +237,46 @@ class ApplicationEngine(TradingWebService):
         if state.symbol in self.quote_cache:
             current, previous = self.quote_cache[state.symbol]
         return self.dashboard(state, current, previous)
+
+    @staticmethod
+    def _optional_decimal(payload: dict[str, Any], key: str) -> Decimal | None:
+        value = payload.get(key)
+        return None if value in (None, "") else Decimal(str(value))
+
+    def _vr_initialize(self, payload: dict[str, Any]) -> dict[str, Any]:
+        self._require_settings_gate("vr.initialize")
+        symbol = str(payload.get("symbol", "")).upper()
+        initial_pool = Decimal(str(payload.get("initial_pool", "0")))
+        G = Decimal(str(payload.get("G", "10")))
+        band_pct = Decimal(str(payload.get("band_pct", "15")))
+        return self.vr_initialize(symbol, initial_pool, G, band_pct)
+
+    def _vr_schedule_config(self, payload: dict[str, Any]) -> dict[str, Any]:
+        self._require_settings_gate("vr.schedule_config")
+        symbol = str(payload.get("symbol", "")).upper()
+        return self.vr_schedule_config(
+            symbol,
+            G=self._optional_decimal(payload, "G"),
+            band_pct=self._optional_decimal(payload, "band_pct"),
+            pool_adjustment=self._optional_decimal(payload, "pool_adjustment"),
+        )
+
+    def _vr_cancel_pending_config(self, payload: dict[str, Any]) -> dict[str, Any]:
+        self._require_settings_gate("vr.cancel_pending_config")
+        symbol = str(payload.get("symbol", "")).upper()
+        return self.vr_cancel_pending_config(
+            symbol,
+            G=bool(payload.get("G", False)),
+            band_pct=bool(payload.get("band_pct", False)),
+            pool_adjustment=bool(payload.get("pool_adjustment", False)),
+            all=bool(payload.get("all", False)),
+        )
+
+    def _strategy_set_type(self, payload: dict[str, Any]) -> dict[str, Any]:
+        self._require_settings_gate("strategy.set_type")
+        symbol = str(payload.get("symbol", "")).upper()
+        strategy_type = str(payload.get("strategy_type", "")).upper()
+        return self.vr_set_strategy_type(symbol, strategy_type)
 
     def _dispatch(self, command: str, payload: dict[str, Any]) -> dict[str, Any]:
         symbol = str(payload.get("symbol", "")).upper()
@@ -311,6 +352,24 @@ class ApplicationEngine(TradingWebService):
             return self._api_update(payload)
         if command == "api.settings":
             return self._api_settings()
+        if command == "vr.initialize":
+            return self._vr_initialize(payload)
+        if command == "vr.start":
+            return self.vr_start(symbol)
+        if command == "vr.stop":
+            return self.vr_stop(symbol)
+        if command == "vr.schedule_config":
+            return self._vr_schedule_config(payload)
+        if command == "vr.cancel_pending_config":
+            return self._vr_cancel_pending_config(payload)
+        if command == "vr.refresh":
+            return self.vr_refresh_account(symbol)
+        if command == "vr.sync":
+            return self.vr_sync_orders(symbol)
+        if command == "vr.snapshot":
+            return self.vr_snapshot(symbol)
+        if command == "strategy.set_type":
+            return self._strategy_set_type(payload)
         raise ValueError(f"지원하지 않는 엔진 명령입니다: {command}")
 
     def execute(

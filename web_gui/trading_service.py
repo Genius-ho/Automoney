@@ -14,10 +14,13 @@ from typing import Any
 from etf_linkage import analyze_etf_pairs
 from etf_long_term import analyze_individual_etfs
 from mumae_core import CENT, OrderIntent, OrderKind, apply_fill, money
+from runtime_store import STRATEGY_VR_SKILL, get_strategy_type
 from telegram_bot import TelegramCommandLoop, TelegramNotifier
 from toss_api import TossApiError, order_time_in_force
 from trade_history import aggregate_daily_trades, summarize_realized_pnl
 from volatility import ETF_UNIVERSE
+from vr_engine import CycleTransitionBlocked
+from vr_web_service import VRWebServiceMixin
 from web_gui.web_service import WebService, _json_value
 
 OPEN_STATUSES = {"PENDING", "PARTIAL_FILLED", "PENDING_CANCEL", "PENDING_REPLACE"}
@@ -43,7 +46,7 @@ REREGISTERABLE_STATUSES = {"CANCELED", "REJECTED"}
 LEDGER_ANCHOR_DATE = "2020-01-01"
 
 
-class TradingWebService(WebService):
+class TradingWebService(VRWebServiceMixin, WebService):
     def __init__(self, *args: Any, **kwargs: Any) -> None:
         super().__init__(*args, **kwargs)
         self.order_rows: dict[str, list[dict[str, Any]]] = {}
@@ -57,6 +60,7 @@ class TradingWebService(WebService):
         self._reregister_locks: dict[str, threading.Lock] = {}
         self._reregister_locks_guard = threading.Lock()
         self.telegram = TelegramNotifier()
+        self._vr_init_stores()
 
     def _active_us_session_date(self, now: datetime | None = None) -> date | None:
         """Return the US trading date whose Toss session currently spans now."""
@@ -1065,9 +1069,17 @@ class TradingWebService(WebService):
             return
         known_symbols = sorted(set(self.runtime.known_symbols) | set(self.runtime.active_symbols))
         for symbol in known_symbols:
+            # strategy_type == MUMAE (the default for every pre-VR symbol)
+            # takes the exact same refresh_account/sync_orders path as
+            # before; only VR_SKILL symbols get routed to the VR-only sync,
+            # which never calls MUMAE's build_plan()/state.json write path.
             try:
-                self.refresh_account(symbol, plan_date=date.fromisoformat(session_key))
-                self.sync_orders(symbol)
+                if get_strategy_type(self.runtime, symbol) == STRATEGY_VR_SKILL:
+                    self.vr_refresh_account(symbol)
+                    self.vr_sync_orders(symbol)
+                else:
+                    self.refresh_account(symbol, plan_date=date.fromisoformat(session_key))
+                    self.sync_orders(symbol)
             except (TossApiError, PermissionError, ValueError) as error:
                 print(f"Auto-tick sync skipped {symbol}: {error}", file=sys.stderr)
         day_sell_ready = day_market_start is not None and day_market_start <= now
@@ -1123,3 +1135,20 @@ class TradingWebService(WebService):
                     continue
         self.runtime.last_auto_key = session_key
         self.runtime_store.save(self.runtime)
+
+        # VR_SKILL cycle-transition check -- entirely separate from the
+        # MUMAE DAY/CLS/LOC submission loop above (which only ever iterates
+        # runtime.active_symbols and never contains a VR_SKILL symbol, since
+        # VR's own started/stopped flag lives in VRState.status, not
+        # runtime.active_symbols). A blocked or failed VR transition for one
+        # symbol is caught here and never stops this loop from reaching the
+        # remaining symbols.
+        for symbol in known_symbols:
+            if get_strategy_type(self.runtime, symbol) != STRATEGY_VR_SKILL:
+                continue
+            try:
+                self.vr_auto_tick_for_symbol(symbol, now=now)
+            except CycleTransitionBlocked as error:
+                print(f"VR cycle transition blocked for {symbol}: {error}", file=sys.stderr)
+            except (TossApiError, PermissionError, ValueError) as error:
+                print(f"VR auto-tick skipped {symbol}: {error}", file=sys.stderr)

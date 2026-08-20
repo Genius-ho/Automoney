@@ -141,7 +141,11 @@ class TossBroker:
             request = Request(f"{BASE_URL}{path}", data=data, method=method, headers=request_headers)
             try:
                 with urlopen(request, timeout=15) as response:
-                    return json.loads(self._decode_body(response.read(), response.headers))
+                    body = self._decode_body(response.read(), response.headers)
+                    # A 204 No Content (e.g. DELETE /conditional-orders/{id})
+                    # has no body at all; json.loads("") would raise even
+                    # though the request succeeded.
+                    return json.loads(body) if body.strip() else {}
             except HTTPError as error:
                 try:
                     body = self._decode_body(error.read(), error.headers)

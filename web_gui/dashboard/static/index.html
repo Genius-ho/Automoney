@@ -46,6 +46,87 @@
       </div>
     </article>
 
+    <article class="card vr-strategy-card">
+      <div class="section-title"><div><p class="eyebrow">STRATEGY</p><h2 id="vrStrategyTitle">TQQQ 전략 선택</h2></div></div>
+      <fieldset class="strategy-picker" id="strategyPicker"><legend>전략</legend>
+        <label><input name="strategyType" type="radio" value="MUMAE"><span>무한매수</span></label>
+        <label><input name="strategyType" type="radio" value="VR_SKILL"><span>Value Rebalancing</span></label>
+      </fieldset>
+      <p id="strategySwitchBlocked" class="warning" role="status" hidden></p>
+    </article>
+
+    <article class="card vr-panel-card" id="vrInitCard" hidden>
+      <div class="section-title"><div><p class="eyebrow">VALUE REBALANCING · 초기화</p><h2 id="vrInitTitle">TQQQ VR 시작</h2></div></div>
+      <dl class="vr-init-summary">
+        <div><dt>보유수량</dt><dd id="vrInitQty">-</dd></div>
+        <div><dt>평균단가</dt><dd id="vrInitAvgCost">-</dd></div>
+        <div><dt>현재가격</dt><dd id="vrInitPrice">-</dd></div>
+        <div><dt>현재평가금</dt><dd id="vrInitValue">-</dd></div>
+        <div><dt>초기 V1 (자동)</dt><dd id="vrInitV1">-</dd></div>
+      </dl>
+      <form id="vrInitForm" class="vr-init-form">
+        <label>Initial Pool ($)<input id="vrInitPool" type="number" min="0" step="0.01" required></label>
+        <label>G<select id="vrInitG"><option value="5">5 · 매우 공격적</option><option value="10" selected>10 · 책의 대표 기준값</option><option value="20">20</option><option value="30">30</option><option value="40">40</option><option value="50">50</option><option value="100">100</option><option value="custom">직접입력</option></select><input id="vrInitGCustom" type="number" min="1" step="1" hidden></label>
+        <label>Band<select id="vrInitBand"><option value="5">±5%</option><option value="10">±10%</option><option value="15" selected>±15%</option><option value="20">±20%</option><option value="custom">직접입력</option></select><input id="vrInitBandCustom" type="number" min="1" step="0.1" hidden></label>
+        <p class="order-help">G는 작을수록 공격적(주식 비중↑), 클수록 상대적으로 보수적(현금 비중↑)입니다. Band는 V를 중심으로 한 주문 범위이며, 책에서는 ±15%·±20%를 대표적으로 설명합니다. 두 값 모두 절대적인 위험등급이나 수익을 보장하지 않습니다.</p>
+        <button type="submit" class="primary">VR 시작</button>
+      </form>
+    </article>
+
+    <article class="card vr-panel-card" id="vrRunningCard" hidden>
+      <div class="section-title"><div><p class="eyebrow">VALUE REBALANCING</p><h2 id="vrRunningTitle">TQQQ · Value Rebalancing</h2></div><div class="section-title-actions"><span id="vrStatusBadge" class="status-badge">-</span></div></div>
+      <p id="vrBlockedReason" class="warning" role="status" hidden></p>
+      <dl class="vr-metrics">
+        <div><dt>Cycle</dt><dd id="vrCycleId">-</dd></div>
+        <div><dt>기간</dt><dd id="vrCyclePeriod">-</dd></div>
+        <div><dt>V</dt><dd id="vrV">-</dd></div>
+        <div><dt>E (직전 사이클 종료)</dt><dd id="vrE">-</dd></div>
+        <div><dt>Pool</dt><dd id="vrPool">-</dd></div>
+        <div><dt>Pool / V</dt><dd id="vrPoolToV">-</dd></div>
+        <div><dt>G</dt><dd id="vrG">-</dd></div>
+        <div><dt>Band</dt><dd id="vrBand">-</dd></div>
+        <div><dt>Lower Value</dt><dd id="vrLowerBand">-</dd></div>
+        <div><dt>Upper Value</dt><dd id="vrUpperBand">-</dd></div>
+        <div><dt>조건주문</dt><dd id="vrOrderCounts">-</dd></div>
+      </dl>
+      <div class="vr-actions">
+        <button type="button" id="vrStartBtn">시작</button>
+        <button type="button" id="vrStopBtn">중지</button>
+      </div>
+
+      <details class="vr-explain">
+        <summary>V / E / Pool / G / Band 설명</summary>
+        <dl id="vrExplainList" class="vr-explain-list"></dl>
+      </details>
+
+      <details class="vr-formula" open>
+        <summary>실력공식</summary>
+        <p class="vr-formula-text" id="vrFormulaText">-</p>
+        <div class="table-wrap"><table class="vr-breakdown-table" id="vrBreakdownTable" hidden>
+          <thead><tr><th>기존 V</th><th>Pool</th><th>G</th><th>E</th><th>Pool/G</th><th>시장보정</th><th>다음 V</th></tr></thead>
+          <tbody><tr>
+            <td id="bdOldV">-</td><td id="bdPool">-</td><td id="bdG">-</td><td id="bdE">-</td>
+            <td id="bdPoolTerm">-</td><td id="bdMarketTerm">-</td><td id="bdNewV">-</td>
+          </tr></tbody>
+        </table></div>
+      </details>
+
+      <details class="vr-config">
+        <summary>사이클 설정</summary>
+        <div class="vr-config-current"><p class="eyebrow">현재 사이클 적용값</p><span id="vrCurrentConfig">-</span></div>
+        <div class="vr-config-pending"><p class="eyebrow">다음 사이클 예약</p><span id="vrPendingConfig">없음</span>
+          <button type="button" id="vrCancelPendingBtn" hidden>예약 변경 취소</button>
+        </div>
+        <p class="order-help">현재 사이클의 기존 주문에는 영향을 주지 않습니다. 새 설정은 다음 격주 사이클부터 적용됩니다.</p>
+        <form id="vrConfigForm" class="vr-config-form">
+          <label>G<select id="vrPendingG"><option value="">(변경 안 함)</option><option value="5">5</option><option value="10">10</option><option value="20">20</option><option value="30">30</option><option value="40">40</option><option value="50">50</option><option value="100">100</option><option value="custom">직접입력</option></select><input id="vrPendingGCustom" type="number" min="1" step="1" hidden></label>
+          <label>Band<select id="vrPendingBand"><option value="">(변경 안 함)</option><option value="5">±5%</option><option value="10">±10%</option><option value="15">±15%</option><option value="20">±20%</option><option value="custom">직접입력</option></select><input id="vrPendingBandCustom" type="number" min="1" step="0.1" hidden></label>
+          <label>Pool 조정 ($, +입금/-인출)<input id="vrPendingPoolAdjustment" type="number" step="0.01"></label>
+          <button type="submit" class="primary">다음 사이클 예약 저장</button>
+        </form>
+      </details>
+    </article>
+
     <section class="metrics">
       <article class="card metric"><span id="selectedValueLabel">선택 ETF 평가액</span><strong id="selectedValue">-</strong></article><article class="card metric"><span id="selectedPnlLabel">선택 ETF 평가손익</span><strong id="selectedPnl">-</strong></article><article class="card metric"><span id="selectedQtyLabel">선택 ETF 보유수량</span><strong id="selectedQty">-</strong></article><article class="card metric"><span>주문가능 현금 · 계좌 공통</span><strong id="cash">-</strong></article>
     </section>

@@ -128,6 +128,20 @@ class TossRateLimitTests(unittest.TestCase):
 
         self.assertIn("가격 범위를 벗어난 주문입니다.", str(ctx.exception))
 
+    @patch("toss_api.urlopen")
+    def test_empty_204_body_returns_empty_dict_not_a_decode_error(self, mocked_urlopen):
+        # DELETE /api/v1/conditional-orders/{id} returns 204 No Content on
+        # success -- json.loads("") would previously raise even though the
+        # request succeeded.
+        response = MagicMock()
+        response.__enter__.return_value.read.return_value = b""
+        response.__enter__.return_value.headers = {}
+        mocked_urlopen.return_value = response
+
+        result = TossBroker()._request("DELETE", "/api/v1/conditional-orders/co-1", include_auth=False)
+
+        self.assertEqual(result, {})
+
     @patch("toss_api.time.sleep")
     @patch("toss_api.urlopen")
     def test_retries_429_using_retry_after(self, mocked_urlopen, mocked_sleep):
