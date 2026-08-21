@@ -51,11 +51,51 @@ from vr_state_store import VRConditionalOrder, VRCycle
 
 DEFAULT_POOL_USAGE_LIMIT_PCT = Decimal("0.75")
 
-# None = not yet empirically verified against the real Toss account. Set
-# only after a deliberate, human-supervised capacity test confirms a real
-# number (see Phase 15 analysis report -- the spec's CONDITIONAL_ORDER rate
-# limit group has no documented count ceiling).
-VERIFIED_MAX_LIVE_CONDITIONAL_ORDERS: int | None = None
+CAPACITY_SCOPE_ACCOUNT = "ACCOUNT"
+CAPACITY_SCOPE_SYMBOL = "SYMBOL"
+CAPACITY_SCOPE_UNKNOWN = "UNKNOWN"
+
+
+@dataclass
+class ConditionalOrderCapacity:
+    """Structured record of what's actually been confirmed about Toss's
+    real open-conditional-order capacity, with provenance -- so a future
+    answer (an official support reply, or a deliberate incremental live
+    test per the Phase 15 plan) can be recorded honestly instead of just
+    overwriting a bare int with no trail. verified_max stays None until a
+    real, dated, sourced answer exists; never guessed.
+
+    scope: CAPACITY_SCOPE_ACCOUNT if the confirmed number is a total across
+    the whole account, CAPACITY_SCOPE_SYMBOL if it's per-symbol, UNKNOWN
+    while unconfirmed (the scope itself may not even be known yet)."""
+
+    verified_max: int | None = None
+    scope: str = CAPACITY_SCOPE_UNKNOWN
+    verified_at: str | None = None  # ISO date the number was confirmed
+    source: str | None = None  # e.g. "Toss 개발자지원팀 문의 회신 (2026-09-01)"
+    notes: str | None = None
+
+
+# Not yet confirmed by any authoritative source -- see the Phase 15 report
+# (checked the full official OpenAPI spec; no documented count ceiling
+# exists for open conditional orders, only named, unnumbered rate-limit
+# groups). Update in place, all fields together, once a real answer exists
+# -- never set verified_max alone without the rest of the provenance.
+VERIFIED_CAPACITY = ConditionalOrderCapacity()
+
+SELL_RESERVATION_UNKNOWN = "UNKNOWN"
+SELL_RESERVATION_RESERVES_QUANTITY = "RESERVES_QUANTITY"
+SELL_RESERVATION_DOES_NOT_RESERVE_UNTIL_TRIGGER = "DOES_NOT_RESERVE_UNTIL_TRIGGER"
+SELL_RESERVATION_OTHER = "OTHER"
+
+# Whether registering multiple concurrent SELL conditional orders for the
+# same symbol actually reserves/holds sellable quantity against double-
+# selling (GET /api/v1/sellable-quantity), or only checks it at trigger
+# time. Not documented in the official spec, not yet empirically tested.
+# UNKNOWN blocks arming any ladder with a nonzero SELL leg count on a LIVE
+# broker -- same fail-closed spirit as capacity, kept as a separate gate
+# since it's a distinct, independently-confirmable fact about the broker.
+CONDITIONAL_SELL_RESERVATION_BEHAVIOR: str = SELL_RESERVATION_UNKNOWN
 
 # Pure runaway-loop guard for buy_ladder_prices' search -- not a business
 # rule. Should never bind for realistic Pool/price ratios (the book's
@@ -87,7 +127,7 @@ class BrokerCapacityBlockedError(RuntimeError):
 
 class BrokerCapacityUnknownError(BrokerCapacityBlockedError):
     """Raised when arming a ladder on a LIVE broker and
-    VERIFIED_MAX_LIVE_CONDITIONAL_ORDERS is still None -- Toss's real open-
+    VERIFIED_CAPACITY.verified_max is still None -- Toss's real open-
     conditional-order capacity has never been empirically verified at all.
     Never guessed and never silently truncated -- the caller must persist a
     blocked state (BROKER_CONDITIONAL_CAPACITY_UNKNOWN) and let a human
@@ -95,12 +135,26 @@ class BrokerCapacityUnknownError(BrokerCapacityBlockedError):
 
 
 class BrokerCapacityExceededError(BrokerCapacityBlockedError):
-    """Raised when VERIFIED_MAX_LIVE_CONDITIONAL_ORDERS is a real, verified
+    """Raised when VERIFIED_CAPACITY.verified_max is a real, verified
     number, but the planned ladder needs more legs than that. Never
     truncate the ladder to fit -- surface this
     (BROKER_CONDITIONAL_CAPACITY_EXCEEDED) and let a human decide (raise
     the verified capacity after re-confirming it, or shrink the ladder via
     G/Pool/pool_usage_limit_pct/band)."""
+
+
+class SellReservationUnknownError(RuntimeError):
+    """Raised when arming a ladder with at least one SELL leg on a LIVE
+    broker and CONDITIONAL_SELL_RESERVATION_BEHAVIOR is still UNKNOWN --
+    whether Toss actually reserves sellable quantity against concurrent
+    SELL conditional orders (vs. only checking at trigger time, which could
+    let more shares be committed than are actually available) has not been
+    confirmed. Never guessed -- the caller must persist a blocked state
+    (SELL_RESERVATION_UNKNOWN) and let a human decide."""
+
+    def __init__(self, message: str, *, sell_count: int) -> None:
+        super().__init__(message)
+        self.sell_count = sell_count
 
 
 @dataclass(frozen=True)

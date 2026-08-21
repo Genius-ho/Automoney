@@ -14,14 +14,20 @@ from vr_state_store import VRConditionalOrder, VRCycle, VRState
 
 
 def setUpModule():
-    # These tests aren't about the broker-capacity gate itself (see
-    # test_vr_web_service.py's BrokerCapacityGateTests for that) -- a
-    # generous verified cap keeps ladder arming unblocked here.
-    vr_execution_policy.VERIFIED_MAX_LIVE_CONDITIONAL_ORDERS = 1000
+    # These tests aren't about the broker-capacity/sell-reservation gates
+    # themselves (see test_vr_web_service.py's BrokerCapacityGateTests and
+    # SellReservationGateTests for those) -- a generous verified cap and a
+    # known reservation behavior keep ladder arming unblocked here.
+    vr_execution_policy.VERIFIED_CAPACITY = vr_execution_policy.ConditionalOrderCapacity(
+        verified_max=1000, scope=vr_execution_policy.CAPACITY_SCOPE_ACCOUNT,
+        verified_at="2026-08-21", source="test setup",
+    )
+    vr_execution_policy.CONDITIONAL_SELL_RESERVATION_BEHAVIOR = vr_execution_policy.SELL_RESERVATION_RESERVES_QUANTITY
 
 
 def tearDownModule():
-    vr_execution_policy.VERIFIED_MAX_LIVE_CONDITIONAL_ORDERS = None
+    vr_execution_policy.VERIFIED_CAPACITY = vr_execution_policy.ConditionalOrderCapacity()
+    vr_execution_policy.CONDITIONAL_SELL_RESERVATION_BEHAVIOR = vr_execution_policy.SELL_RESERVATION_UNKNOWN
 
 
 class FakeConditionalOrderBroker:

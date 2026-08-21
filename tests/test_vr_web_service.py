@@ -10,19 +10,25 @@ from pathlib import Path
 import vr_execution_policy
 from runtime_store import get_strategy_type, set_strategy_type
 from vr_engine import CycleTransitionBlocked
-from vr_execution_policy import BrokerCapacityExceededError, BrokerCapacityUnknownError
+from vr_execution_policy import BrokerCapacityExceededError, BrokerCapacityUnknownError, SellReservationUnknownError
 from web_gui.trading_service import TradingWebService
 
 
 def setUpModule():
-    # These tests aren't about the broker-capacity gate itself (see
-    # BrokerCapacityGateTests for that) -- a generous verified cap keeps
-    # ladder arming unblocked everywhere else in this module.
-    vr_execution_policy.VERIFIED_MAX_LIVE_CONDITIONAL_ORDERS = 1000
+    # These tests aren't about the broker-capacity/sell-reservation gates
+    # themselves (see BrokerCapacityGateTests/SellReservationGateTests for
+    # those) -- a generous verified cap and a known reservation behavior
+    # keep ladder arming unblocked everywhere else in this module.
+    vr_execution_policy.VERIFIED_CAPACITY = vr_execution_policy.ConditionalOrderCapacity(
+        verified_max=1000, scope=vr_execution_policy.CAPACITY_SCOPE_ACCOUNT,
+        verified_at="2026-08-21", source="test setup",
+    )
+    vr_execution_policy.CONDITIONAL_SELL_RESERVATION_BEHAVIOR = vr_execution_policy.SELL_RESERVATION_RESERVES_QUANTITY
 
 
 def tearDownModule():
-    vr_execution_policy.VERIFIED_MAX_LIVE_CONDITIONAL_ORDERS = None
+    vr_execution_policy.VERIFIED_CAPACITY = vr_execution_policy.ConditionalOrderCapacity()
+    vr_execution_policy.CONDITIONAL_SELL_RESERVATION_BEHAVIOR = vr_execution_policy.SELL_RESERVATION_UNKNOWN
 
 
 def _session(date_str: str) -> dict:
@@ -1040,14 +1046,23 @@ class StrategySwitchSafetyTests(unittest.TestCase):
             tempdir.cleanup()
 
 
+def _capacity(verified_max):
+    return vr_execution_policy.ConditionalOrderCapacity(
+        verified_max=verified_max,
+        scope=vr_execution_policy.CAPACITY_SCOPE_ACCOUNT if verified_max is not None else vr_execution_policy.CAPACITY_SCOPE_UNKNOWN,
+        verified_at="2026-08-21" if verified_max is not None else None,
+        source="test" if verified_max is not None else None,
+    )
+
+
 class BrokerCapacityGateTests(unittest.TestCase):
-    """vr_execution_policy.VERIFIED_MAX_LIVE_CONDITIONAL_ORDERS gates arming
-    a ladder on a LIVE broker -- Toss's real open-conditional-order capacity
+    """vr_execution_policy.VERIFIED_CAPACITY.verified_max gates arming a
+    ladder on a LIVE broker -- Toss's real open-conditional-order capacity
     is not documented, so None (unverified) must fail closed rather than
     guess or silently truncate."""
 
     def test_vr_initialize_raises_and_persists_a_capacity_unknown_blocked_state(self):
-        with unittest.mock.patch.object(vr_execution_policy, "VERIFIED_MAX_LIVE_CONDITIONAL_ORDERS", None):
+        with unittest.mock.patch.object(vr_execution_policy, "VERIFIED_CAPACITY", _capacity(None)):
             broker = IntegratedFakeBroker(mode="LIVE")
             service, tempdir = _make_service(broker)
             try:
@@ -1072,7 +1087,7 @@ class BrokerCapacityGateTests(unittest.TestCase):
                 tempdir.cleanup()
 
     def test_vr_initialize_raises_a_capacity_exceeded_error_with_a_small_verified_cap(self):
-        with unittest.mock.patch.object(vr_execution_policy, "VERIFIED_MAX_LIVE_CONDITIONAL_ORDERS", 2):
+        with unittest.mock.patch.object(vr_execution_policy, "VERIFIED_CAPACITY", _capacity(2)):
             broker = IntegratedFakeBroker(mode="LIVE")
             service, tempdir = _make_service(broker)
             try:
@@ -1091,7 +1106,7 @@ class BrokerCapacityGateTests(unittest.TestCase):
         # DRY_RUN never reaches the broker for create/cancel, so the full
         # logical ladder can still be planned and tested even with capacity
         # unverified -- only a LIVE broker is gated.
-        with unittest.mock.patch.object(vr_execution_policy, "VERIFIED_MAX_LIVE_CONDITIONAL_ORDERS", None):
+        with unittest.mock.patch.object(vr_execution_policy, "VERIFIED_CAPACITY", _capacity(None)):
             broker = IntegratedFakeBroker(mode="DRY_RUN")
             service, tempdir = _make_service(broker)
             try:
@@ -1111,14 +1126,14 @@ class BrokerCapacityGateTests(unittest.TestCase):
             broker.holdings["TQQQ"] = ("100", "105")
             broker.prices["TQQQ"] = "110"
             broker.candles["TQQQ"] = [{"date": "2026-08-07", "closePrice": "112"}]
-            with unittest.mock.patch.object(vr_execution_policy, "VERIFIED_MAX_LIVE_CONDITIONAL_ORDERS", 1000):
+            with unittest.mock.patch.object(vr_execution_policy, "VERIFIED_CAPACITY", _capacity(1000)):
                 service.vr_initialize("TQQQ", Decimal("2000"), Decimal("10"), Decimal("15"))
             state = service.vr_store.load("TQQQ")
             state.current_cycle.end_session = "2026-08-07"
             state.anchor_friday = "2026-08-07"
             service.vr_store.save(state)
 
-            with unittest.mock.patch.object(vr_execution_policy, "VERIFIED_MAX_LIVE_CONDITIONAL_ORDERS", None):
+            with unittest.mock.patch.object(vr_execution_policy, "VERIFIED_CAPACITY", _capacity(None)):
                 now = datetime(2026, 8, 7, 20, 1, tzinfo=timezone.utc)
                 service.vr_auto_tick_for_symbol("TQQQ", now=now)
 
@@ -1140,14 +1155,14 @@ class BrokerCapacityGateTests(unittest.TestCase):
             broker.holdings["TQQQ"] = ("100", "105")
             broker.prices["TQQQ"] = "110"
             broker.candles["TQQQ"] = [{"date": "2026-08-07", "closePrice": "112"}]
-            with unittest.mock.patch.object(vr_execution_policy, "VERIFIED_MAX_LIVE_CONDITIONAL_ORDERS", 1000):
+            with unittest.mock.patch.object(vr_execution_policy, "VERIFIED_CAPACITY", _capacity(1000)):
                 service.vr_initialize("TQQQ", Decimal("2000"), Decimal("10"), Decimal("15"))
             state = service.vr_store.load("TQQQ")
             state.current_cycle.end_session = "2026-08-07"
             state.anchor_friday = "2026-08-07"
             service.vr_store.save(state)
 
-            with unittest.mock.patch.object(vr_execution_policy, "VERIFIED_MAX_LIVE_CONDITIONAL_ORDERS", 2):
+            with unittest.mock.patch.object(vr_execution_policy, "VERIFIED_CAPACITY", _capacity(2)):
                 now = datetime(2026, 8, 7, 20, 1, tzinfo=timezone.utc)
                 service.vr_auto_tick_for_symbol("TQQQ", now=now)
 
@@ -1157,6 +1172,87 @@ class BrokerCapacityGateTests(unittest.TestCase):
             self.assertGreater(final_state.capacity_blocker["total_count"], 2)
         finally:
             tempdir.cleanup()
+
+
+class SellReservationGateTests(unittest.TestCase):
+    """vr_execution_policy.CONDITIONAL_SELL_RESERVATION_BEHAVIOR gates
+    arming any ladder with a nonzero SELL leg count on a LIVE broker,
+    separately from (and checked after) the capacity gate -- whether Toss
+    actually reserves sellable quantity against concurrent SELL conditional
+    orders is undocumented and not yet empirically confirmed."""
+
+    def test_vr_initialize_raises_and_persists_a_sell_reservation_unknown_blocked_state(self):
+        with unittest.mock.patch.object(vr_execution_policy, "VERIFIED_CAPACITY", _capacity(1000)), \
+             unittest.mock.patch.object(
+                 vr_execution_policy, "CONDITIONAL_SELL_RESERVATION_BEHAVIOR",
+                 vr_execution_policy.SELL_RESERVATION_UNKNOWN,
+             ):
+            broker = IntegratedFakeBroker(mode="LIVE")
+            service, tempdir = _make_service(broker)
+            try:
+                broker.holdings["TQQQ"] = ("100", "105")  # produces sell legs
+                broker.prices["TQQQ"] = "110"
+                with self.assertRaises(SellReservationUnknownError):
+                    service.vr_initialize("TQQQ", Decimal("2000"), Decimal("10"), Decimal("15"))
+                state = service.vr_store.load("TQQQ")
+                self.assertEqual(state.status, "SELL_RESERVATION_UNKNOWN")
+                self.assertIsNotNone(state.current_cycle)
+                self.assertEqual(state.conditional_orders, [])
+                self.assertGreater(state.sell_reservation_blocker["sell_count"], 0)
+            finally:
+                tempdir.cleanup()
+
+    def test_capacity_gate_is_checked_before_the_sell_reservation_gate(self):
+        # Both unresolved at once -- capacity (the more fundamental gate)
+        # must be the one that actually fires.
+        with unittest.mock.patch.object(vr_execution_policy, "VERIFIED_CAPACITY", _capacity(None)), \
+             unittest.mock.patch.object(
+                 vr_execution_policy, "CONDITIONAL_SELL_RESERVATION_BEHAVIOR",
+                 vr_execution_policy.SELL_RESERVATION_UNKNOWN,
+             ):
+            broker = IntegratedFakeBroker(mode="LIVE")
+            service, tempdir = _make_service(broker)
+            try:
+                broker.holdings["TQQQ"] = ("100", "105")
+                broker.prices["TQQQ"] = "110"
+                with self.assertRaises(BrokerCapacityUnknownError):
+                    service.vr_initialize("TQQQ", Decimal("2000"), Decimal("10"), Decimal("15"))
+                state = service.vr_store.load("TQQQ")
+                self.assertEqual(state.status, "BROKER_CONDITIONAL_CAPACITY_UNKNOWN")
+            finally:
+                tempdir.cleanup()
+
+    def test_arm_succeeds_once_sell_reservation_behavior_is_known(self):
+        with unittest.mock.patch.object(vr_execution_policy, "VERIFIED_CAPACITY", _capacity(1000)), \
+             unittest.mock.patch.object(
+                 vr_execution_policy, "CONDITIONAL_SELL_RESERVATION_BEHAVIOR",
+                 vr_execution_policy.SELL_RESERVATION_RESERVES_QUANTITY,
+             ):
+            broker = IntegratedFakeBroker(mode="LIVE")
+            service, tempdir = _make_service(broker)
+            try:
+                broker.holdings["TQQQ"] = ("100", "105")
+                broker.prices["TQQQ"] = "110"
+                result = service.vr_initialize("TQQQ", Decimal("2000"), Decimal("10"), Decimal("15"))
+                self.assertEqual(result["status"], "ACTIVE")
+                state = service.vr_store.load("TQQQ")
+                self.assertGreater(len([o for o in state.conditional_orders if o.side == "sell"]), 0)
+            finally:
+                tempdir.cleanup()
+
+    def test_dry_run_ignores_the_sell_reservation_gate(self):
+        with unittest.mock.patch.object(
+            vr_execution_policy, "CONDITIONAL_SELL_RESERVATION_BEHAVIOR", vr_execution_policy.SELL_RESERVATION_UNKNOWN,
+        ):
+            broker = IntegratedFakeBroker(mode="DRY_RUN")
+            service, tempdir = _make_service(broker)
+            try:
+                broker.holdings["TQQQ"] = ("100", "105")
+                broker.prices["TQQQ"] = "110"
+                result = service.vr_initialize("TQQQ", Decimal("2000"), Decimal("10"), Decimal("15"))
+                self.assertEqual(result["status"], "ACTIVE")
+            finally:
+                tempdir.cleanup()
 
 
 class ZeroNetworkCallsTests(unittest.TestCase):

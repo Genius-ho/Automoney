@@ -102,6 +102,12 @@ class VRState:
     # parsing blocked_reason's free text. Cleared the moment a ladder is
     # next successfully armed.
     capacity_blocker: dict[str, Any] | None = None
+    # Set only when status is SELL_RESERVATION_UNKNOWN: {"sell_count": int}.
+    # Separate from capacity_blocker since it's a distinct, independently-
+    # confirmable fact about the broker (see vr_execution_policy's
+    # CONDITIONAL_SELL_RESERVATION_BEHAVIOR). Cleared the moment a ladder is
+    # next successfully armed.
+    sell_reservation_blocker: dict[str, Any] | None = None
 
 
 _CYCLE_DECIMAL_FIELDS = ("V", "G", "band_pct", "pool_start", "pool_current", "lower_band", "upper_band")
@@ -166,6 +172,7 @@ class VRStateStore:
             "anchor_friday": state.anchor_friday,
             "cycle_number": state.cycle_number,
             "capacity_blocker": state.capacity_blocker,
+            "sell_reservation_blocker": state.sell_reservation_blocker,
             "updated_at": datetime.now(timezone.utc).isoformat(),
         }
 
@@ -211,4 +218,5 @@ class VRStateStore:
             anchor_friday=raw.get("anchor_friday"),
             cycle_number=int(raw.get("cycle_number") or 0),
             capacity_blocker=raw.get("capacity_blocker"),
+            sell_reservation_blocker=raw.get("sell_reservation_blocker"),
         )

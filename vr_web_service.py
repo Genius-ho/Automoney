@@ -44,7 +44,12 @@ from vr_engine import (
     scheduled_cycle_end_friday,
     transition_cycle,
 )
-from vr_execution_policy import BrokerCapacityBlockedError, BrokerCapacityExceededError, BrokerCapacityUnknownError
+from vr_execution_policy import (
+    BrokerCapacityBlockedError,
+    BrokerCapacityExceededError,
+    BrokerCapacityUnknownError,
+    SellReservationUnknownError,
+)
 from vr_formula import band
 from vr_funds_ledger import FundsReservationLedger, available_vr_buying_power
 from vr_state_store import VRConditionalOrder, VRState, VRStateStore
@@ -61,6 +66,7 @@ from web_gui.web_service import _collect_symbol_rows, _find_decimal, _text_decim
 _NO_NEW_ORDER_STATUSES = {
     "UNINITIALIZED", "CYCLE_TRANSITION_BLOCKED", "UNKNOWN_CONDITIONAL_STATUS",
     "BROKER_CONDITIONAL_CAPACITY_UNKNOWN", "BROKER_CONDITIONAL_CAPACITY_EXCEEDED",
+    "SELL_RESERVATION_UNKNOWN",
 }
 
 
@@ -313,6 +319,15 @@ class VRWebServiceMixin:
             }
             self.vr_store.save(state)
             return
+        except SellReservationUnknownError as error:
+            # Same reasoning as the capacity blocker above: the old cycle's
+            # orders are already gone, this symbol stays unarmed until a
+            # human confirms the SELL reservation behavior and retries.
+            state.status = "SELL_RESERVATION_UNKNOWN"
+            state.blocked_reason = str(error)
+            state.sell_reservation_blocker = {"sell_count": error.sell_count}
+            self.vr_store.save(state)
+            return
         self.vr_store.save(new_state)
 
     def vr_auto_tick_for_symbol(self, symbol: str, now: datetime | None = None) -> None:
@@ -393,6 +408,12 @@ class VRWebServiceMixin:
             }
             self.vr_store.save(state)
             raise
+        except SellReservationUnknownError as error:
+            state.status = "SELL_RESERVATION_UNKNOWN"
+            state.blocked_reason = str(error)
+            state.sell_reservation_blocker = {"sell_count": error.sell_count}
+            self.vr_store.save(state)
+            raise
         state.conditional_orders = orders
         state.current_cycle = replace(state.current_cycle, planned_buy_spend=planned_buy_spend)
         self.vr_store.save(state)
@@ -405,6 +426,7 @@ class VRWebServiceMixin:
             raise ValueError(f"{symbol}: VR이 아직 초기화되지 않았습니다.")
         if state.status in (
             "CYCLE_TRANSITION_BLOCKED", "BROKER_CONDITIONAL_CAPACITY_UNKNOWN", "BROKER_CONDITIONAL_CAPACITY_EXCEEDED",
+            "SELL_RESERVATION_UNKNOWN",
         ):
             raise ValueError(f"{symbol}: {state.status} 상태입니다. 먼저 원인을 해결하세요: {state.blocked_reason}")
         if state.status == "ACTIVE":
@@ -485,6 +507,7 @@ class VRWebServiceMixin:
             "status": state.status,
             "blocked_reason": state.blocked_reason,
             "capacity_blocker": state.capacity_blocker,
+            "sell_reservation_blocker": state.sell_reservation_blocker,
             "cycle_number": state.cycle_number,
             "anchor_friday": state.anchor_friday,
             "current_cycle": None,

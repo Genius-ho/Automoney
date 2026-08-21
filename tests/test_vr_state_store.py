@@ -99,6 +99,26 @@ class VRStateStoreRoundTripTests(unittest.TestCase):
             loaded = store.load("TQQQ")
             self.assertIsNone(loaded.capacity_blocker)
 
+    def test_sell_reservation_blocker_round_trips_when_set(self):
+        with tempfile.TemporaryDirectory() as directory:
+            store = VRStateStore(Path(directory) / "vr_state.json")
+            state = store.load("TQQQ")
+            state.status = "SELL_RESERVATION_UNKNOWN"
+            state.sell_reservation_blocker = {"sell_count": 66}
+            store.save(state)
+
+            loaded = store.load("TQQQ")
+            self.assertEqual(loaded.sell_reservation_blocker, {"sell_count": 66})
+
+    def test_sell_reservation_blocker_defaults_to_none(self):
+        with tempfile.TemporaryDirectory() as directory:
+            store = VRStateStore(Path(directory) / "vr_state.json")
+            state = store.load("TQQQ")
+            store.save(state)
+
+            loaded = store.load("TQQQ")
+            self.assertIsNone(loaded.sell_reservation_blocker)
+
     def test_e_at_close_round_trips_when_set(self):
         with tempfile.TemporaryDirectory() as directory:
             store = VRStateStore(Path(directory) / "vr_state.json")
