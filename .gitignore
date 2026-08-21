@@ -11,6 +11,10 @@ state.json
 runtime.json
 audit.jsonl
 
+# Phase 14 smoke-test artifacts (real-account response captures; not secrets
+# but not something to commit either)
+smoke_artifacts/
+
 # Logs and local databases
 *.log
 *.db

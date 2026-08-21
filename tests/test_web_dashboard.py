@@ -99,7 +99,7 @@ class WebDashboardLoginUiTests(unittest.TestCase):
         for label in ('매수/매도', '수량', '지정가', '주문 방식', '사유', '상태'):
             self.assertIn(label, self.html)
         self.assertLess(self.html.index('전체 계좌 보유종목'), self.html.index('class="metrics"'))
-        self.assertLess(self.html.index('class="card order-plan-card"'), self.html.index('class="card emergency-card"'))
+        self.assertLess(self.html.index('class="card order-plan-card"'), self.html.index('class="card emergency-card mumae-only"'))
         self.assertIn('order.status', self.javascript)
 
     def test_etf_control_table_has_status_start_stop_and_ladder_checkboxes(self):

@@ -9,12 +9,31 @@ from pathlib import Path
 from typing import Any, Callable
 
 from audit_log import AuditLog
+from market_quote import fetch_unadjusted_daily_candles, resolve_day_quote
 from mumae_core import ETF_UNIVERSE, normalize_down_ladder_levels
 from runtime_store import get_strategy_type, normalize_delay_minutes
 from secure_credentials import SecureCredentialStore, TossCredentials
 from toss_api import TossBroker
-from web_gui.web_service import _json_value
+from web_gui.web_service import _collect_symbol_rows, _json_value
 from web_gui.trading_service import TradingWebService
+
+# Real index-level data exists only for domestic (KR) indices, via Toss's
+# separate "Market Indicators" endpoint group (/api/v1/market-indicators/...,
+# verified against the live official OpenAPI spec). Its symbol catalog is
+# exactly {KOSPI, KOSDAQ, KR_BOND_2Y..30Y} -- no US indices are in it, and
+# there is no other official raw index-level feed anywhere in this API for
+# NASDAQ/S&P 500/semiconductor indices, only tradable US stock/ETF quotes.
+# Those three are therefore shown via their most common tracking ETF and
+# explicitly flagged is_proxy=True rather than presented as the literal
+# index value.
+REAL_INDEX_SYMBOLS: tuple[tuple[str, str], ...] = (
+    ("KOSPI", "코스피"),
+)
+INDEX_PROXIES: tuple[tuple[str, str], ...] = (
+    ("QQQ", "나스닥 100"),
+    ("SPY", "S&P 500"),
+    ("SOXX", "필라델피아 반도체"),
+)
 
 
 class LiveActionsRequiredError(PermissionError):
@@ -214,6 +233,48 @@ class ApplicationEngine(TradingWebService):
         payload["after"] = after
         return {"auto_order_delay_minutes": after}
 
+    def market_indices(self) -> list[dict[str, Any]]:
+        """Top-of-dashboard index strip. 코스피 is a real index value (Toss's
+        Market Indicators endpoint); 나스닥100/S&P500/반도체 have no official
+        raw index feed and are shown via their tracking ETF, flagged
+        is_proxy=True -- see REAL_INDEX_SYMBOLS/INDEX_PROXIES. Read-only;
+        never touches strategy state."""
+        broker = self.broker()
+        results: list[dict[str, Any]] = []
+
+        real_symbols = [symbol for symbol, _ in REAL_INDEX_SYMBOLS]
+        if real_symbols:
+            price_rows = {
+                row.get("symbol"): row
+                for row in broker.get_market_indicator_prices_raw(real_symbols).get("result", [])
+            }
+            for symbol, label in REAL_INDEX_SYMBOLS:
+                quote = price_rows.get(symbol, {})
+                candles = broker.get_market_indicator_candles_raw(symbol, interval="1d", count=5).get("result", {}).get("candles", [])
+                resolved = resolve_day_quote(quote, candles)
+                results.append({
+                    "symbol": symbol,
+                    "label": label,
+                    "is_proxy": False,
+                    "price": str(resolved.current_price),
+                    "day_change_pct": str(resolved.day_change_pct) if resolved.day_change_pct is not None else None,
+                })
+
+        proxy_symbols = [symbol for symbol, _ in INDEX_PROXIES]
+        proxy_price_rows = _collect_symbol_rows(broker.get_prices_raw(proxy_symbols))
+        for symbol, label in INDEX_PROXIES:
+            quote = proxy_price_rows.get(symbol, {})
+            candles = fetch_unadjusted_daily_candles(broker, symbol)
+            resolved = resolve_day_quote(quote, candles)
+            results.append({
+                "symbol": symbol,
+                "label": label,
+                "is_proxy": True,
+                "price": str(resolved.current_price),
+                "day_change_pct": str(resolved.day_change_pct) if resolved.day_change_pct is not None else None,
+            })
+        return results
+
     def etf_overview(self) -> list[dict[str, Any]]:
         """Per-ETF status row for the web GUI table: run state, last new-order
         attempt/error, open order count, and Down Ladder level selection."""
@@ -368,6 +429,8 @@ class ApplicationEngine(TradingWebService):
             return self.vr_sync_orders(symbol)
         if command == "vr.snapshot":
             return self.vr_snapshot(symbol)
+        if command == "market.indices":
+            return {"indices": self.market_indices()}
         if command == "strategy.set_type":
             return self._strategy_set_type(payload)
         raise ValueError(f"지원하지 않는 엔진 명령입니다: {command}")

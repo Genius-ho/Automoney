@@ -226,6 +226,20 @@ class TossBroker:
             params["before"] = before
         return self._request("GET", "/api/v1/candles?" + urlencode(params))
 
+    def get_market_indicator_prices_raw(self, symbols: list[str]) -> dict:
+        """GET /api/v1/market-indicators/prices -- real market-index/bond
+        levels (KOSPI, KOSDAQ, KR_BOND_2Y..30Y only; verified against the
+        live official OpenAPI spec). No US indices are in this catalog."""
+        return self._request("GET", "/api/v1/market-indicators/prices?symbols=" + ",".join(symbols))
+
+    def get_market_indicator_candles_raw(
+        self, symbol: str, interval: str = "1d", count: int = 5, before: str | None = None
+    ) -> dict:
+        params: dict[str, str | int] = {"interval": interval, "count": count}
+        if before:
+            params["before"] = before
+        return self._request("GET", f"/api/v1/market-indicators/{symbol}/candles?" + urlencode(params))
+
     def get_us_market_calendar_raw(self, date_value: str | None = None) -> dict:
         path = "/api/v1/market-calendar/US" if date_value is None else "/api/v1/market-calendar/US?date=" + date_value
         return self._request("GET", path)

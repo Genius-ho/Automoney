@@ -183,6 +183,24 @@ class VRSnapshotAndOverviewTests(unittest.TestCase):
             self.assertIn("V", snapshot["explain"])
             self.assertIn("Pool", snapshot["explain"])
 
+    def test_vr_snapshot_includes_history_points_for_the_v1_v2_chart(self):
+        with tempfile.TemporaryDirectory() as temp:
+            broker = VRFakeBroker()
+            engine = ApplicationEngine(Path(temp), broker_factory=lambda: broker)
+            engine.execute(
+                "vr.initialize",
+                {"symbol": "TQQQ", "initial_pool": "1000", "G": "10", "band_pct": "15"},
+                source="TEST", actor="tester",
+            )
+            snapshot = engine.execute("vr.snapshot", {"symbol": "TQQQ"}, source="TEST", actor="tester")
+            points = snapshot["history_points"]
+            self.assertEqual(len(points), 1)
+            self.assertEqual(points[0]["cycle_id"], "TQQQ-c1")
+            self.assertEqual(points[0]["V"], "11000.00")
+            self.assertIsNone(points[0]["E_at_close"])
+            self.assertEqual(points[0]["lower_band"], "9350.00")
+            self.assertEqual(points[0]["upper_band"], "12650.00")
+
 
 if __name__ == "__main__":
     unittest.main()

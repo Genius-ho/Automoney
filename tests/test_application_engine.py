@@ -47,6 +47,18 @@ class MixedAccountBroker:
             }
         }
 
+    def get_market_indicator_prices_raw(self, symbols):
+        return {"result": [
+            {"symbol": symbol, "lastPrice": "2812.45", "timestamp": _TODAY + "T15:30:00+09:00"}
+            for symbol in symbols
+        ]}
+
+    def get_market_indicator_candles_raw(self, symbol, interval="1d", count=5, before=None):
+        return {"result": {"candles": [
+            {"timestamp": _TODAY + "T09:00:00+09:00", "closePrice": "2812.45"},
+            {"timestamp": _YESTERDAY + "T09:00:00+09:00", "closePrice": "2790.00"},
+        ]}}
+
 
 class ConfigurableBroker:
     mode = "DRY_RUN"
@@ -443,6 +455,32 @@ class NoDuplicateSubmissionUnderConcurrencyTests(unittest.TestCase):
                 self.assertEqual(broker.calls[index][0], "start")
                 self.assertEqual(broker.calls[index + 1][0], "end")
                 self.assertEqual(broker.calls[index][1], broker.calls[index + 1][1])
+
+
+class MarketIndicesTests(unittest.TestCase):
+    def test_market_indices_returns_kospi_as_a_real_index_then_proxy_etfs(self):
+        with tempfile.TemporaryDirectory() as temp:
+            broker = MixedAccountBroker()
+            engine = ApplicationEngine(Path(temp), broker_factory=lambda: broker)
+
+            rows = engine.market_indices()
+
+            self.assertEqual([row["symbol"] for row in rows], ["KOSPI", "QQQ", "SPY", "SOXX"])
+            self.assertEqual(rows[0]["label"], "코스피")
+            self.assertFalse(rows[0]["is_proxy"])
+            self.assertEqual(rows[0]["price"], "2812.45")
+            for row in rows[1:]:
+                self.assertTrue(row["is_proxy"])
+                self.assertEqual(row["price"], "84.5")
+
+    def test_market_indices_reachable_via_dispatch(self):
+        with tempfile.TemporaryDirectory() as temp:
+            broker = MixedAccountBroker()
+            engine = ApplicationEngine(Path(temp), broker_factory=lambda: broker)
+
+            result = engine.execute("market.indices", {}, source="TEST", actor="tester")
+
+            self.assertEqual(len(result["indices"]), 4)
 
 
 if __name__ == "__main__":

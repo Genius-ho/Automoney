@@ -45,6 +45,7 @@ from vr_engine import (
     transition_cycle,
 )
 from vr_execution_policy import CancellationNotConfirmedError, rearm_after_fill
+from vr_formula import band
 from vr_funds_ledger import FundsReservationLedger, available_vr_buying_power
 from vr_state_store import VRConditionalOrder, VRState, VRStateStore
 from web_gui.web_service import _collect_symbol_rows, _find_decimal, _text_decimal
@@ -504,6 +505,33 @@ class VRWebServiceMixin:
                 "market_adjustment_term": last.get("market_adjustment_term"),
                 "new_V": last.get("new_V"),
             }
+
+        # V1 -> V2 -> ... progression for the chart/gauge visualizations:
+        # one point per closed cycle (from history) plus the current cycle
+        # (if any). E_at_close is null for the current cycle since it isn't
+        # closed yet -- the frontend uses vr.refresh's live position value
+        # instead for that last point.
+        history_points: list[dict[str, Any]] = []
+        for entry in state.history:
+            entry_v = Decimal(str(entry.get("V") or "0"))
+            entry_band_pct = Decimal(str(entry.get("band_pct") or "0"))
+            lower, upper = band(entry_v, entry_band_pct) if entry_band_pct > 0 else (entry_v, entry_v)
+            history_points.append({
+                "cycle_id": entry.get("cycle_id"),
+                "V": entry.get("V"),
+                "lower_band": str(lower),
+                "upper_band": str(upper),
+                "E_at_close": entry.get("E_at_close"),
+            })
+        if cycle is not None:
+            history_points.append({
+                "cycle_id": cycle.cycle_id,
+                "V": str(cycle.V),
+                "lower_band": str(cycle.lower_band),
+                "upper_band": str(cycle.upper_band),
+                "E_at_close": str(cycle.E_at_close) if cycle.E_at_close is not None else None,
+            })
+        payload["history_points"] = history_points
         return payload
 
     def vr_set_strategy_type(self, symbol: str, new_strategy_type: str) -> dict[str, Any]:
