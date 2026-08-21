@@ -70,6 +70,12 @@ class VRConditionalOrder:
     expire_date: str
     status: str
     triggered_order_id: str | None = None
+    # 1-indexed, inclusive: which contiguous span of the uncompressed Book
+    # Ladder this one broker order covers (equal to each other when the
+    # ladder wasn't compressed). None for orders persisted before
+    # compression existed.
+    logical_start_rung: int | None = None
+    logical_end_rung: int | None = None
 
 
 @dataclass

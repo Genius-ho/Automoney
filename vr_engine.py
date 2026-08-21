@@ -325,44 +325,58 @@ def arm_cycle_orders(
     "Projected Pool" display (cycle.pool_current instead tracks Pool from
     real fills only).
 
-    Refuses to register anything on a LIVE broker if the planned ladder's
-    total leg count exceeds vr_execution_policy.VERIFIED_CAPACITY.verified_max
-    (raises BrokerCapacityUnknownError/BrokerCapacityExceededError), or if
-    there's a nonzero SELL leg count and
+    The full logical Book Ladder is always computed in full (never
+    truncated) and only compressed into at most
+    vr_execution_policy.MAX_BROKER_ORDERS_PER_SIDE broker orders per side
+    afterward (vr_execution_policy.compress_ladder) -- so the required
+    broker capacity is always <= 2 * MAX_BROKER_ORDERS_PER_SIDE regardless
+    of position size. Refuses to register anything on a LIVE broker if that
+    compressed leg count exceeds
+    vr_execution_policy.VERIFIED_CAPACITY.verified_max (raises
+    BrokerCapacityUnknownError/BrokerCapacityExceededError), or if there's
+    a nonzero SELL leg count and
     vr_execution_policy.CONDITIONAL_SELL_RESERVATION_BEHAVIOR is still
     UNKNOWN (raises SellReservationUnknownError) -- see that module's
     docstring for both gates."""
-    buy_legs, planned_buy_spend = plan_buy_ladder(
+    buy_legs, planned_buy_spend, logical_buy_count = plan_buy_ladder(
         cycle.lower_band, current_qty, cycle.pool_current,
         available_buying_power=available_buying_power,
     )
-    sell_legs = plan_sell_ladder(cycle.upper_band, current_qty, available_sell_qty)
+    sell_legs, logical_sell_count = plan_sell_ladder(cycle.upper_band, current_qty, available_sell_qty)
 
-    total_legs = len(buy_legs) + len(sell_legs)
+    broker_buy_count = len(buy_legs)
+    broker_sell_count = len(sell_legs)
+    total_broker_legs = broker_buy_count + broker_sell_count
     is_live = getattr(broker, "mode", None) == "LIVE"
-    if total_legs > 0 and is_live:
+    if total_broker_legs > 0 and is_live:
         verified_max = vr_execution_policy.VERIFIED_CAPACITY.verified_max
         if verified_max is None:
             raise BrokerCapacityUnknownError(
-                f"{symbol}: planned ladder has {total_legs} legs ({len(buy_legs)} buy + {len(sell_legs)} sell), "
-                "but Toss's real open-conditional-order capacity has not been empirically verified "
-                "(VERIFIED_CAPACITY.verified_max is None). Refusing to arm on a LIVE broker.",
-                buy_count=len(buy_legs), sell_count=len(sell_legs), verified_capacity=None,
+                f"{symbol}: requires {total_broker_legs} broker conditional orders "
+                f"({broker_buy_count} buy + {broker_sell_count} sell; logical ladder is "
+                f"{logical_buy_count} buy + {logical_sell_count} sell), but Toss's real open-conditional-order "
+                "capacity has not been empirically verified (VERIFIED_CAPACITY.verified_max is None). "
+                "Refusing to arm on a LIVE broker.",
+                buy_count=broker_buy_count, sell_count=broker_sell_count, verified_capacity=None,
+                logical_buy_count=logical_buy_count, logical_sell_count=logical_sell_count,
             )
-        if total_legs > verified_max:
+        if total_broker_legs > verified_max:
             raise BrokerCapacityExceededError(
-                f"{symbol}: planned ladder has {total_legs} legs ({len(buy_legs)} buy + {len(sell_legs)} sell), "
-                f"which exceeds the verified capacity of {verified_max}. Refusing to truncate -- "
-                "raise VERIFIED_CAPACITY.verified_max after re-confirming it, or shrink the ladder.",
-                buy_count=len(buy_legs), sell_count=len(sell_legs), verified_capacity=verified_max,
+                f"{symbol}: requires {total_broker_legs} broker conditional orders "
+                f"({broker_buy_count} buy + {broker_sell_count} sell; logical ladder is "
+                f"{logical_buy_count} buy + {logical_sell_count} sell), which exceeds the verified capacity of "
+                f"{verified_max}. Refusing to truncate -- raise VERIFIED_CAPACITY.verified_max after "
+                "re-confirming it, or shrink the ladder.",
+                buy_count=broker_buy_count, sell_count=broker_sell_count, verified_capacity=verified_max,
+                logical_buy_count=logical_buy_count, logical_sell_count=logical_sell_count,
             )
-    if len(sell_legs) > 0 and is_live:
+    if broker_sell_count > 0 and is_live:
         if vr_execution_policy.CONDITIONAL_SELL_RESERVATION_BEHAVIOR == vr_execution_policy.SELL_RESERVATION_UNKNOWN:
             raise SellReservationUnknownError(
-                f"{symbol}: planned ladder has {len(sell_legs)} sell legs, but Toss's SELL-side sellable-quantity "
-                "reservation behavior has not been confirmed "
+                f"{symbol}: requires {broker_sell_count} broker sell conditional orders, but Toss's SELL-side "
+                "sellable-quantity reservation behavior has not been confirmed "
                 "(CONDITIONAL_SELL_RESERVATION_BEHAVIOR is UNKNOWN). Refusing to arm on a LIVE broker.",
-                sell_count=len(sell_legs),
+                sell_count=broker_sell_count,
             )
 
     new_orders = register_ladder_orders(broker, cycle, symbol, buy_legs, starting_sequence=1)

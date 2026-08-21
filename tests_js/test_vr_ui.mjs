@@ -192,9 +192,10 @@ test("VR selected with an active cycle: cycle/V/G/Band/Pool and conditional orde
       V: "18287.95", G: "10", band_pct: "15", pool_current: "1500.00",
       lower_band: "15544.76", upper_band: "21031.14",
     },
+    ladder_counts: { logical_buy_count: 43, broker_buy_count: 20, logical_sell_count: 126, broker_sell_count: 20 },
     conditional_orders: [
-      { side: "buy", trigger_price: "85.00", order_price: "85.00", quantity: 5, expire_date: "2026-08-21", conditional_order_id: "co-1", status: "OPEN", triggered_order_id: null },
-      { side: "sell", trigger_price: "115.00", order_price: "115.00", quantity: 3, expire_date: "2026-08-21", conditional_order_id: "co-2", status: "FILLED", triggered_order_id: "reg-9" },
+      { side: "buy", trigger_price: "85.00", order_price: "85.00", quantity: 5, logical_start_rung: 1, logical_end_rung: 5, expire_date: "2026-08-21", conditional_order_id: "co-1", status: "OPEN", triggered_order_id: null },
+      { side: "sell", trigger_price: "115.00", order_price: "115.00", quantity: 3, logical_start_rung: 8, logical_end_rung: 10, expire_date: "2026-08-21", conditional_order_id: "co-2", status: "FILLED", triggered_order_id: "reg-9" },
     ],
     pending_config: { G: null, band_pct: null, pool_adjustment: null },
   };
@@ -204,9 +205,40 @@ test("VR selected with an active cycle: cycle/V/G/Band/Pool and conditional orde
   assert.equal(sandbox.document.getElementById("vrPlanCycleId").textContent, "TQQQ-c2");
   assert.equal(sandbox.document.getElementById("vrPlanG").textContent, "10");
   assert.equal(sandbox.document.getElementById("vrPlanBand").textContent, "±15%");
+  // Logical Book Ladder vs Broker Execution Ladder counts.
+  assert.equal(sandbox.document.getElementById("vrPlanLogicalBuyCount").textContent, 43);
+  assert.equal(sandbox.document.getElementById("vrPlanBrokerBuyCount").textContent, 20);
+  assert.equal(sandbox.document.getElementById("vrPlanLogicalSellCount").textContent, 126);
+  assert.equal(sandbox.document.getElementById("vrPlanBrokerSellCount").textContent, 20);
+  assert.equal(sandbox.document.getElementById("vrPlanBrokerTotalCount").textContent, 40);
   // Only the OPEN leg is shown in the active-orders table.
   assert.equal(sandbox.document.getElementById("vrPlanOrdersBody")._children.length, 1);
   assert.equal(sandbox.document.getElementById("vrPlanOrdersTable").hidden, false);
+});
+
+test("VR order plan table shows the covered logical rung range for a compressed order", () => {
+  const { sandbox } = loadApp();
+  const data = {
+    status: "ACTIVE", blocked_reason: null,
+    current_cycle: {
+      cycle_id: "TQQQ-c1", start_session: "2026-08-21", end_session: "2026-09-04",
+      V: "8956.08", G: "10", band_pct: "15", pool_current: "1000",
+      lower_band: "7612.67", upper_band: "10299.49",
+    },
+    ladder_counts: { logical_buy_count: 43, broker_buy_count: 20, logical_sell_count: 126, broker_sell_count: 20 },
+    conditional_orders: [
+      { side: "sell", trigger_price: "3815.02", order_price: "3815.02", quantity: 7, logical_start_rung: 120, logical_end_rung: 126, expire_date: "2026-09-04", conditional_order_id: "co-20", status: "OPEN", triggered_order_id: null },
+      { side: "buy", trigger_price: "38.46", order_price: "38.46", quantity: 1, logical_start_rung: 1, logical_end_rung: 1, expire_date: "2026-09-04", conditional_order_id: "co-1", status: "OPEN", triggered_order_id: null },
+    ],
+    pending_config: {},
+  };
+  sandbox.renderVrOrderPlan("TQQQ", data);
+  const rows = sandbox.document.getElementById("vrPlanOrdersBody")._children;
+  assert.equal(rows.length, 2);
+  // Compressed sell leg covering S120-S126.
+  assert.equal(rows[0]._children[4].textContent, "S120-126");
+  // Single-rung buy leg: no range dash, just B1.
+  assert.equal(rows[1]._children[4].textContent, "B1");
 });
 
 test("renderVrRunningCard shows Projected Pool separately from actual Pool", () => {

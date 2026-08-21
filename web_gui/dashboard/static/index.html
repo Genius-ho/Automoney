@@ -174,8 +174,13 @@
             <div><dt>Pool</dt><dd id="vrPlanPool">-</dd></div>
             <div><dt>Lower Value</dt><dd id="vrPlanLowerValue">-</dd></div>
             <div><dt>Upper Value</dt><dd id="vrPlanUpperValue">-</dd></div>
+            <div><dt>Logical BUY rungs</dt><dd id="vrPlanLogicalBuyCount">-</dd></div>
+            <div><dt>Broker BUY orders</dt><dd id="vrPlanBrokerBuyCount">-</dd></div>
+            <div><dt>Logical SELL rungs</dt><dd id="vrPlanLogicalSellCount">-</dd></div>
+            <div><dt>Broker SELL orders</dt><dd id="vrPlanBrokerSellCount">-</dd></div>
+            <div><dt>Broker conditional orders (total)</dt><dd id="vrPlanBrokerTotalCount">-</dd></div>
           </dl>
-          <div class="table-wrap"><table class="order-plan-table" id="vrPlanOrdersTable" hidden><thead><tr><th>매수/매도</th><th>Trigger Price</th><th>Order Price</th><th>수량</th><th>만료일</th><th>조건주문 ID</th><th>상태</th><th>Triggered Order ID</th></tr></thead><tbody id="vrPlanOrdersBody"></tbody></table></div>
+          <div class="table-wrap"><table class="order-plan-table" id="vrPlanOrdersTable" hidden><thead><tr><th>매수/매도</th><th>Trigger Price</th><th>Order Price</th><th>수량</th><th>Covers</th><th>만료일</th><th>조건주문 ID</th><th>상태</th><th>Triggered Order ID</th></tr></thead><tbody id="vrPlanOrdersBody"></tbody></table></div>
           <p id="vrPlanEmptyOrders" class="empty" hidden>활성 조건주문이 없습니다.</p>
           <div id="vrPlanPendingConfig" class="vr-config-pending" hidden><p class="eyebrow">다음 사이클 예약</p><span id="vrPlanPendingText">없음</span></div>
         </div>

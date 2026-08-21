@@ -202,6 +202,47 @@ class VRStateStoreRoundTripTests(unittest.TestCase):
             self.assertEqual(order.quantity, 5)
             self.assertIsNone(order.triggered_order_id)
 
+    def test_conditional_order_logical_rung_range_round_trips_when_set(self):
+        with tempfile.TemporaryDirectory() as directory:
+            store = VRStateStore(Path(directory) / "vr_state.json")
+            state = store.load("TQQQ")
+            state.conditional_orders = [
+                VRConditionalOrder(
+                    symbol="TQQQ", cycle_id="c1", conditional_order_id="co-123",
+                    client_order_id="vr-TQQQ-c1-sell-05-abcd", side="sell",
+                    trigger_price=Decimal("3815.02"), order_price=Decimal("3815.02"),
+                    quantity=7, expire_date="2026-09-04", status="OPEN",
+                    logical_start_rung=120, logical_end_rung=126,
+                )
+            ]
+            store.save(state)
+
+            loaded = store.load("TQQQ")
+            order = loaded.conditional_orders[0]
+            self.assertEqual(order.logical_start_rung, 120)
+            self.assertEqual(order.logical_end_rung, 126)
+
+    def test_conditional_order_logical_rung_range_defaults_to_none(self):
+        # Legacy records (persisted before compression existed) never had
+        # these fields -- must decode cleanly rather than raise.
+        with tempfile.TemporaryDirectory() as directory:
+            store = VRStateStore(Path(directory) / "vr_state.json")
+            state = store.load("TQQQ")
+            state.conditional_orders = [
+                VRConditionalOrder(
+                    symbol="TQQQ", cycle_id="c1", conditional_order_id="co-1",
+                    client_order_id="vr-TQQQ-c1-buy-01-abcd", side="buy",
+                    trigger_price=Decimal("100"), order_price=Decimal("100"),
+                    quantity=1, expire_date="2026-08-21", status="OPEN",
+                )
+            ]
+            store.save(state)
+
+            loaded = store.load("TQQQ")
+            order = loaded.conditional_orders[0]
+            self.assertIsNone(order.logical_start_rung)
+            self.assertIsNone(order.logical_end_rung)
+
     def test_history_round_trips_as_plain_snapshots(self):
         with tempfile.TemporaryDirectory() as directory:
             store = VRStateStore(Path(directory) / "vr_state.json")

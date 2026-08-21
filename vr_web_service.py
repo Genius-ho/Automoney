@@ -187,32 +187,47 @@ class VRWebServiceMixin:
                         f"planned leg side {order.side!r}."
                     )
                 regular_status = str(regular_row.get("status", "")).upper()
+                # Real schema fact (Toss OrderStatus enum): CANCELED and
+                # REJECTED can both still carry a nonzero
+                # execution.filledQuantity ("부분 체결 여부를
+                # execution.filledQuantity를 통해 확인") -- a compressed leg
+                # (quantity > 1) can partially fill before being cancelled/
+                # rejected, and that partial fill's real Pool impact must
+                # never be silently dropped. Only FILLED gets a "no explicit
+                # filledQuantity -> assume the full order quantity" fallback;
+                # REJECTED/CANCELED default to 0, never to the full quantity.
                 if regular_status == "FILLED":
-                    if triggered_order_id not in state.applied_fill_order_ids:
-                        execution = regular_row.get("execution") or {}
-                        raw_quantity = execution.get("filledQuantity") or regular_row.get("quantity") or "0"
-                        try:
-                            filled_qty = Decimal(str(raw_quantity))
-                        except Exception as error:
-                            raise UnknownConditionalOrderStatusError(
-                                f"Triggered order {triggered_order_id} has a malformed filled quantity: {raw_quantity!r}"
-                            ) from error
-                        if filled_qty > 0:
-                            state.current_cycle = apply_fill_to_pool(
-                                state.current_cycle, order.side, filled_qty * order.trigger_price
-                            )
-                            state.applied_fill_order_ids.append(triggered_order_id)
-                    updated_orders.append(replace(order, status="FILLED", triggered_order_id=triggered_order_id))
-                    changed = True
+                    final_leg_status = "FILLED"
+                    fallback_quantity = regular_row.get("quantity")
                 elif regular_status in ("REJECTED", "CANCELED", "CANCELLED"):
-                    updated_orders.append(replace(order, status="REJECTED", triggered_order_id=triggered_order_id))
-                    changed = True
+                    final_leg_status = "REJECTED"
+                    fallback_quantity = "0"
                 else:
-                    # PARTIALLY_FILLED or otherwise non-terminal: leave OPEN
-                    # and do not touch Pool -- only a terminal FILLED status
-                    # ever updates Pool.
+                    # PENDING/PARTIAL_FILLED/PENDING_CANCEL/PENDING_REPLACE
+                    # or otherwise non-terminal: leave OPEN and do not touch
+                    # Pool -- only a terminal status ever updates Pool.
                     updated_orders.append(replace(order, triggered_order_id=triggered_order_id))
                     changed = changed or triggered_order_id != order.triggered_order_id
+                    continue
+
+                if triggered_order_id not in state.applied_fill_order_ids:
+                    execution = regular_row.get("execution") or {}
+                    raw_quantity = execution.get("filledQuantity")
+                    if raw_quantity is None:
+                        raw_quantity = fallback_quantity if fallback_quantity is not None else "0"
+                    try:
+                        filled_qty = Decimal(str(raw_quantity))
+                    except Exception as error:
+                        raise UnknownConditionalOrderStatusError(
+                            f"Triggered order {triggered_order_id} has a malformed filled quantity: {raw_quantity!r}"
+                        ) from error
+                    if filled_qty > 0:
+                        state.current_cycle = apply_fill_to_pool(
+                            state.current_cycle, order.side, filled_qty * order.trigger_price
+                        )
+                        state.applied_fill_order_ids.append(triggered_order_id)
+                updated_orders.append(replace(order, status=final_leg_status, triggered_order_id=triggered_order_id))
+                changed = True
         except UnknownConditionalOrderStatusError as error:
             state.status = "UNKNOWN_CONDITIONAL_STATUS"
             state.blocked_reason = str(error)
@@ -316,6 +331,8 @@ class VRWebServiceMixin:
                 "sell_count": error.sell_count,
                 "total_count": error.total_count,
                 "verified_capacity": error.verified_capacity,
+                "logical_buy_count": error.logical_buy_count,
+                "logical_sell_count": error.logical_sell_count,
             }
             self.vr_store.save(state)
             return
@@ -405,6 +422,8 @@ class VRWebServiceMixin:
                 "sell_count": error.sell_count,
                 "total_count": error.total_count,
                 "verified_capacity": error.verified_capacity,
+                "logical_buy_count": error.logical_buy_count,
+                "logical_sell_count": error.logical_sell_count,
             }
             self.vr_store.save(state)
             raise
@@ -520,6 +539,23 @@ class VRWebServiceMixin:
                 {**asdict(order), "trigger_price": str(order.trigger_price), "order_price": str(order.order_price)}
                 for order in state.conditional_orders
             ],
+            # Logical Book Ladder vs Broker Execution Ladder (compression):
+            # broker_*_count is len(...); logical_*_count is the largest
+            # logical_end_rung on that side (compression covers the full
+            # logical ladder contiguously from rung 1, so the max end rung
+            # equals the total logical count). 0/0 if nothing armed yet.
+            "ladder_counts": {
+                "logical_buy_count": max(
+                    (o.logical_end_rung for o in state.conditional_orders if o.side == "buy" and o.logical_end_rung is not None),
+                    default=0,
+                ),
+                "logical_sell_count": max(
+                    (o.logical_end_rung for o in state.conditional_orders if o.side == "sell" and o.logical_end_rung is not None),
+                    default=0,
+                ),
+                "broker_buy_count": sum(1 for o in state.conditional_orders if o.side == "buy"),
+                "broker_sell_count": sum(1 for o in state.conditional_orders if o.side == "sell"),
+            },
             "explain": {
                 "V": "VR이 목표로 하는 해당 종목의 평가금액입니다. 최초 V1은 현재 보유수량 × 현재 시장가격으로 자동 계산합니다.",
                 "E": "직전 2주 사이클 종료 시 실제 보유주식의 시장 평가금액입니다. 다음 V 계산에서 시장 움직임을 반영하는 데 사용합니다.",

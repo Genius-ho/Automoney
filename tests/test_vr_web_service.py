@@ -179,6 +179,25 @@ class IntegratedFakeBroker:
         })
         return regular_order_id
 
+    def trigger_partial_fill_then_cancel(self, conditional_order_id: str, planned_quantity: int, filled_quantity: int) -> str:
+        """Simulate a compressed (quantity > 1) leg triggering, partially
+        filling, and then being cancelled (e.g. cycle-end cleanup) with the
+        remainder unfilled -- the real Toss OrderStatus schema documents
+        CANCELED as still possibly carrying a nonzero
+        execution.filledQuantity ("취소 완료. execution.filledQuantity를
+        통해 부분 체결 여부를 확인할 수 있음")."""
+        row = self.conditional_orders[conditional_order_id]
+        row["status"] = "ORDERED"
+        row["first"]["status"] = "ORDERED"
+        regular_order_id = f"reg-{conditional_order_id}"
+        row["first"]["triggeredOrderId"] = regular_order_id
+        self.closed_orders.append({
+            "orderId": regular_order_id, "symbol": row["symbol"], "side": row["first"]["orderSide"],
+            "status": "CANCELED", "quantity": str(planned_quantity),
+            "execution": {"filledQuantity": str(filled_quantity), "filledAt": datetime.now(timezone.utc).isoformat()},
+        })
+        return regular_order_id
+
 
 class VRServiceHarness:
     def __init__(self, broker: IntegratedFakeBroker):
@@ -210,6 +229,42 @@ class VRInitializeAndArmTests(unittest.TestCase):
             self.assertGreater(len(state.conditional_orders), 0)
         finally:
             tempdir.cleanup()
+
+    def test_compression_never_changes_v_g_band_or_pool(self):
+        # Same G/band_pct/pool for a small (uncompressed) vs. a huge
+        # (heavily compressed) position -- V/G/band_pct/lower_band/
+        # upper_band/pool_start must be identical either way; only the
+        # number of registered broker orders differs.
+        small_broker = IntegratedFakeBroker()
+        small_service, small_tempdir = _make_service(small_broker)
+        big_broker = IntegratedFakeBroker()
+        big_service, big_tempdir = _make_service(big_broker)
+        try:
+            small_broker.holdings["TQQQ"] = ("10", "105")
+            small_broker.prices["TQQQ"] = "110"
+            small_service.vr_initialize("TQQQ", Decimal("1000"), Decimal("10"), Decimal("15"))
+            small_cycle = small_service.vr_store.load("TQQQ").current_cycle
+
+            big_broker.holdings["TQQQ"] = ("500", "105")
+            big_broker.prices["TQQQ"] = "110"
+            big_service.vr_initialize("TQQQ", Decimal("1000"), Decimal("10"), Decimal("15"))
+            big_cycle = big_service.vr_store.load("TQQQ").current_cycle
+
+            # V differs (different qty x price), but G/band_pct/pool_start
+            # -- and the band-computation relationship -- are the policy
+            # inputs unaffected by compression.
+            self.assertEqual(small_cycle.G, big_cycle.G)
+            self.assertEqual(small_cycle.band_pct, big_cycle.band_pct)
+            self.assertEqual(small_cycle.pool_start, big_cycle.pool_start)
+            self.assertEqual(small_cycle.lower_band, small_cycle.V * Decimal("0.85"))
+            self.assertEqual(big_cycle.lower_band, big_cycle.V * Decimal("0.85"))
+            big_broker_orders = len(big_service.vr_store.load("TQQQ").conditional_orders)
+            small_broker_orders = len(small_service.vr_store.load("TQQQ").conditional_orders)
+            self.assertLessEqual(big_broker_orders, 40)
+            self.assertLess(small_broker_orders, big_broker_orders)
+        finally:
+            small_tempdir.cleanup()
+            big_tempdir.cleanup()
 
     def test_initializing_on_a_friday_never_produces_a_zero_day_first_cycle(self):
         # Regression: anchor_friday_on_or_after(today) returns today when
@@ -319,6 +374,90 @@ class ExactlyOnceFillTests(unittest.TestCase):
 
             self.assertEqual(pool_after_first, pool_after_second)
             self.assertGreater(pool_after_first, Decimal("2000"))
+        finally:
+            tempdir.cleanup()
+
+
+class CompressedLegFillBookkeepingTests(unittest.TestCase):
+    """Compression means SELL/BUY legs can have quantity > 1 -- Pool
+    bookkeeping must never assume quantity == 1, and CANCELED/REJECTED
+    orders must still have any partial fill applied (real Toss schema:
+    execution.filledQuantity can be nonzero even for CANCELED/REJECTED)."""
+
+    def _init_with_compressed_sell_ladder(self, broker):
+        service, tempdir = _make_service(broker)
+        broker.holdings["TQQQ"] = ("200", "105")  # forces > 20 logical SELL rungs
+        broker.prices["TQQQ"] = "110"
+        service.vr_initialize("TQQQ", Decimal("2000"), Decimal("10"), Decimal("15"))
+        state = service.vr_store.load("TQQQ")
+        sell_orders = [o for o in state.conditional_orders if o.side == "sell"]
+        self.assertEqual(len(sell_orders), 20, "fixture expects the sell ladder to be compressed to 20")
+        compressed_leg = next(o for o in sell_orders if o.quantity > 1)
+        return service, tempdir, compressed_leg
+
+    def test_full_fill_on_a_compressed_leg_applies_its_whole_quantity(self):
+        broker = IntegratedFakeBroker(mode="LIVE")
+        service, tempdir, leg = self._init_with_compressed_sell_ladder(broker)
+        try:
+            pool_before = service.vr_store.load("TQQQ").current_cycle.pool_current
+            broker.trigger_and_fill(leg.conditional_order_id, quantity=leg.quantity)
+
+            service.vr_sync_orders("TQQQ")
+
+            pool_after = service.vr_store.load("TQQQ").current_cycle.pool_current
+            self.assertEqual(pool_after - pool_before, Decimal(leg.quantity) * leg.trigger_price)
+        finally:
+            tempdir.cleanup()
+
+    def test_partial_fill_then_canceled_applies_only_the_partial_quantity(self):
+        # Regression: CANCELED previously never checked execution.
+        # filledQuantity at all, silently dropping any partial fill's real
+        # Pool impact.
+        broker = IntegratedFakeBroker(mode="LIVE")
+        service, tempdir, leg = self._init_with_compressed_sell_ladder(broker)
+        try:
+            self.assertGreater(leg.quantity, 1)
+            partial = leg.quantity - 1
+            pool_before = service.vr_store.load("TQQQ").current_cycle.pool_current
+            broker.trigger_partial_fill_then_cancel(leg.conditional_order_id, leg.quantity, filled_quantity=partial)
+
+            service.vr_sync_orders("TQQQ")
+
+            state = service.vr_store.load("TQQQ")
+            pool_after = state.current_cycle.pool_current
+            self.assertEqual(pool_after - pool_before, Decimal(partial) * leg.trigger_price)
+            updated_leg = next(o for o in state.conditional_orders if o.client_order_id == leg.client_order_id)
+            self.assertEqual(updated_leg.status, "REJECTED")
+        finally:
+            tempdir.cleanup()
+
+    def test_rejected_with_zero_fill_never_touches_pool(self):
+        broker = IntegratedFakeBroker(mode="LIVE")
+        service, tempdir, leg = self._init_with_compressed_sell_ladder(broker)
+        try:
+            pool_before = service.vr_store.load("TQQQ").current_cycle.pool_current
+            broker.trigger_partial_fill_then_cancel(leg.conditional_order_id, leg.quantity, filled_quantity=0)
+
+            service.vr_sync_orders("TQQQ")
+
+            pool_after = service.vr_store.load("TQQQ").current_cycle.pool_current
+            self.assertEqual(pool_after, pool_before)
+        finally:
+            tempdir.cleanup()
+
+    def test_partial_fill_then_canceled_is_applied_exactly_once_across_repeated_syncs(self):
+        broker = IntegratedFakeBroker(mode="LIVE")
+        service, tempdir, leg = self._init_with_compressed_sell_ladder(broker)
+        try:
+            partial = leg.quantity - 1
+            broker.trigger_partial_fill_then_cancel(leg.conditional_order_id, leg.quantity, filled_quantity=partial)
+
+            service.vr_sync_orders("TQQQ")
+            pool_after_first = service.vr_store.load("TQQQ").current_cycle.pool_current
+            service.vr_sync_orders("TQQQ")
+            pool_after_second = service.vr_store.load("TQQQ").current_cycle.pool_current
+
+            self.assertEqual(pool_after_first, pool_after_second)
         finally:
             tempdir.cleanup()
 
@@ -612,6 +751,27 @@ def _restart_service(tempdir, broker):
     own server-side state persists across our process restart; only our
     local process memory is lost)."""
     return TradingWebService(Path(tempdir.name), broker_factory=lambda: broker)
+
+
+class CompressedLegRestartRecoveryTests(unittest.TestCase):
+    def test_logical_range_and_quantity_survive_a_restart(self):
+        broker = IntegratedFakeBroker(mode="LIVE")
+        service, tempdir = _make_service(broker)
+        try:
+            broker.holdings["TQQQ"] = ("500", "105")  # forces compression
+            broker.prices["TQQQ"] = "110"
+            service.vr_initialize("TQQQ", Decimal("2000"), Decimal("10"), Decimal("15"))
+            before = {o.client_order_id: (o.quantity, o.logical_start_rung, o.logical_end_rung)
+                      for o in service.vr_store.load("TQQQ").conditional_orders}
+            self.assertTrue(any(q > 1 for q, _s, _e in before.values()), "fixture expects at least one compressed leg")
+
+            restarted = _restart_service(tempdir, broker)
+            after = {o.client_order_id: (o.quantity, o.logical_start_rung, o.logical_end_rung)
+                     for o in restarted.vr_store.load("TQQQ").conditional_orders}
+
+            self.assertEqual(before, after)
+        finally:
+            tempdir.cleanup()
 
 
 class CrashRecoveryMatrixTests(unittest.TestCase):
@@ -1099,6 +1259,27 @@ class BrokerCapacityGateTests(unittest.TestCase):
                 self.assertEqual(state.status, "BROKER_CONDITIONAL_CAPACITY_EXCEEDED")
                 self.assertEqual(state.capacity_blocker["verified_capacity"], 2)
                 self.assertGreater(state.capacity_blocker["total_count"], 2)
+            finally:
+                tempdir.cleanup()
+
+    def test_capacity_check_uses_the_compressed_broker_count_not_the_logical_count(self):
+        # Regression: before compression, a large position (e.g. 500
+        # shares -> ~500 logical SELL rungs) needed verified_max >= ~500.
+        # After compression, arming ANY position size never needs more than
+        # 2 * MAX_BROKER_ORDERS_PER_SIDE = 40 broker orders.
+        with unittest.mock.patch.object(vr_execution_policy, "VERIFIED_CAPACITY", _capacity(40)):
+            broker = IntegratedFakeBroker(mode="LIVE")
+            service, tempdir = _make_service(broker)
+            try:
+                broker.holdings["TQQQ"] = ("500", "105")  # huge logical ladder
+                broker.prices["TQQQ"] = "110"
+                result = service.vr_initialize("TQQQ", Decimal("2000"), Decimal("10"), Decimal("15"))
+                self.assertEqual(result["status"], "ACTIVE")
+                state = service.vr_store.load("TQQQ")
+                broker_count = len(state.conditional_orders)
+                self.assertLessEqual(broker_count, 40)
+                logical_sell_count = max(o.logical_end_rung for o in state.conditional_orders if o.side == "sell")
+                self.assertGreater(logical_sell_count, 40, "sanity: the logical ladder really was larger than capacity")
             finally:
                 tempdir.cleanup()
 

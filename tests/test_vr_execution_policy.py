@@ -3,9 +3,13 @@ import unittest
 from decimal import Decimal
 
 from vr_execution_policy import (
+    MAX_BROKER_ORDERS_PER_SIDE,
     CancellationNotConfirmedError,
+    PlannedLeg,
     buy_ladder_prices,
     cancel_and_confirm,
+    compress_ladder,
+    group_sizes,
     plan_buy_ladder,
     plan_sell_ladder,
     select_buy_ladder_length,
@@ -112,35 +116,177 @@ class SelectBuyLadderLengthEdgeCaseTests(unittest.TestCase):
         self.assertEqual(cumulative, Decimal("40"))
 
 
-class PlanBuyLadderTests(unittest.TestCase):
-    def test_returns_one_share_legs_and_the_projected_spend(self):
-        legs, planned_spend = plan_buy_ladder(Decimal("4695.91"), 110, Decimal("500.50"))
+class GroupSizesTests(unittest.TestCase):
+    """Remainder placement: SMALL groups first (closer to V/current price,
+    highest execution resolution where price is most likely to matter),
+    LARGE groups last (deep tail)."""
+
+    def test_n_0(self):
+        self.assertEqual(group_sizes(0), [])
+
+    def test_n_1(self):
+        self.assertEqual(group_sizes(1), [1])
+
+    def test_n_19_no_compression(self):
+        self.assertEqual(group_sizes(19), [1] * 19)
+
+    def test_n_20_no_compression(self):
+        self.assertEqual(group_sizes(20), [1] * 20)
+
+    def test_n_21_one_group_of_two_at_the_end(self):
+        sizes = group_sizes(21)
+        self.assertEqual(len(sizes), 20)
+        self.assertEqual(sizes, [1] * 19 + [2])
+        self.assertEqual(sum(sizes), 21)
+
+    def test_n_39(self):
+        sizes = group_sizes(39)
+        self.assertEqual(len(sizes), 20)
+        self.assertEqual(sizes, [1] * 1 + [2] * 19)
+        self.assertEqual(sum(sizes), 39)
+
+    def test_n_40_even_split(self):
+        self.assertEqual(group_sizes(40), [2] * 20)
+
+    def test_n_43(self):
+        sizes = group_sizes(43)
+        self.assertEqual(sizes, [2] * 17 + [3] * 3)
+        self.assertEqual(sum(sizes), 43)
+
+    def test_n_60_even_split(self):
+        self.assertEqual(group_sizes(60), [3] * 20)
+
+    def test_n_126(self):
+        sizes = group_sizes(126)
+        self.assertEqual(sizes, [6] * 14 + [7] * 6)
+        self.assertEqual(sum(sizes), 126)
+
+    def test_small_groups_always_come_before_large_groups(self):
+        for n in (21, 39, 43, 60, 126, 1000):
+            sizes = group_sizes(n)
+            self.assertEqual(sizes, sorted(sizes), f"n={n}: groups must be non-decreasing")
+
+    def test_group_size_difference_never_exceeds_one(self):
+        for n in (21, 39, 43, 60, 126, 1000):
+            sizes = group_sizes(n)
+            self.assertLessEqual(max(sizes) - min(sizes), 1, f"n={n}")
+
+
+class CompressLadderTests(unittest.TestCase):
+    def test_no_compression_when_at_or_below_the_limit(self):
+        prices = buy_ladder_prices(Decimal("4695.91"), 110, 9)
+        legs = compress_ladder("buy", prices)
         self.assertEqual(len(legs), 9)
+        for i, leg in enumerate(legs, start=1):
+            self.assertEqual(leg.quantity, 1)
+            self.assertEqual(leg.logical_start_rung, i)
+            self.assertEqual(leg.logical_end_rung, i)
+            self.assertEqual(leg.trigger_price, prices[i - 1])
+
+    def test_total_quantity_is_preserved_exactly(self):
+        prices = sell_ladder_prices(Decimal("10299.49"), 126, 126)
+        legs = compress_ladder("sell", prices)
+        self.assertEqual(len(legs), MAX_BROKER_ORDERS_PER_SIDE)
+        self.assertEqual(sum(leg.quantity for leg in legs), 126)
+
+    def test_logical_ranges_are_consecutive_with_no_gap_or_overlap(self):
+        prices = buy_ladder_prices(Decimal("4249.58"), 110, 43)
+        legs = compress_ladder("buy", prices)
+        expected_next_start = 1
+        for leg in legs:
+            self.assertEqual(leg.logical_start_rung, expected_next_start)
+            self.assertGreaterEqual(leg.logical_end_rung, leg.logical_start_rung)
+            expected_next_start = leg.logical_end_rung + 1
+        self.assertEqual(expected_next_start - 1, 43)
+
+    def test_representative_price_is_the_rounded_mean(self):
+        prices = [Decimal("10.00"), Decimal("10.02"), Decimal("10.05")]
+        legs = compress_ladder("buy", prices, max_groups=1)
+        self.assertEqual(len(legs), 1)
+        # mean = 10.023333... -> 10.02
+        self.assertEqual(legs[0].trigger_price, Decimal("10.02"))
+        self.assertEqual(legs[0].quantity, 3)
+
+    def test_golden_buy_43_rungs(self):
+        # L=4249.58, Q0=110, corrected small-first grouping.
+        prices = buy_ladder_prices(Decimal("4249.58"), 110, 43)
+        legs = compress_ladder("buy", prices)
+        self.assertEqual(len(legs), 20)
+        self.assertEqual([leg.quantity for leg in legs], [2] * 17 + [3] * 3)
+        self.assertEqual(legs[0].trigger_price, Decimal("38.46"))
+        self.assertEqual(legs[0].logical_start_rung, 1)
+        self.assertEqual(legs[0].logical_end_rung, 2)
+        self.assertEqual(legs[-1].trigger_price, Decimal("28.14"))
+        self.assertEqual(legs[-1].logical_start_rung, 41)
+        self.assertEqual(legs[-1].logical_end_rung, 43)
+        logical_spend = sum(prices)
+        compressed_spend = sum(leg.trigger_price * leg.quantity for leg in legs)
+        self.assertEqual(compressed_spend - logical_spend, Decimal("0.10"))
+        # Bound from the analysis: worst case is 0.005 * total logical qty.
+        self.assertLessEqual(abs(compressed_spend - logical_spend), Decimal("0.005") * 43)
+
+    def test_golden_sell_126_rungs(self):
+        # U=10299.49, Q0=126 (TQQQ's real current SELL band), corrected
+        # small-first grouping.
+        prices = sell_ladder_prices(Decimal("10299.49"), 126, 126)
+        legs = compress_ladder("sell", prices)
+        self.assertEqual(len(legs), 20)
+        self.assertEqual([leg.quantity for leg in legs], [6] * 14 + [7] * 6)
+        self.assertEqual(sum(leg.quantity for leg in legs), 126)
+        self.assertEqual(legs[0].trigger_price, Decimal("83.41"))
+        self.assertEqual(legs[0].logical_start_rung, 1)
+        self.assertEqual(legs[0].logical_end_rung, 6)
+        self.assertEqual(legs[-1].trigger_price, Decimal("3815.02"))
+        self.assertEqual(legs[-1].logical_start_rung, 120)
+        self.assertEqual(legs[-1].logical_end_rung, 126)
+
+
+class PlanBuyLadderTests(unittest.TestCase):
+    def test_no_compression_when_logical_count_is_at_or_below_the_limit(self):
+        legs, planned_spend, logical_count = plan_buy_ladder(Decimal("4695.91"), 110, Decimal("500.50"))
+        self.assertEqual(logical_count, 9)
+        self.assertEqual(len(legs), 9)  # <= MAX_BROKER_ORDERS_PER_SIDE -> uncompressed
         self.assertEqual(planned_spend, Decimal("370.93"))
         for leg in legs:
             self.assertEqual(leg.side, "buy")
             self.assertEqual(leg.quantity, 1)
         self.assertEqual(legs[0].trigger_price, Decimal("42.69"))
 
+    def test_compression_applied_when_logical_count_exceeds_the_limit(self):
+        # L=4975.96, Q0=105, Pool=1044.70 -> 18 logical levels per the book
+        # example (still <= 20, so this alone doesn't compress -- use a
+        # larger pool to push the logical count past 20).
+        legs, planned_spend, logical_count = plan_buy_ladder(Decimal("4249.58"), 110, Decimal("5000"))
+        self.assertGreater(logical_count, MAX_BROKER_ORDERS_PER_SIDE)
+        self.assertEqual(len(legs), MAX_BROKER_ORDERS_PER_SIDE)
+        self.assertEqual(sum(leg.quantity for leg in legs), logical_count)
+
     def test_empty_ladder_when_pool_cannot_afford_the_first_rung(self):
-        legs, planned_spend = plan_buy_ladder(Decimal("4249.58"), 110, Decimal("0.50"))
+        legs, planned_spend, logical_count = plan_buy_ladder(Decimal("4249.58"), 110, Decimal("0.50"))
         self.assertEqual(legs, [])
         self.assertEqual(planned_spend, Decimal("0"))
+        self.assertEqual(logical_count, 0)
 
 
 class PlanSellLadderTests(unittest.TestCase):
-    def test_returns_one_share_legs_up_to_starting_qty(self):
-        legs = plan_sell_ladder(Decimal("5749.43"), 110, available_sell_qty=110)
-        self.assertEqual(len(legs), 110)
+    def test_no_compression_when_at_or_below_the_limit(self):
+        legs, logical_count = plan_sell_ladder(Decimal("5749.43"), 15, available_sell_qty=15)
+        self.assertEqual(logical_count, 15)
+        self.assertEqual(len(legs), 15)
         for leg in legs:
             self.assertEqual(leg.side, "sell")
             self.assertEqual(leg.quantity, 1)
-        self.assertEqual(legs[0].trigger_price, Decimal("52.27"))
-        self.assertEqual(legs[1].trigger_price, Decimal("52.75"))
-        self.assertEqual(legs[2].trigger_price, Decimal("53.24"))
+        self.assertEqual(legs[0].trigger_price, Decimal("383.30"))
+
+    def test_compression_applied_above_the_limit_and_total_quantity_preserved(self):
+        legs, logical_count = plan_sell_ladder(Decimal("5749.43"), 110, available_sell_qty=110)
+        self.assertEqual(logical_count, 110)
+        self.assertEqual(len(legs), MAX_BROKER_ORDERS_PER_SIDE)
+        self.assertEqual(sum(leg.quantity for leg in legs), 110)
 
     def test_capped_by_available_sell_qty_when_smaller_than_position(self):
-        legs = plan_sell_ladder(Decimal("5749.43"), 110, available_sell_qty=3)
+        legs, logical_count = plan_sell_ladder(Decimal("5749.43"), 110, available_sell_qty=3)
+        self.assertEqual(logical_count, 3)
         self.assertEqual(len(legs), 3)
 
     def test_no_pool_based_limit_unlike_the_buy_side(self):
@@ -150,6 +296,15 @@ class PlanSellLadderTests(unittest.TestCase):
         import inspect
         params = inspect.signature(plan_sell_ladder).parameters
         self.assertNotIn("pool", " ".join(params))
+
+
+class PlannedLegQuantityAboveOneTests(unittest.TestCase):
+    """The old 'quantity is always 1' assumption is gone -- a compressed
+    leg is a completely ordinary PlannedLeg with quantity > 1."""
+
+    def test_can_construct_a_leg_with_quantity_greater_than_one(self):
+        leg = PlannedLeg(side="sell", trigger_price=Decimal("100.00"), quantity=7, logical_start_rung=1, logical_end_rung=7)
+        self.assertEqual(leg.quantity, 7)
 
 
 class FakeConditionalOrderBroker:

@@ -111,18 +111,26 @@ class CancellationNotConfirmedError(RuntimeError):
 
 
 class BrokerCapacityBlockedError(RuntimeError):
-    """Base for both broker-capacity blockers. Carries the planned ladder's
-    logical leg counts and the (possibly None) verified capacity as
-    structured attributes -- not just free text -- so callers can persist
-    and display them (UI: logical BUY/SELL/total counts, verified capacity,
-    blocker reason) rather than parsing a message string."""
+    """Base for both broker-capacity blockers. buy_count/sell_count/
+    total_count are the REQUIRED BROKER (post-compression) order counts --
+    what capacity must actually satisfy -- since compression already caps
+    each side at MAX_BROKER_ORDERS_PER_SIDE regardless of position size.
+    logical_buy_count/logical_sell_count are the uncompressed Book Ladder
+    counts, kept separately for display (UI: Logical vs Broker counts,
+    verified capacity, blocker reason) rather than parsing a message
+    string."""
 
-    def __init__(self, message: str, *, buy_count: int, sell_count: int, verified_capacity: int | None) -> None:
+    def __init__(
+        self, message: str, *, buy_count: int, sell_count: int, verified_capacity: int | None,
+        logical_buy_count: int = 0, logical_sell_count: int = 0,
+    ) -> None:
         super().__init__(message)
         self.buy_count = buy_count
         self.sell_count = sell_count
         self.total_count = buy_count + sell_count
         self.verified_capacity = verified_capacity
+        self.logical_buy_count = logical_buy_count
+        self.logical_sell_count = logical_sell_count
 
 
 class BrokerCapacityUnknownError(BrokerCapacityBlockedError):
@@ -157,11 +165,60 @@ class SellReservationUnknownError(RuntimeError):
         self.sell_count = sell_count
 
 
+MAX_BROKER_ORDERS_PER_SIDE = 20
+
+
 @dataclass(frozen=True)
 class PlannedLeg:
+    """One BROKER conditional order. quantity is 1 for an uncompressed
+    ladder (logical count <= MAX_BROKER_ORDERS_PER_SIDE) but can be > 1
+    after compression -- never assume quantity == 1 downstream (fill
+    bookkeeping, partial-fill handling, etc.). logical_start_rung/
+    logical_end_rung (1-indexed, inclusive) record which contiguous span of
+    the uncompressed Book Ladder this one broker order covers; equal to
+    each other when uncompressed."""
     side: str  # "buy" | "sell"
     trigger_price: Decimal
-    quantity: int  # always 1 for a ladder rung
+    quantity: int
+    logical_start_rung: int
+    logical_end_rung: int
+
+
+def group_sizes(n: int, max_groups: int = MAX_BROKER_ORDERS_PER_SIDE) -> list[int]:
+    """As-even-as-possible partition of n into at most max_groups
+    consecutive groups (sizes differ by at most 1). Smaller groups come
+    FIRST (index 0 is nearest V/current price in the book's own ordering),
+    larger groups LAST (deep tail) -- keeps execution resolution highest
+    where price is most likely to actually move, at the cost of coarser
+    resolution far from the money where it matters least."""
+    if n <= 0:
+        return []
+    if n <= max_groups:
+        return [1] * n
+    q, r = divmod(n, max_groups)
+    return [q] * (max_groups - r) + [q + 1] * r
+
+
+def compress_ladder(side: str, prices: list[Decimal], max_groups: int = MAX_BROKER_ORDERS_PER_SIDE) -> list[PlannedLeg]:
+    """Group the full logical ladder (already computed by
+    buy_ladder_prices/sell_ladder_prices, in book order) into at most
+    max_groups consecutive broker orders. Each group's representative
+    price is the arithmetic mean of its logical prices (every logical rung
+    is 1 share), rounded to the cent at the end -- total quantity across
+    all returned legs always equals len(prices) exactly; no rung is ever
+    dropped or duplicated."""
+    sizes = group_sizes(len(prices), max_groups)
+    legs: list[PlannedLeg] = []
+    idx = 0
+    for size in sizes:
+        chunk = prices[idx:idx + size]
+        rep_price = money(sum(chunk) / Decimal(len(chunk)))
+        legs.append(PlannedLeg(
+            side=side, trigger_price=rep_price, quantity=len(chunk),
+            logical_start_rung=idx + 1, logical_end_rung=idx + size,
+        ))
+        idx += size
+    return legs
 
 
 def buy_ladder_prices(lower_band: Decimal, starting_qty: int, count: int) -> list[Decimal]:
@@ -224,21 +281,30 @@ def plan_buy_ladder(
     cycle_start_pool: Decimal,
     pool_usage_limit_pct: Decimal = DEFAULT_POOL_USAGE_LIMIT_PCT,
     available_buying_power: Decimal | None = None,
-) -> tuple[list[PlannedLeg], Decimal]:
-    """The full logical BUY ladder plus its projected total spend (no
-    broker-capacity gating here -- see arm_cycle_orders)."""
+) -> tuple[list[PlannedLeg], Decimal, int]:
+    """Computes the full logical BUY ladder (Pool-target selection
+    unaffected by compression) and its projected total spend, then
+    compresses it into at most MAX_BROKER_ORDERS_PER_SIDE broker orders
+    (see compress_ladder). Returns (broker_legs, planned_buy_spend,
+    logical_count) -- no broker-capacity gating here (see
+    arm_cycle_orders); logical_count is the pre-compression rung count,
+    kept for UI display and capacity-blocker reporting."""
     prices = buy_ladder_prices(lower_band, starting_qty, _MAX_LADDER_SEARCH)
     n, cumulative = select_buy_ladder_length(prices, cycle_start_pool, pool_usage_limit_pct, available_buying_power)
-    return [PlannedLeg("buy", price, 1) for price in prices[:n]], cumulative
+    legs = compress_ladder("buy", prices[:n])
+    return legs, cumulative, n
 
 
-def plan_sell_ladder(upper_band: Decimal, starting_qty: int, available_sell_qty: int) -> list[PlannedLeg]:
-    """The full logical SELL ladder: 1 share at each of up to starting_qty
-    rungs (book: no Pool-based limit on the sell side), further capped by
-    however many shares are actually sellable right now."""
+def plan_sell_ladder(upper_band: Decimal, starting_qty: int, available_sell_qty: int) -> tuple[list[PlannedLeg], int]:
+    """Computes the full logical SELL ladder: 1 share at each of up to
+    starting_qty rungs (book: no Pool-based limit on the sell side),
+    further capped by however many shares are actually sellable right now
+    -- then compresses it into at most MAX_BROKER_ORDERS_PER_SIDE broker
+    orders. Returns (broker_legs, logical_count)."""
     count = min(starting_qty, max(0, available_sell_qty))
     prices = sell_ladder_prices(upper_band, starting_qty, count)
-    return [PlannedLeg("sell", price, 1) for price in prices]
+    legs = compress_ladder("sell", prices)
+    return legs, count
 
 
 def cancel_and_confirm(broker, conditional_order_id: str) -> None:
@@ -293,5 +359,6 @@ def register_ladder_orders(
             client_order_id=client_order_id, side=leg.side,
             trigger_price=leg.trigger_price, order_price=leg.trigger_price,
             quantity=leg.quantity, expire_date=cycle.end_session, status="OPEN",
+            logical_start_rung=leg.logical_start_rung, logical_end_rung=leg.logical_end_rung,
         ))
     return new_orders
