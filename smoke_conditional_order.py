@@ -32,6 +32,17 @@ each choice):
   - Every raw response is redacted (audit_log._redact) before being printed
     or saved to smoke_artifacts/.
 
+Phase 14 was run for real on 2026-08-21 (TQQQ, market session PRE,
+--allow-open-market), CREATE -> GET -> DELETE -> GET/OPEN/CLOSED, all as
+designed: status=WATCHING with triggeredOrderId=null immediately after
+CREATE, DELETE returned 204, the post-delete detail GET 404'd, and the
+order appeared in neither the OPEN nor CLOSED list afterward. See
+vr_conditional_orders.py's module docstring for the full confirmed-schema
+notes (e.g. GET responses omit `orderSide` entirely) and
+smoke_artifacts/TQQQ-manual-20260821.json (redacted) for the raw exchange.
+The trigger-comparator direction itself is still unverified (the order was
+cancelled before any price movement could trigger it).
+
 Run (LIVE, real account -- only after the plan and this script are both
 explicitly approved):
     python smoke_conditional_order.py --symbol TQQQ --env-file deploy/mumae.env

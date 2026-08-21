@@ -25,7 +25,12 @@ def _session(date_str, start, end):
 
 class FakeSmokeBroker:
     """Fully in-memory fake matching the real, verified Toss schema (Phase
-    13). Zero real network calls -- every method is a local dict lookup."""
+    13, empirically confirmed live in Phase 14 -- see
+    vr_conditional_orders.py's module docstring). Zero real network calls
+    -- every method is a local dict lookup. Notably: GET/list responses'
+    `first` object never includes `orderSide` (only sent on CREATE, never
+    echoed back) and carries `type: "STOP"`; the real API confirmed this,
+    not just the OpenAPI spec."""
 
     def __init__(self, mode="LIVE"):
         self.mode = mode
@@ -67,13 +72,23 @@ class FakeSmokeBroker:
             coid = f"co-{self._next_id}"
             self._next_id += 1
             self.conditional_orders[coid] = {
-                "conditionalOrderId": coid, "clientOrderId": payload["clientOrderId"],
-                "symbol": payload["symbol"], "status": "WATCHING",
+                "conditionalOrderId": coid,
+                "type": payload.get("type", "SINGLE"),
+                "status": "WATCHING",
+                "symbol": payload["symbol"],
+                "market": "US",
+                "quantity": str(payload["quantity"]),
+                "orderType": payload.get("orderType", "LIMIT"),
+                "expireDate": payload["expireDate"],
                 "first": {
-                    "status": "WATCHING", "orderSide": payload["first"]["orderSide"],
+                    # No orderSide here -- confirmed absent from real GET
+                    # responses (Phase 14, 2026-08-21); only sent on CREATE.
+                    "type": "STOP", "status": "WATCHING",
                     "triggerPrice": payload["first"]["triggerPrice"], "orderPrice": payload["first"]["orderPrice"],
-                    "triggeredOrderId": None,
+                    "targetProfitRate": None, "triggeredOrderId": None,
                 },
+                "second": None,
+                "createdAt": "2026-08-21T22:17:10.000+09:00",
             }
             return {"result": {"conditionalOrderId": coid, "clientOrderId": payload["clientOrderId"]}}
         if method == "GET" and path.startswith("/api/v1/conditional-orders/") and not path.endswith("/modify"):
@@ -103,9 +118,14 @@ class FakeSmokeBroker:
         coid = f"co-{self._next_id}"
         self._next_id += 1
         self.conditional_orders[coid] = {
-            "conditionalOrderId": coid, "clientOrderId": "smoke-seed",
-            "symbol": symbol, "status": "WATCHING",
-            "first": {"status": "WATCHING", "orderSide": "BUY", "triggerPrice": trigger, "orderPrice": trigger, "triggeredOrderId": None},
+            "conditionalOrderId": coid, "type": "SINGLE", "status": "WATCHING",
+            "symbol": symbol, "market": "US", "quantity": "1", "orderType": "LIMIT",
+            "expireDate": "2026-08-26",
+            "first": {
+                "type": "STOP", "status": "WATCHING", "triggerPrice": trigger, "orderPrice": trigger,
+                "targetProfitRate": None, "triggeredOrderId": None,
+            },
+            "second": None, "createdAt": "2026-08-21T22:17:10.000+09:00",
         }
         return coid
 
@@ -302,6 +322,109 @@ class AccountReadTests(unittest.TestCase):
         broker = FakeSmokeBroker()
         broker.buying_power = "543.21"
         self.assertEqual(fetch_buying_power(broker), Decimal("543.21"))
+
+
+class RealAccountResponseRegressionTests(unittest.TestCase):
+    """Golden fixtures taken verbatim from the Phase 14 real-account smoke
+    test (TQQQ, 2026-08-21, conditionalOrderId
+    1gLL0XyY_g3qIoUPuK6BRAcyxV78P-U5zJBl-CRVZ6s -- see
+    smoke_artifacts/TQQQ-manual-20260821.json, redacted). These prove the
+    code handles the REAL observed shape, not just an idealized one built
+    from the OpenAPI spec alone."""
+
+    REAL_CREATE_RESPONSE = {
+        "result": {
+            "conditionalOrderId": "1gLL0XyY_g3qIoUPuK6BRAcyxV78P-U5zJBl-CRVZ6s",
+            "clientOrderId": "smoke-TQQQ-20260821130112",
+        },
+    }
+
+    REAL_WATCHING_DETAIL = {
+        "result": {
+            "conditionalOrderId": "1gLL0XyY_g3qIoUPuK6BRAcyxV78P-U5zJBl-CRVZ6s",
+            "type": "SINGLE",
+            "status": "WATCHING",
+            "symbol": "TQQQ",
+            "market": "US",
+            "quantity": "1",
+            "orderType": "LIMIT",
+            "expireDate": "2026-08-26",
+            "first": {
+                "type": "STOP",
+                "status": "WATCHING",
+                "triggerPrice": "50.37",
+                "targetProfitRate": None,
+                "orderPrice": "50.37",
+                "triggeredOrderId": None,
+            },
+            "second": None,
+            "createdAt": "2026-08-21T22:17:10.000+09:00",
+        },
+    }
+
+    def test_create_response_has_no_status_field_only_ids(self):
+        result = self.REAL_CREATE_RESPONSE["result"]
+        self.assertNotIn("status", result)
+        self.assertEqual(result["conditionalOrderId"], "1gLL0XyY_g3qIoUPuK6BRAcyxV78P-U5zJBl-CRVZ6s")
+
+    def test_watching_detail_has_no_orderside_field_on_first(self):
+        # Confirmed real behavior: orderSide is sent on CREATE but never
+        # echoed back on GET -- code must never read it back.
+        self.assertNotIn("orderSide", self.REAL_WATCHING_DETAIL["result"]["first"])
+
+    def test_evaluate_post_create_detail_proceeds_on_the_real_watching_shape(self):
+        self.assertEqual(evaluate_post_create_detail(self.REAL_WATCHING_DETAIL), "PROCEED")
+
+    def test_fake_broker_create_then_get_matches_the_real_shape(self):
+        # End-to-end through the fake: CREATE, then GET, and confirm the
+        # fake's detail shape has the same fields (and field absences) as
+        # the real captured response above.
+        broker = FakeSmokeBroker()
+        from vr_conditional_orders import ConditionalOrderRequest, create_conditional_order, get_conditional_order
+
+        request = ConditionalOrderRequest(
+            symbol="TQQQ", side="buy", trigger_price=Decimal("50.37"), order_price=Decimal("50.37"),
+            quantity=1, expire_date="2026-08-26", client_order_id="smoke-TQQQ-20260821130112",
+        )
+        create_response = create_conditional_order(broker, request)
+        conditional_order_id = create_response["result"]["conditionalOrderId"]
+        detail = get_conditional_order(broker, conditional_order_id)
+
+        real_first = self.REAL_WATCHING_DETAIL["result"]["first"]
+        fake_first = detail["result"]["first"]
+        self.assertEqual(set(fake_first.keys()), set(real_first.keys()))
+        self.assertEqual(evaluate_post_create_detail(detail), "PROCEED")
+
+    def test_verify_after_cancel_records_the_real_observed_404_message(self):
+        broker = FakeSmokeBroker()
+        coid = broker.seed_watching_order()
+        broker.cancelled.add(coid)
+        del broker.conditional_orders[coid]  # simulate: already cancelled, as after a real DELETE
+        # Real observed message, verbatim from the Phase 14 smoke test:
+        broker.detail_error = TossApiError(
+            "Toss API HTTP 404 [conditional-order-not-found]: 존재하지 않는 설정입니다. (requestId: l4ILLrjoaBI4y5wV)"
+        )
+
+        records = verify_after_cancel(broker, coid, "TQQQ")
+
+        observed = records["detail_after_cancel"]["observed_error"]
+        self.assertIn("404", observed)
+        self.assertIn("conditional-order-not-found", observed)
+
+    def test_cancelled_order_appears_in_neither_open_nor_closed_list(self):
+        # Confirmed real behavior: a cancelled conditional order vanishes
+        # entirely rather than moving into a terminal CLOSED entry.
+        broker = FakeSmokeBroker()
+        coid = broker.seed_watching_order()
+        broker.cancelled.add(coid)
+        del broker.conditional_orders[coid]
+
+        records = verify_after_cancel(broker, coid, "TQQQ")
+
+        open_ids = [o["conditionalOrderId"] for o in records["open_list_after_cancel"]["conditionalOrders"]]
+        closed_ids = [o["conditionalOrderId"] for o in records["closed_list_after_cancel"]["conditionalOrders"]]
+        self.assertNotIn(coid, open_ids)
+        self.assertNotIn(coid, closed_ids)
 
 
 if __name__ == "__main__":

@@ -40,6 +40,29 @@ ConditionalOrderCondition):
   - `triggeredOrderId` lives on the *leg* (`first.triggeredOrderId`), not at
     the top level.
 
+Confirmed empirically (not just from the spec) by the Phase 14 real-account
+smoke test, 2026-08-21, TQQQ, conditionalOrderId
+1gLL0XyY_g3qIoUPuK6BRAcyxV78P-U5zJBl-CRVZ6s (see smoke_artifacts/, redacted):
+  - GET detail's `first` object does NOT include `orderSide` at all -- only
+    `type` ("STOP" for our SINGLE stop-condition legs), `status`,
+    `triggerPrice`, `orderPrice`, `targetProfitRate` (null, unused here),
+    `triggeredOrderId`. This module never reads `orderSide` back from a GET/
+    list response (only sends it on CREATE), so this has no code impact --
+    documented here so nobody adds a read of a field that isn't there.
+  - Immediately after a confirmed 204 DELETE: the detail GET 404s
+    (`conditional-order-not-found`), and the cancelled order appears in
+    NEITHER the OPEN nor the CLOSED list -- it simply stops existing rather
+    than transitioning into a terminal CLOSED entry. cancel_and_confirm()
+    already only relies on the DELETE call itself (204 or a 404 on retry),
+    never on any later GET/list state, so this is consistent with existing
+    code, not a fix.
+  - Top-level `status` and `first.status` were both `WATCHING` immediately
+    after CREATE, with `first.triggeredOrderId: null` -- exactly the single
+    documented-safe outcome evaluate_post_create_detail() already required.
+  - The real trigger-comparator direction for a BUY STOP still was NOT
+    exercised (the order was cancelled before any price movement could
+    trigger it) -- still unverified, still must not be assumed.
+
 create_conditional_order/cancel_conditional_order reuse the exact same
 LIVE/DRY_RUN/live_ack gate that TossBroker.submit_order/cancel_order already
 enforce (toss_api.py), and in LIVE mode call the same private
