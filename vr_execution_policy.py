@@ -1,33 +1,43 @@
-"""VR_SKILL Execution Policy: the "V 복귀" (return-to-V) band-edge policy.
+"""VR_SKILL Execution Policy: the book's Ladder Execution Policy.
 
-Not specified by the book -- this is an explicit implementation choice
-(confirmed with the operator), kept separate from vr_formula.py's V/E/Pool/G
-math and vr_engine.py's biweekly cycle boundaries. Two conditional order
-legs are planned per cycle, priced at the VALUE band's edges converted to a
-per-share trigger price:
+Not specified by vr_formula.py's V/E/Pool/G math -- this module turns a
+cycle's fixed V/band into the actual per-share conditional orders the book
+describes. At cycle start (vr_engine.initialize_cycle / transition_cycle),
+the FULL 2-week BUY/SELL order table is computed once from the position
+size at that moment (Q0) and registered as independent 1-share conditional
+orders. Filling one rung never cancels or recomputes any other rung -- the
+initial ladder stays fixed for the whole cycle; there is no per-fill rearm
+(replaces the earlier "V 복귀" band-edge-with-rearm policy this module used
+to implement).
 
-    lower_trigger_price = lower_band_value / current_qty
-    upper_trigger_price = upper_band_value / current_qty
+BUY ladder (book formula):
+    buy_price[n] = lower_band / (Q0 + n - 1),  n = 1, 2, 3, ...
+each for exactly 1 share, continuing until the cumulative spend lands
+closest to cycle_start_pool * pool_usage_limit_pct (book: "약 75%"), never
+exceeding cycle_start_pool itself. Ties prefer the smaller cumulative spend
+(leaves more Pool unspent) -- see select_buy_ladder_length.
 
-When a trigger fires, the planned quantity brings the position's value back
-to exactly V (not to the band edge, and not the whole Pool/position):
+SELL ladder (book formula):
+    sell_price[n] = upper_band / (Q0 - n + 1),  n = 1, 2, 3, ...
+each for exactly 1 share. The book states no Pool-based limit on the sell
+side; the only hard bound is the position itself (n cannot exceed Q0), plus
+however many shares are actually sellable right now.
 
-    upper (sell):  target_qty = V / upper_trigger_price; sell = current - target
-    lower (buy):   target_qty = V / lower_trigger_price; buy  = target - current
+Prices are rounded to the cent (ROUND_HALF_UP, via mumae_core.money) at
+each rung, matching the book's own tables.
 
-Because filling one leg changes position_qty and/or Pool, it invalidates the
-other, still-open leg (which was sized against stale state). rearm_after_fill
-implements the intra-cycle "re-arm" loop that fires after every VR fill:
-cancel the stale remaining leg, confirm the cancellation, recompute both legs
-from the fresh position/Pool, and register new conditional orders. V, G, and
-band_pct are never recalculated here -- those stay fixed for the whole
-2-week cycle; only the trigger price (which depends on current_qty) and the
-planned quantities change intra-cycle.
+Toss's official API does not document a maximum number of open conditional
+orders per account/symbol (checked against the live OpenAPI spec). Arming a
+ladder on a LIVE broker is refused (BrokerCapacityUnknownError) unless
+VERIFIED_MAX_LIVE_CONDITIONAL_ORDERS has been explicitly set to a real,
+deliberately-tested number -- never guessed, never silently truncated.
+DRY_RUN/fake brokers are unaffected (no real order is ever placed there),
+so the full logical ladder can still be planned and tested.
 """
 from __future__ import annotations
 
-from dataclasses import dataclass, replace
-from decimal import ROUND_FLOOR, Decimal
+from dataclasses import dataclass
+from decimal import Decimal
 
 from mumae_core import money
 from toss_api import TossApiError
@@ -39,73 +49,142 @@ from vr_conditional_orders import (
 )
 from vr_state_store import VRConditionalOrder, VRCycle
 
+DEFAULT_POOL_USAGE_LIMIT_PCT = Decimal("0.75")
+
+# None = not yet empirically verified against the real Toss account. Set
+# only after a deliberate, human-supervised capacity test confirms a real
+# number (see Phase 15 analysis report -- the spec's CONDITIONAL_ORDER rate
+# limit group has no documented count ceiling).
+VERIFIED_MAX_LIVE_CONDITIONAL_ORDERS: int | None = None
+
+# Pure runaway-loop guard for buy_ladder_prices' search -- not a business
+# rule. Should never bind for realistic Pool/price ratios (the book's
+# largest example, Pool=1044.70, needed 18 rungs).
+_MAX_LADDER_SEARCH = 2000
+
 
 class CancellationNotConfirmedError(RuntimeError):
-    """Raised when a remaining VR conditional order's cancellation cannot be
-    confirmed. Per spec, rearm must never register new orders on top of a
-    still-open stale order, so callers should treat this the same as a
+    """Raised when a VR conditional order's cancellation cannot be
+    confirmed. Callers must never register new orders on top of a
+    still-open stale order, so this should be treated the same as a
     blocked cycle transition and leave existing state untouched."""
+
+
+class BrokerCapacityBlockedError(RuntimeError):
+    """Base for both broker-capacity blockers. Carries the planned ladder's
+    logical leg counts and the (possibly None) verified capacity as
+    structured attributes -- not just free text -- so callers can persist
+    and display them (UI: logical BUY/SELL/total counts, verified capacity,
+    blocker reason) rather than parsing a message string."""
+
+    def __init__(self, message: str, *, buy_count: int, sell_count: int, verified_capacity: int | None) -> None:
+        super().__init__(message)
+        self.buy_count = buy_count
+        self.sell_count = sell_count
+        self.total_count = buy_count + sell_count
+        self.verified_capacity = verified_capacity
+
+
+class BrokerCapacityUnknownError(BrokerCapacityBlockedError):
+    """Raised when arming a ladder on a LIVE broker and
+    VERIFIED_MAX_LIVE_CONDITIONAL_ORDERS is still None -- Toss's real open-
+    conditional-order capacity has never been empirically verified at all.
+    Never guessed and never silently truncated -- the caller must persist a
+    blocked state (BROKER_CONDITIONAL_CAPACITY_UNKNOWN) and let a human
+    decide, exactly like a blocked cycle transition."""
+
+
+class BrokerCapacityExceededError(BrokerCapacityBlockedError):
+    """Raised when VERIFIED_MAX_LIVE_CONDITIONAL_ORDERS is a real, verified
+    number, but the planned ladder needs more legs than that. Never
+    truncate the ladder to fit -- surface this
+    (BROKER_CONDITIONAL_CAPACITY_EXCEEDED) and let a human decide (raise
+    the verified capacity after re-confirming it, or shrink the ladder via
+    G/Pool/pool_usage_limit_pct/band)."""
 
 
 @dataclass(frozen=True)
 class PlannedLeg:
     side: str  # "buy" | "sell"
     trigger_price: Decimal
-    quantity: int
+    quantity: int  # always 1 for a ladder rung
 
 
-def round_target_qty(V: Decimal, trigger_price: Decimal) -> int:
-    """The integer share count whose value (qty * trigger_price) lands
-    closest to V. Ties prefer the smaller quantity (the more conservative,
-    less-committed choice)."""
-    if trigger_price <= 0:
-        raise ValueError("Trigger price must be positive.")
-    exact = V / trigger_price
-    floor_qty = int(exact.to_integral_value(rounding=ROUND_FLOOR))
-    candidates = [q for q in (floor_qty, floor_qty + 1) if q >= 0]
-
-    def distance(q: int) -> Decimal:
-        return abs(Decimal(q) * trigger_price - V)
-
-    return min(candidates, key=lambda q: (distance(q), q))
+def buy_ladder_prices(lower_band: Decimal, starting_qty: int, count: int) -> list[Decimal]:
+    """buy_price[n] = lower_band / (starting_qty + n - 1) for n = 1..count,
+    each rounded to the cent. starting_qty is Q0 -- the position size at the
+    moment this cycle's ladder is armed, fixed for the ladder's entire life
+    (never the live/current qty)."""
+    if starting_qty <= 0:
+        raise ValueError("starting_qty must be positive.")
+    if count < 0:
+        raise ValueError("count cannot be negative.")
+    return [money(lower_band / Decimal(starting_qty + i)) for i in range(count)]
 
 
-def trigger_prices(cycle: VRCycle, current_qty: int) -> tuple[Decimal, Decimal]:
-    """(lower_trigger_price, upper_trigger_price) = the cycle's fixed VALUE
-    band converted to a per-share price at the current holding size, rounded
-    to the cent via mumae_core.money (the same normalization used for
-    regular MUMAE order prices)."""
-    if current_qty <= 0:
-        raise ValueError("Trigger prices require a positive current quantity.")
-    lower = money(cycle.lower_band / Decimal(current_qty))
-    upper = money(cycle.upper_band / Decimal(current_qty))
-    return lower, upper
+def sell_ladder_prices(upper_band: Decimal, starting_qty: int, count: int) -> list[Decimal]:
+    """sell_price[n] = upper_band / (starting_qty - n + 1) for n = 1..count.
+    count must not exceed starting_qty (the denominator would reach 0)."""
+    if starting_qty <= 0:
+        raise ValueError("starting_qty must be positive.")
+    if count < 0:
+        raise ValueError("count cannot be negative.")
+    if count > starting_qty:
+        raise ValueError("count cannot exceed starting_qty (a sell ladder cannot exceed the position size).")
+    return [money(upper_band / Decimal(starting_qty - i)) for i in range(count)]
 
 
-def plan_rebalance_legs(
-    V: Decimal,
-    current_qty: int,
-    lower_trigger: Decimal,
-    upper_trigger: Decimal,
-    vr_pool: Decimal,
-    available_buying_power: Decimal,
-    available_sell_qty: int,
-) -> tuple[PlannedLeg | None, PlannedLeg | None]:
-    """Plan the (buy_leg, sell_leg) that return the position's value to V if
-    either trigger fires. A leg is omitted (None) once its quantity would be
-    <= 0, rather than emitting a zero-quantity order."""
-    sell_target = round_target_qty(V, upper_trigger)
-    sell_qty = min(max(0, current_qty - sell_target), max(0, available_sell_qty))
-    sell_leg = PlannedLeg("sell", upper_trigger, sell_qty) if sell_qty > 0 else None
+def select_buy_ladder_length(
+    prices: list[Decimal],
+    cycle_start_pool: Decimal,
+    pool_usage_limit_pct: Decimal = DEFAULT_POOL_USAGE_LIMIT_PCT,
+    available_buying_power: Decimal | None = None,
+) -> tuple[int, Decimal]:
+    """How many BUY rungs (1 share each, taken in order) to actually
+    register: whichever cumulative spend lands closest to
+    cycle_start_pool * pool_usage_limit_pct, never exceeding cycle_start_pool
+    (or, if given, the smaller of cycle_start_pool and
+    available_buying_power -- a defense-in-depth cap beyond the book's own
+    rule, in case Pool bookkeeping ever drifts ahead of real account cash).
+    Ties prefer the smaller cumulative spend. Returns (n, cumulative_spend);
+    n=0 if even the first rung is unaffordable."""
+    spend_cap = cycle_start_pool
+    if available_buying_power is not None:
+        spend_cap = min(spend_cap, available_buying_power)
+    target = cycle_start_pool * pool_usage_limit_pct
+    cumulative = Decimal("0")
+    best_n, best_cumulative, best_diff = 0, Decimal("0"), abs(target)
+    for index, price in enumerate(prices, start=1):
+        if cumulative + price > spend_cap:
+            break
+        cumulative += price
+        diff = abs(cumulative - target)
+        if diff < best_diff or (diff == best_diff and cumulative < best_cumulative):
+            best_n, best_cumulative, best_diff = index, cumulative, diff
+    return best_n, best_cumulative
 
-    buy_target = round_target_qty(V, lower_trigger)
-    buy_qty_needed = max(0, buy_target - current_qty)
-    pool_affordable = int((vr_pool / lower_trigger).to_integral_value(rounding=ROUND_FLOOR))
-    power_affordable = int((available_buying_power / lower_trigger).to_integral_value(rounding=ROUND_FLOOR))
-    buy_qty = min(buy_qty_needed, max(0, pool_affordable), max(0, power_affordable))
-    buy_leg = PlannedLeg("buy", lower_trigger, buy_qty) if buy_qty > 0 else None
 
-    return buy_leg, sell_leg
+def plan_buy_ladder(
+    lower_band: Decimal,
+    starting_qty: int,
+    cycle_start_pool: Decimal,
+    pool_usage_limit_pct: Decimal = DEFAULT_POOL_USAGE_LIMIT_PCT,
+    available_buying_power: Decimal | None = None,
+) -> tuple[list[PlannedLeg], Decimal]:
+    """The full logical BUY ladder plus its projected total spend (no
+    broker-capacity gating here -- see arm_cycle_orders)."""
+    prices = buy_ladder_prices(lower_band, starting_qty, _MAX_LADDER_SEARCH)
+    n, cumulative = select_buy_ladder_length(prices, cycle_start_pool, pool_usage_limit_pct, available_buying_power)
+    return [PlannedLeg("buy", price, 1) for price in prices[:n]], cumulative
+
+
+def plan_sell_ladder(upper_band: Decimal, starting_qty: int, available_sell_qty: int) -> list[PlannedLeg]:
+    """The full logical SELL ladder: 1 share at each of up to starting_qty
+    rungs (book: no Pool-based limit on the sell side), further capped by
+    however many shares are actually sellable right now."""
+    count = min(starting_qty, max(0, available_sell_qty))
+    prices = sell_ladder_prices(upper_band, starting_qty, count)
+    return [PlannedLeg("sell", price, 1) for price in prices]
 
 
 def cancel_and_confirm(broker, conditional_order_id: str) -> None:
@@ -118,10 +197,10 @@ def cancel_and_confirm(broker, conditional_order_id: str) -> None:
 
     A 404 ("조건주문 없음") is treated as confirmed too, not failed: it means
     the order is already gone -- exactly the outcome being confirmed. This
-    matters for crash recovery (spec 13-4): if the process crashes after
-    cancelling some orders but before persisting that fact, a retry re-issues
-    DELETE for orders already cancelled at Toss; those must not be mistaken
-    for a failed cancellation and block the transition."""
+    matters for crash recovery: if the process crashes after cancelling some
+    orders but before persisting that fact, a retry re-issues DELETE for
+    orders already cancelled at Toss; those must not be mistaken for a
+    failed cancellation and block the transition."""
     try:
         cancel_conditional_order(broker, conditional_order_id)
     except TossApiError as error:
@@ -132,36 +211,20 @@ def cancel_and_confirm(broker, conditional_order_id: str) -> None:
         ) from error
 
 
-def rearm_after_fill(
+def register_ladder_orders(
     broker,
     cycle: VRCycle,
     symbol: str,
-    updated_qty: int,
-    updated_pool: Decimal,
-    available_buying_power: Decimal,
-    available_sell_qty: int,
-    remaining_conditional_order_ids: list[str],
-) -> tuple[VRCycle, list[VRConditionalOrder]]:
-    """Steps 4-7 of the intra-cycle rearm procedure (module docstring):
-    cancel the other, now-stale VR conditional order(s), confirm the
-    cancellation, recompute both legs from the fresh position/Pool, and
-    register new conditional orders. Raises CancellationNotConfirmedError
-    (without registering anything new) if any cancellation cannot be
-    confirmed. V/G/band_pct are never touched; only pool_current -- already
-    updated by the caller from the fill via apply_fill_to_pool -- carries
-    into the returned cycle.
-    """
-    for conditional_order_id in remaining_conditional_order_ids:
-        cancel_and_confirm(broker, conditional_order_id)
-
-    lower_trigger, upper_trigger = trigger_prices(cycle, updated_qty)
-    buy_leg, sell_leg = plan_rebalance_legs(
-        cycle.V, updated_qty, lower_trigger, upper_trigger,
-        updated_pool, available_buying_power, available_sell_qty,
-    )
-
+    legs: list[PlannedLeg],
+    starting_sequence: int,
+) -> list[VRConditionalOrder]:
+    """Create one conditional order per planned leg and return the matching
+    VRConditionalOrder records. Sequence numbers are per-call (callers pass
+    a fresh starting_sequence per side) so buy and sell ladders never share
+    a clientOrderId sequence space."""
     new_orders: list[VRConditionalOrder] = []
-    for sequence, leg in enumerate((leg for leg in (buy_leg, sell_leg) if leg is not None), start=1):
+    for offset, leg in enumerate(legs):
+        sequence = starting_sequence + offset
         client_order_id = build_client_order_id(symbol, cycle.cycle_id, leg.side, sequence)
         request = ConditionalOrderRequest(
             symbol=symbol, side=leg.side, trigger_price=leg.trigger_price,
@@ -177,6 +240,4 @@ def rearm_after_fill(
             trigger_price=leg.trigger_price, order_price=leg.trigger_price,
             quantity=leg.quantity, expire_date=cycle.end_session, status="OPEN",
         ))
-
-    new_cycle = replace(cycle, pool_current=updated_pool)
-    return new_cycle, new_orders
+    return new_orders

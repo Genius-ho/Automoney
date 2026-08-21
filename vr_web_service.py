@@ -44,19 +44,23 @@ from vr_engine import (
     scheduled_cycle_end_friday,
     transition_cycle,
 )
-from vr_execution_policy import CancellationNotConfirmedError, rearm_after_fill
+from vr_execution_policy import BrokerCapacityBlockedError, BrokerCapacityExceededError, BrokerCapacityUnknownError
 from vr_formula import band
 from vr_funds_ledger import FundsReservationLedger, available_vr_buying_power
 from vr_state_store import VRConditionalOrder, VRState, VRStateStore
 from web_gui.web_service import _collect_symbol_rows, _find_decimal, _text_decimal
 
-# Statuses in which no new VR order (rearm or cycle transition) may ever be
-# created, per spec section 12 (STOP) and section 6 (blocked transitions).
+# Statuses in which no new VR order (cycle transition) may ever be created,
+# per spec section 12 (STOP) and section 6 (blocked transitions).
 # UNKNOWN_CONDITIONAL_STATUS (spec 13-2): a conditional order/leg reported a
 # status or field outside the documented schema -- fail closed rather than
 # guess, and require a human to look before any new VR order is placed.
+# REARM_BLOCKED no longer exists: the book Ladder execution policy never
+# rearms mid-cycle (vr_execution_policy's module docstring), so nothing in
+# this codebase can produce that status anymore.
 _NO_NEW_ORDER_STATUSES = {
-    "UNINITIALIZED", "CYCLE_TRANSITION_BLOCKED", "REARM_BLOCKED", "UNKNOWN_CONDITIONAL_STATUS",
+    "UNINITIALIZED", "CYCLE_TRANSITION_BLOCKED", "UNKNOWN_CONDITIONAL_STATUS",
+    "BROKER_CONDITIONAL_CAPACITY_UNKNOWN", "BROKER_CONDITIONAL_CAPACITY_EXCEEDED",
 }
 
 
@@ -137,7 +141,6 @@ class VRWebServiceMixin:
         regular_by_id = {str(row.get("orderId")): row for row in regular_rows}
 
         changed = False
-        just_filled = False
         updated_orders: list[VRConditionalOrder] = []
         try:
             for order in state.conditional_orders:
@@ -193,16 +196,15 @@ class VRWebServiceMixin:
                                 state.current_cycle, order.side, filled_qty * order.trigger_price
                             )
                             state.applied_fill_order_ids.append(triggered_order_id)
-                            just_filled = True
                     updated_orders.append(replace(order, status="FILLED", triggered_order_id=triggered_order_id))
                     changed = True
                 elif regular_status in ("REJECTED", "CANCELED", "CANCELLED"):
                     updated_orders.append(replace(order, status="REJECTED", triggered_order_id=triggered_order_id))
                     changed = True
                 else:
-                    # PARTIALLY_FILLED or otherwise non-terminal: leave OPEN,
-                    # do not touch Pool or rearm yet -- per spec, rearm only
-                    # fires once the triggered order reaches a terminal state.
+                    # PARTIALLY_FILLED or otherwise non-terminal: leave OPEN
+                    # and do not touch Pool -- only a terminal FILLED status
+                    # ever updates Pool.
                     updated_orders.append(replace(order, triggered_order_id=triggered_order_id))
                     changed = changed or triggered_order_id != order.triggered_order_id
         except UnknownConditionalOrderStatusError as error:
@@ -215,37 +217,12 @@ class VRWebServiceMixin:
         if changed:
             self.vr_store.save(state)
 
-        if just_filled:
-            self._vr_rearm(symbol, state)
-
+        # Book Ladder execution policy: the cycle's full BUY/SELL order
+        # table is armed once at cycle start and stays fixed for the whole
+        # 2-week cycle. A fill only updates Pool (already done above via
+        # apply_fill_to_pool) -- it never cancels or recomputes any other
+        # rung (no rearm; see vr_execution_policy's module docstring).
         return {"symbol": symbol, "orders": [asdict(o) for o in state.conditional_orders], "synced": True}
-
-    def _vr_rearm(self, symbol: str, state: VRState) -> None:
-        remaining_ids = [
-            order.conditional_order_id for order in state.conditional_orders
-            if order.status == "OPEN" and order.conditional_order_id
-        ]
-        broker = self.broker()
-        qty, _price, buying_power = self._vr_fetch_account(symbol)
-        available = self._vr_available_buying_power(symbol, state.current_cycle.pool_current, buying_power)
-        try:
-            new_cycle, new_orders = rearm_after_fill(
-                broker, state.current_cycle, symbol=symbol, updated_qty=qty,
-                updated_pool=state.current_cycle.pool_current,
-                available_buying_power=available, available_sell_qty=qty,
-                remaining_conditional_order_ids=remaining_ids,
-            )
-        except CancellationNotConfirmedError as error:
-            state.status = "REARM_BLOCKED"
-            state.blocked_reason = str(error)
-            self.vr_store.save(state)
-            return
-        state.current_cycle = new_cycle
-        state.conditional_orders = [
-            replace(order, status="CANCELLED") if order.conditional_order_id in remaining_ids else order
-            for order in state.conditional_orders
-        ] + new_orders
-        self.vr_store.save(state)
 
     # --- biweekly cycle transition, with crash-safe resume ------------------
 
@@ -318,6 +295,24 @@ class VRWebServiceMixin:
             state.blocked_reason = str(error)
             self.vr_store.save(state)
             return
+        except BrokerCapacityBlockedError as error:
+            # The old cycle's orders are already cancelled by this point
+            # (_vr_run_transition ran first) -- this symbol is left with no
+            # armed ladder until a human resolves the capacity question and
+            # retries (e.g. via vr_start), never a silently truncated ladder.
+            state.status = (
+                "BROKER_CONDITIONAL_CAPACITY_UNKNOWN" if isinstance(error, BrokerCapacityUnknownError)
+                else "BROKER_CONDITIONAL_CAPACITY_EXCEEDED"
+            )
+            state.blocked_reason = str(error)
+            state.capacity_blocker = {
+                "buy_count": error.buy_count,
+                "sell_count": error.sell_count,
+                "total_count": error.total_count,
+                "verified_capacity": error.verified_capacity,
+            }
+            self.vr_store.save(state)
+            return
         self.vr_store.save(new_state)
 
     def vr_auto_tick_for_symbol(self, symbol: str, now: datetime | None = None) -> None:
@@ -375,9 +370,31 @@ class VRWebServiceMixin:
         )
         _, _, buying_power = self._vr_fetch_account(symbol)
         available = self._vr_available_buying_power(symbol, initial_pool, buying_power)
-        state.conditional_orders = arm_cycle_orders(
-            self.broker(), state.current_cycle, symbol, qty, available, qty,
-        )
+        try:
+            orders, planned_buy_spend = arm_cycle_orders(
+                self.broker(), state.current_cycle, symbol, qty, available, qty,
+            )
+        except BrokerCapacityBlockedError as error:
+            # V/band are already computed and worth keeping visible -- only
+            # the ladder itself failed to arm. Persisted (not just raised)
+            # so the same structured UI (logical BUY/SELL/total counts,
+            # verified capacity, blocker reason) used for a blocked cycle
+            # transition also covers a blocked first-time initialization.
+            state.status = (
+                "BROKER_CONDITIONAL_CAPACITY_UNKNOWN" if isinstance(error, BrokerCapacityUnknownError)
+                else "BROKER_CONDITIONAL_CAPACITY_EXCEEDED"
+            )
+            state.blocked_reason = str(error)
+            state.capacity_blocker = {
+                "buy_count": error.buy_count,
+                "sell_count": error.sell_count,
+                "total_count": error.total_count,
+                "verified_capacity": error.verified_capacity,
+            }
+            self.vr_store.save(state)
+            raise
+        state.conditional_orders = orders
+        state.current_cycle = replace(state.current_cycle, planned_buy_spend=planned_buy_spend)
         self.vr_store.save(state)
         return {"symbol": symbol, "V1": str(state.current_cycle.V), "status": state.status}
 
@@ -386,7 +403,9 @@ class VRWebServiceMixin:
         state = self.vr_store.load(symbol)
         if state.status == "UNINITIALIZED":
             raise ValueError(f"{symbol}: VR이 아직 초기화되지 않았습니다.")
-        if state.status in ("CYCLE_TRANSITION_BLOCKED", "REARM_BLOCKED"):
+        if state.status in (
+            "CYCLE_TRANSITION_BLOCKED", "BROKER_CONDITIONAL_CAPACITY_UNKNOWN", "BROKER_CONDITIONAL_CAPACITY_EXCEEDED",
+        ):
             raise ValueError(f"{symbol}: {state.status} 상태입니다. 먼저 원인을 해결하세요: {state.blocked_reason}")
         if state.status == "ACTIVE":
             return {"symbol": symbol, "status": state.status}
@@ -465,6 +484,7 @@ class VRWebServiceMixin:
             "symbol": symbol,
             "status": state.status,
             "blocked_reason": state.blocked_reason,
+            "capacity_blocker": state.capacity_blocker,
             "cycle_number": state.cycle_number,
             "anchor_friday": state.anchor_friday,
             "current_cycle": None,
@@ -489,6 +509,9 @@ class VRWebServiceMixin:
         cycle = state.current_cycle
         if cycle is not None:
             pool_to_v_pct = (cycle.pool_current / cycle.V * 100) if cycle.V else Decimal("0")
+            projected_pool = None
+            if cycle.planned_buy_spend is not None:
+                projected_pool = str(cycle.pool_start - cycle.planned_buy_spend)
             payload["current_cycle"] = {
                 "cycle_id": cycle.cycle_id,
                 "start_session": cycle.start_session,
@@ -499,6 +522,11 @@ class VRWebServiceMixin:
                 "pool_start": str(cycle.pool_start),
                 "pool_current": str(cycle.pool_current),
                 "pool_to_v_pct": str(pool_to_v_pct.quantize(Decimal("0.01"))),
+                # Planned/projected: what the book's order table assumes if
+                # every armed BUY rung eventually fills, fixed at arm time.
+                # pool_current instead tracks Pool from real Toss fills only.
+                "planned_buy_spend": str(cycle.planned_buy_spend) if cycle.planned_buy_spend is not None else None,
+                "projected_pool": projected_pool,
                 "lower_band": str(cycle.lower_band),
                 "upper_band": str(cycle.upper_band),
                 "E_at_close": str(cycle.E_at_close) if cycle.E_at_close is not None else None,

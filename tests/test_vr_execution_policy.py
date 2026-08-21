@@ -4,126 +4,159 @@ from decimal import Decimal
 
 from vr_execution_policy import (
     CancellationNotConfirmedError,
-    plan_rebalance_legs,
-    rearm_after_fill,
-    round_target_qty,
-    trigger_prices,
+    buy_ladder_prices,
+    cancel_and_confirm,
+    plan_buy_ladder,
+    plan_sell_ladder,
+    select_buy_ladder_length,
+    sell_ladder_prices,
 )
-from vr_state_store import VRCycle
 
 
-def _cycle(V="10000", band_pct="15", pool="1000", cycle_id="c1"):
-    return VRCycle(
-        cycle_id=cycle_id, start_session="2026-08-07", end_session="2026-08-21",
-        V=Decimal(V), G=Decimal("10"), band_pct=Decimal(band_pct),
-        pool_start=Decimal(pool), pool_current=Decimal(pool),
-        lower_band=Decimal(V) * (1 - Decimal(band_pct) / 100),
-        upper_band=Decimal(V) * (1 + Decimal(band_pct) / 100),
-    )
+class BuyLadderPricesTests(unittest.TestCase):
+    def test_matches_the_book_worked_example(self):
+        # L=4695.91, Q0=110 -> 42.69, 42.31, 41.93, 41.56 ...
+        prices = buy_ladder_prices(Decimal("4695.91"), 110, 4)
+        self.assertEqual(prices, [Decimal("42.69"), Decimal("42.31"), Decimal("41.93"), Decimal("41.56")])
 
+    def test_denominator_increases_by_one_each_rung(self):
+        prices = buy_ladder_prices(Decimal("4249.58"), 110, 3)
+        self.assertEqual(prices, [Decimal("38.63"), Decimal("38.28"), Decimal("37.94")])
 
-class RoundTargetQtyTests(unittest.TestCase):
-    def test_exact_division_returns_that_integer(self):
-        self.assertEqual(round_target_qty(Decimal("1000"), Decimal("100")), 10)
+    def test_prices_strictly_decrease(self):
+        prices = buy_ladder_prices(Decimal("4695.91"), 110, 10)
+        self.assertEqual(prices, sorted(prices, reverse=True))
+        self.assertEqual(len(set(prices)), len(prices))
 
-    def test_rounds_to_whichever_side_is_closer_to_v(self):
-        # 1000/99 = 10.10..., 10*99=990 (dist 10), 11*99=1089 (dist 89) -> 10
-        self.assertEqual(round_target_qty(Decimal("1000"), Decimal("99")), 10)
-        # 1000/91 = 10.98..., 10*91=910 (dist 90), 11*91=1001 (dist 1) -> 11
-        self.assertEqual(round_target_qty(Decimal("1000"), Decimal("91")), 11)
-
-    def test_tie_break_prefers_the_smaller_quantity(self):
-        # V=950, price=100: 9*100=900 (dist 50), 10*100=1000 (dist 50) -> tie -> 9
-        self.assertEqual(round_target_qty(Decimal("950"), Decimal("100")), 9)
-
-    def test_never_negative(self):
-        self.assertGreaterEqual(round_target_qty(Decimal("1"), Decimal("1000")), 0)
-
-
-class TriggerPricesTests(unittest.TestCase):
-    def test_matches_the_worked_example(self):
-        cycle = _cycle(V="10000", band_pct="15")
-        lower, upper = trigger_prices(cycle, current_qty=100)
-        self.assertEqual(lower, Decimal("85.00"))
-        self.assertEqual(upper, Decimal("115.00"))
-
-    def test_rejects_zero_quantity(self):
-        cycle = _cycle()
+    def test_rejects_nonpositive_starting_qty(self):
         with self.assertRaises(ValueError):
-            trigger_prices(cycle, current_qty=0)
+            buy_ladder_prices(Decimal("4695.91"), 0, 5)
 
 
-class PlanRebalanceLegsTests(unittest.TestCase):
-    def test_sell_leg_targets_v_and_is_capped_by_available_sell_qty(self):
-        # current_qty=120 at upper_trigger=115: target=10000/115=86.9->87
-        # sell = 120-87=33, but only 20 sellable
-        buy_leg, sell_leg = plan_rebalance_legs(
-            V=Decimal("10000"), current_qty=120,
-            lower_trigger=Decimal("85"), upper_trigger=Decimal("115"),
-            vr_pool=Decimal("1000"), available_buying_power=Decimal("5000"),
-            available_sell_qty=20,
+class SellLadderPricesTests(unittest.TestCase):
+    def test_matches_the_book_worked_example(self):
+        # U=5749.43, Q0=110 -> 52.27, 52.75, 53.24
+        prices = sell_ladder_prices(Decimal("5749.43"), 110, 3)
+        self.assertEqual(prices, [Decimal("52.27"), Decimal("52.75"), Decimal("53.24")])
+
+    def test_prices_strictly_increase(self):
+        prices = sell_ladder_prices(Decimal("6353.29"), 110, 10)
+        self.assertEqual(prices, sorted(prices))
+        self.assertEqual(len(set(prices)), len(prices))
+
+    def test_count_cannot_exceed_starting_qty(self):
+        with self.assertRaises(ValueError):
+            sell_ladder_prices(Decimal("5749.43"), 110, 111)
+
+    def test_count_equal_to_starting_qty_is_the_full_position(self):
+        prices = sell_ladder_prices(Decimal("5749.43"), 3, 3)
+        self.assertEqual(len(prices), 3)
+
+
+class SelectBuyLadderLengthGoldenExampleTests(unittest.TestCase):
+    """The three book examples for the Pool 75% target-spend rule, verified
+    exactly (prices, level count, and remaining Pool)."""
+
+    def test_example_a_pool_250_50(self):
+        prices = buy_ladder_prices(Decimal("4462.12"), 110, 10)
+        n, cumulative = select_buy_ladder_length(prices, Decimal("250.50"))
+        self.assertEqual(n, 5)
+        self.assertEqual(cumulative, Decimal("199.23"))
+        self.assertEqual(Decimal("250.50") - cumulative, Decimal("51.27"))
+
+    def test_example_b_pool_500_50(self):
+        prices = buy_ladder_prices(Decimal("4695.91"), 110, 15)
+        n, cumulative = select_buy_ladder_length(prices, Decimal("500.50"))
+        self.assertEqual(n, 9)
+        self.assertEqual(cumulative, Decimal("370.93"))
+        self.assertEqual(Decimal("500.50") - cumulative, Decimal("129.57"))
+
+    def test_example_c_pool_1044_70(self):
+        prices = buy_ladder_prices(Decimal("4975.96"), 105, 25)
+        n, cumulative = select_buy_ladder_length(prices, Decimal("1044.70"))
+        self.assertEqual(n, 18)
+        self.assertEqual(cumulative, Decimal("790.80"))
+        self.assertEqual(Decimal("1044.70") - cumulative, Decimal("253.90"))
+
+
+class SelectBuyLadderLengthEdgeCaseTests(unittest.TestCase):
+    def test_pool_smaller_than_first_rung_selects_zero_levels(self):
+        # Book's first-cycle example: Pool=$0.50, first rung >= $38 -> 0 buys.
+        prices = buy_ladder_prices(Decimal("4249.58"), 110, 5)
+        n, cumulative = select_buy_ladder_length(prices, Decimal("0.50"))
+        self.assertEqual(n, 0)
+        self.assertEqual(cumulative, Decimal("0"))
+
+    def test_never_exceeds_cycle_start_pool(self):
+        prices = buy_ladder_prices(Decimal("4249.58"), 110, 200)
+        pool = Decimal("300.00")
+        n, cumulative = select_buy_ladder_length(prices, pool)
+        self.assertLessEqual(cumulative, pool)
+
+    def test_available_buying_power_caps_spend_below_pool(self):
+        prices = buy_ladder_prices(Decimal("4249.58"), 110, 50)
+        n, cumulative = select_buy_ladder_length(
+            prices, cycle_start_pool=Decimal("1000"), available_buying_power=Decimal("100"),
         )
-        self.assertEqual(sell_leg.quantity, 20)
-        self.assertEqual(sell_leg.side, "sell")
-        self.assertEqual(sell_leg.trigger_price, Decimal("115"))
+        self.assertLessEqual(cumulative, Decimal("100"))
 
-    def test_buy_leg_targets_v_and_is_capped_by_pool(self):
-        # current_qty=80 at lower_trigger=85: target=10000/85=117.6->118
-        # buy_needed=38, but pool only affords floor(1000/85)=11
-        buy_leg, sell_leg = plan_rebalance_legs(
-            V=Decimal("10000"), current_qty=80,
-            lower_trigger=Decimal("85"), upper_trigger=Decimal("115"),
-            vr_pool=Decimal("1000"), available_buying_power=Decimal("5000"),
-            available_sell_qty=80,
+    def test_tie_prefers_smaller_cumulative_spend(self):
+        # prices=[40,40], target=100*0.6=60: n=1 -> cumulative=40 (diff 20);
+        # n=2 -> cumulative=80 (diff 20) -- an exact tie. Book: ties keep
+        # more Pool unspent, so the smaller cumulative (n=1) must win.
+        prices = [Decimal("40"), Decimal("40")]
+        n, cumulative = select_buy_ladder_length(
+            prices, cycle_start_pool=Decimal("100"), pool_usage_limit_pct=Decimal("0.6"),
         )
-        self.assertEqual(buy_leg.quantity, 11)
-        self.assertEqual(buy_leg.side, "buy")
+        self.assertEqual(n, 1)
+        self.assertEqual(cumulative, Decimal("40"))
 
-    def test_buy_leg_is_capped_by_buying_power_even_if_pool_allows_more(self):
-        buy_leg, sell_leg = plan_rebalance_legs(
-            V=Decimal("10000"), current_qty=80,
-            lower_trigger=Decimal("85"), upper_trigger=Decimal("115"),
-            vr_pool=Decimal("5000"), available_buying_power=Decimal("170"),
-            available_sell_qty=80,
-        )
-        self.assertEqual(buy_leg.quantity, 2)  # floor(170/85)
 
-    def test_no_sell_leg_when_already_at_or_below_target(self):
-        buy_leg, sell_leg = plan_rebalance_legs(
-            V=Decimal("10000"), current_qty=80,
-            lower_trigger=Decimal("85"), upper_trigger=Decimal("115"),
-            vr_pool=Decimal("1000"), available_buying_power=Decimal("5000"),
-            available_sell_qty=80,
-        )
-        self.assertIsNone(sell_leg)
+class PlanBuyLadderTests(unittest.TestCase):
+    def test_returns_one_share_legs_and_the_projected_spend(self):
+        legs, planned_spend = plan_buy_ladder(Decimal("4695.91"), 110, Decimal("500.50"))
+        self.assertEqual(len(legs), 9)
+        self.assertEqual(planned_spend, Decimal("370.93"))
+        for leg in legs:
+            self.assertEqual(leg.side, "buy")
+            self.assertEqual(leg.quantity, 1)
+        self.assertEqual(legs[0].trigger_price, Decimal("42.69"))
 
-    def test_no_buy_leg_when_already_at_or_above_target(self):
-        buy_leg, sell_leg = plan_rebalance_legs(
-            V=Decimal("10000"), current_qty=120,
-            lower_trigger=Decimal("85"), upper_trigger=Decimal("115"),
-            vr_pool=Decimal("1000"), available_buying_power=Decimal("5000"),
-            available_sell_qty=120,
-        )
-        self.assertIsNone(buy_leg)
+    def test_empty_ladder_when_pool_cannot_afford_the_first_rung(self):
+        legs, planned_spend = plan_buy_ladder(Decimal("4249.58"), 110, Decimal("0.50"))
+        self.assertEqual(legs, [])
+        self.assertEqual(planned_spend, Decimal("0"))
 
-    def test_no_buy_leg_when_pool_is_exhausted(self):
-        buy_leg, sell_leg = plan_rebalance_legs(
-            V=Decimal("10000"), current_qty=80,
-            lower_trigger=Decimal("85"), upper_trigger=Decimal("115"),
-            vr_pool=Decimal("0"), available_buying_power=Decimal("5000"),
-            available_sell_qty=80,
-        )
-        self.assertIsNone(buy_leg)
+
+class PlanSellLadderTests(unittest.TestCase):
+    def test_returns_one_share_legs_up_to_starting_qty(self):
+        legs = plan_sell_ladder(Decimal("5749.43"), 110, available_sell_qty=110)
+        self.assertEqual(len(legs), 110)
+        for leg in legs:
+            self.assertEqual(leg.side, "sell")
+            self.assertEqual(leg.quantity, 1)
+        self.assertEqual(legs[0].trigger_price, Decimal("52.27"))
+        self.assertEqual(legs[1].trigger_price, Decimal("52.75"))
+        self.assertEqual(legs[2].trigger_price, Decimal("53.24"))
+
+    def test_capped_by_available_sell_qty_when_smaller_than_position(self):
+        legs = plan_sell_ladder(Decimal("5749.43"), 110, available_sell_qty=3)
+        self.assertEqual(len(legs), 3)
+
+    def test_no_pool_based_limit_unlike_the_buy_side(self):
+        # The book states SELL has no Pool constraint -- plan_sell_ladder
+        # doesn't even take a pool argument, so this is really a signature
+        # check that no such cap can accidentally be reintroduced.
+        import inspect
+        params = inspect.signature(plan_sell_ladder).parameters
+        self.assertNotIn("pool", " ".join(params))
 
 
 class FakeConditionalOrderBroker:
-    """Fully in-memory simulation of the Toss conditional-order HTTP surface
-    via _request -- so rearm_after_fill exercises the exact same
-    create_conditional_order/cancel_conditional_order/get_conditional_orders
-    call path a real TossBroker would use, with zero real network calls.
-    mode is configurable so both the DRY_RUN short-circuit path (create/
-    cancel never reach _request) and the LIVE path (fully faked _request)
-    are exercisable."""
+    """In-memory simulation of the Toss conditional-order HTTP surface via
+    _request, matching the real verified schema (nested first.orderSide/
+    triggerPrice/orderPrice; DELETE -> 204; GET requires status=). Used to
+    exercise cancel_and_confirm's real call path with zero network calls."""
 
     def __init__(self, mode="LIVE"):
         self.mode = mode
@@ -136,10 +169,6 @@ class FakeConditionalOrderBroker:
         return {}
 
     def _request(self, method, path, data=None, headers=None):
-        # Matches the real, verified schema (Phase 13): create nests
-        # orderSide/triggerPrice/orderPrice under "first"; cancel is DELETE
-        # returning 204 (empty dict here, no "status" field); list is GET
-        # with a required status= query and a "conditionalOrders" body key.
         if method == "POST" and path == "/api/v1/conditional-orders":
             payload = json.loads(data)
             conditional_order_id = f"co-{self._next_id}"
@@ -177,77 +206,33 @@ class FakeConditionalOrderBroker:
         return conditional_order_id
 
 
-class RearmAfterFillTests(unittest.TestCase):
-    def test_sell_fill_cancels_remaining_buy_leg_and_reregisters_both(self):
+class CancelAndConfirmTests(unittest.TestCase):
+    """cancel_and_confirm is still used at cycle-end (cancel every ladder
+    rung still OPEN) even though rearm no longer calls it mid-cycle."""
+
+    def test_confirmed_cancellation_removes_the_order(self):
         broker = FakeConditionalOrderBroker(mode="LIVE")
-        cycle = _cycle(V="10000", band_pct="15", pool="1000")
-        remaining_buy_id = broker.seed_order("TQQQ", "buy", "old-buy")
-
-        new_cycle, new_orders = rearm_after_fill(
-            broker, cycle, symbol="TQQQ",
-            updated_qty=87,  # a sell fill already brought qty from 120 to 87
-            updated_pool=Decimal("3805.00"),  # pool credited from the sell fill
-            available_buying_power=Decimal("5000"),
-            available_sell_qty=87,
-            remaining_conditional_order_ids=[remaining_buy_id],
-        )
-
-        self.assertIn(remaining_buy_id, broker.cancelled)
-        self.assertNotIn(remaining_buy_id, broker.orders)
-        # V/G/Band on the cycle are untouched by a rearm -- only pool_current
-        # (which the caller already updated from the fill) carries forward.
-        self.assertEqual(new_cycle.V, Decimal("10000"))
-        self.assertEqual(new_cycle.G, Decimal("10"))
-        self.assertEqual(new_cycle.band_pct, Decimal("15"))
-        self.assertEqual(new_cycle.pool_current, Decimal("3805.00"))
-        sides = {order.side for order in new_orders}
-        self.assertTrue(sides <= {"buy", "sell"})
-        for order in new_orders:
-            self.assertEqual(order.status, "OPEN")
-            self.assertEqual(order.cycle_id, "c1")
-
-    def test_dry_run_cancellations_are_treated_as_confirmed_synchronously(self):
-        # In DRY_RUN, cancel_conditional_order never reaches _request at all
-        # (matches TossBroker.cancel_order's own gate) -- rearm must not
-        # require a network round trip to "confirm" a DRY_RUN cancellation.
-        broker = FakeConditionalOrderBroker(mode="DRY_RUN")
-        cycle = _cycle()
-        new_cycle, new_orders = rearm_after_fill(
-            broker, cycle, symbol="TQQQ", updated_qty=87,
-            updated_pool=Decimal("3805.00"), available_buying_power=Decimal("5000"),
-            available_sell_qty=87, remaining_conditional_order_ids=["some-old-id"],
-        )
-        self.assertEqual(new_cycle.pool_current, Decimal("3805.00"))
+        order_id = broker.seed_order("TQQQ", "buy", "old-buy")
+        cancel_and_confirm(broker, order_id)
+        self.assertIn(order_id, broker.cancelled)
+        self.assertNotIn(order_id, broker.orders)
 
     def test_raises_if_cancellation_does_not_confirm(self):
         class StubbornBroker(FakeConditionalOrderBroker):
             def _request(self, method, path, data=None, headers=None):
                 if method == "DELETE" and path.startswith("/api/v1/conditional-orders/"):
-                    # Simulate Toss rejecting the cancel (e.g. already
-                    # triggered/expired) -- the real API raises via a 4xx,
-                    # never returns a "still OPEN" body.
                     from toss_api import TossApiError
                     raise TossApiError("Toss API HTTP 400: cannot cancel")
                 return super()._request(method, path, data=data, headers=headers)
 
         broker = StubbornBroker(mode="LIVE")
-        cycle = _cycle()
         stuck_id = broker.seed_order("TQQQ", "sell", "old-sell")
-
         with self.assertRaises(CancellationNotConfirmedError):
-            rearm_after_fill(
-                broker, cycle, symbol="TQQQ", updated_qty=80,
-                updated_pool=Decimal("1000"), available_buying_power=Decimal("5000"),
-                available_sell_qty=80, remaining_conditional_order_ids=[stuck_id],
-            )
-        # A failed confirmation must not proceed to register new orders.
-        self.assertEqual(len(broker.orders), 1)
+            cancel_and_confirm(broker, stuck_id)
 
     def test_404_on_cancel_retry_is_treated_as_already_confirmed(self):
         # Spec 13-4 crash recovery: a retried DELETE for an order Toss
-        # already cancelled 404s -- that must be treated as confirmed
-        # cancellation, not a failure, or a crash-then-retry could never
-        # recover past an already-cancelled order.
+        # already cancelled 404s -- treated as confirmed, not a failure.
         class AlreadyGoneBroker(FakeConditionalOrderBroker):
             def _request(self, method, path, data=None, headers=None):
                 if method == "DELETE" and path.startswith("/api/v1/conditional-orders/"):
@@ -256,14 +241,7 @@ class RearmAfterFillTests(unittest.TestCase):
                 return super()._request(method, path, data=data, headers=headers)
 
         broker = AlreadyGoneBroker(mode="LIVE")
-        cycle = _cycle()
-
-        new_cycle, new_orders = rearm_after_fill(
-            broker, cycle, symbol="TQQQ", updated_qty=80,
-            updated_pool=Decimal("1000"), available_buying_power=Decimal("5000"),
-            available_sell_qty=80, remaining_conditional_order_ids=["already-gone-id"],
-        )
-        self.assertGreater(len(new_orders), 0)
+        cancel_and_confirm(broker, "already-gone-id")  # must not raise
 
 
 if __name__ == "__main__":

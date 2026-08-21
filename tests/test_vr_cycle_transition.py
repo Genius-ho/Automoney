@@ -3,6 +3,7 @@ import unittest
 from datetime import date
 from decimal import Decimal
 
+import vr_execution_policy
 from vr_engine import (
     CycleTransitionBlocked,
     cancel_cycle_orders,
@@ -10,6 +11,17 @@ from vr_engine import (
     transition_cycle,
 )
 from vr_state_store import VRConditionalOrder, VRCycle, VRState
+
+
+def setUpModule():
+    # These tests aren't about the broker-capacity gate itself (see
+    # test_vr_web_service.py's BrokerCapacityGateTests for that) -- a
+    # generous verified cap keeps ladder arming unblocked here.
+    vr_execution_policy.VERIFIED_MAX_LIVE_CONDITIONAL_ORDERS = 1000
+
+
+def tearDownModule():
+    vr_execution_policy.VERIFIED_MAX_LIVE_CONDITIONAL_ORDERS = None
 
 
 class FakeConditionalOrderBroker:

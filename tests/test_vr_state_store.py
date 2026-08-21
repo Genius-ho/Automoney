@@ -64,6 +64,40 @@ class VRStateStoreRoundTripTests(unittest.TestCase):
             self.assertEqual(loaded.current_cycle.pool_start, Decimal("1231.51"))
             self.assertIsInstance(loaded.current_cycle.pool_start, Decimal)
             self.assertIsNone(loaded.current_cycle.E_at_close)
+            self.assertIsNone(loaded.current_cycle.planned_buy_spend)
+
+    def test_planned_buy_spend_round_trips_when_set(self):
+        with tempfile.TemporaryDirectory() as directory:
+            store = VRStateStore(Path(directory) / "vr_state.json")
+            state = store.load("TQQQ")
+            cycle = self._sample_cycle()
+            cycle.planned_buy_spend = Decimal("370.93")
+            state.current_cycle = cycle
+            store.save(state)
+
+            loaded = store.load("TQQQ")
+            self.assertEqual(loaded.current_cycle.planned_buy_spend, Decimal("370.93"))
+            self.assertIsInstance(loaded.current_cycle.planned_buy_spend, Decimal)
+
+    def test_capacity_blocker_round_trips_when_set(self):
+        with tempfile.TemporaryDirectory() as directory:
+            store = VRStateStore(Path(directory) / "vr_state.json")
+            state = store.load("TQQQ")
+            state.status = "BROKER_CONDITIONAL_CAPACITY_EXCEEDED"
+            state.capacity_blocker = {"buy_count": 18, "sell_count": 100, "total_count": 118, "verified_capacity": 50}
+            store.save(state)
+
+            loaded = store.load("TQQQ")
+            self.assertEqual(loaded.capacity_blocker, {"buy_count": 18, "sell_count": 100, "total_count": 118, "verified_capacity": 50})
+
+    def test_capacity_blocker_defaults_to_none(self):
+        with tempfile.TemporaryDirectory() as directory:
+            store = VRStateStore(Path(directory) / "vr_state.json")
+            state = store.load("TQQQ")
+            store.save(state)
+
+            loaded = store.load("TQQQ")
+            self.assertIsNone(loaded.capacity_blocker)
 
     def test_e_at_close_round_trips_when_set(self):
         with tempfile.TemporaryDirectory() as directory:

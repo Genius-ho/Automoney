@@ -11,13 +11,16 @@ from dataclasses import replace
 from datetime import date, datetime, timedelta, timezone
 from decimal import Decimal
 
+import vr_execution_policy
 from mumae_core import money
-from vr_conditional_orders import ConditionalOrderRequest, build_client_order_id, create_conditional_order
 from vr_execution_policy import (
+    BrokerCapacityExceededError,
+    BrokerCapacityUnknownError,
     CancellationNotConfirmedError,
     cancel_and_confirm,
-    plan_rebalance_legs,
-    trigger_prices,
+    plan_buy_ladder,
+    plan_sell_ladder,
+    register_ladder_orders,
 )
 from vr_formula import band, next_v
 from vr_state_store import VRConditionalOrder, VRCycle, VRPendingConfig, VRState
@@ -308,34 +311,49 @@ def arm_cycle_orders(
     current_qty: int,
     available_buying_power: Decimal,
     available_sell_qty: int,
-) -> list[VRConditionalOrder]:
-    """Plan (V 복귀 execution policy) and register a cycle's initial buy/sell
-    conditional orders. Shared by transition_cycle (Cycle N+1) and
-    vr_initialize (Cycle 1) so both go through the identical sizing +
-    registration path."""
-    lower_trigger, upper_trigger = trigger_prices(cycle, current_qty)
-    buy_leg, sell_leg = plan_rebalance_legs(
-        cycle.V, current_qty, lower_trigger, upper_trigger,
-        cycle.pool_current, available_buying_power, available_sell_qty,
+) -> tuple[list[VRConditionalOrder], Decimal]:
+    """Plan (book Ladder execution policy) and register a cycle's full BUY/
+    SELL order table. Shared by transition_cycle (Cycle N+1) and
+    vr_initialize (Cycle 1) so both go through the identical planning +
+    registration path. current_qty is Q0 -- the position size at the moment
+    this cycle's ladder is armed, fixed for the ladder's entire 2-week life
+    (no per-fill recompute; see vr_execution_policy's module docstring).
+
+    Returns (orders, planned_buy_spend) -- the latter is the ladder's
+    projected total BUY cost if every armed rung eventually fills, for the
+    "Projected Pool" display (cycle.pool_current instead tracks Pool from
+    real fills only).
+
+    Refuses to register anything on a LIVE broker if the planned ladder's
+    total leg count exceeds vr_execution_policy.VERIFIED_MAX_LIVE_CONDITIONAL_ORDERS
+    (raises BrokerCapacityUnknownError) -- see that module's docstring."""
+    buy_legs, planned_buy_spend = plan_buy_ladder(
+        cycle.lower_band, current_qty, cycle.pool_current,
+        available_buying_power=available_buying_power,
     )
-    new_orders: list[VRConditionalOrder] = []
-    for sequence, leg in enumerate((leg for leg in (buy_leg, sell_leg) if leg is not None), start=1):
-        client_order_id = build_client_order_id(symbol, cycle.cycle_id, leg.side, sequence)
-        request = ConditionalOrderRequest(
-            symbol=symbol, side=leg.side, trigger_price=leg.trigger_price,
-            order_price=leg.trigger_price, quantity=leg.quantity,
-            expire_date=cycle.end_session, client_order_id=client_order_id,
-        )
-        response = create_conditional_order(broker, request)
-        result = response.get("result", {})
-        new_orders.append(VRConditionalOrder(
-            symbol=symbol, cycle_id=cycle.cycle_id,
-            conditional_order_id=result.get("conditionalOrderId"),
-            client_order_id=client_order_id, side=leg.side,
-            trigger_price=leg.trigger_price, order_price=leg.trigger_price,
-            quantity=leg.quantity, expire_date=cycle.end_session, status="OPEN",
-        ))
-    return new_orders
+    sell_legs = plan_sell_ladder(cycle.upper_band, current_qty, available_sell_qty)
+
+    total_legs = len(buy_legs) + len(sell_legs)
+    verified_max = vr_execution_policy.VERIFIED_MAX_LIVE_CONDITIONAL_ORDERS
+    if total_legs > 0 and getattr(broker, "mode", None) == "LIVE":
+        if verified_max is None:
+            raise BrokerCapacityUnknownError(
+                f"{symbol}: planned ladder has {total_legs} legs ({len(buy_legs)} buy + {len(sell_legs)} sell), "
+                "but Toss's real open-conditional-order capacity has not been empirically verified "
+                "(VERIFIED_MAX_LIVE_CONDITIONAL_ORDERS is None). Refusing to arm on a LIVE broker.",
+                buy_count=len(buy_legs), sell_count=len(sell_legs), verified_capacity=None,
+            )
+        if total_legs > verified_max:
+            raise BrokerCapacityExceededError(
+                f"{symbol}: planned ladder has {total_legs} legs ({len(buy_legs)} buy + {len(sell_legs)} sell), "
+                f"which exceeds the verified capacity of {verified_max}. Refusing to truncate -- "
+                "raise VERIFIED_MAX_LIVE_CONDITIONAL_ORDERS after re-confirming it, or shrink the ladder.",
+                buy_count=len(buy_legs), sell_count=len(sell_legs), verified_capacity=verified_max,
+            )
+
+    new_orders = register_ladder_orders(broker, cycle, symbol, buy_legs, starting_sequence=1)
+    new_orders += register_ladder_orders(broker, cycle, symbol, sell_legs, starting_sequence=1)
+    return new_orders, planned_buy_spend
 
 
 def transition_cycle(
@@ -404,19 +422,21 @@ def transition_cycle(
         lower_band=lower, upper_band=upper, E_at_close=None,
     )
 
-    # Steps 18-21: plan, validate, and register the new cycle's initial
-    # orders (V 복귀 execution policy -- see vr_execution_policy.py; not a
-    # book formula). Shared with vr_initialize's first cycle via
+    # Steps 18-21: plan, validate, and register the new cycle's full BUY/
+    # SELL ladder (book Ladder execution policy -- see
+    # vr_execution_policy.py). Shared with vr_initialize's first cycle via
     # arm_cycle_orders so the two never drift apart.
-    new_orders = arm_cycle_orders(
+    new_orders, planned_buy_spend = arm_cycle_orders(
         broker, new_cycle, symbol, final_qty, available_buying_power, available_sell_qty,
     )
+    new_cycle = replace(new_cycle, planned_buy_spend=planned_buy_spend)
 
     # Step 22: Cycle N+1 ACTIVE.
     new_state = replace(
         state,
         status="ACTIVE",
         blocked_reason=None,
+        capacity_blocker=None,
         current_cycle=new_cycle,
         pending_config=VRPendingConfig(),
         conditional_orders=new_orders,

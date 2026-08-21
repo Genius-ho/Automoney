@@ -209,6 +209,73 @@ test("VR selected with an active cycle: cycle/V/G/Band/Pool and conditional orde
   assert.equal(sandbox.document.getElementById("vrPlanOrdersTable").hidden, false);
 });
 
+test("renderVrRunningCard shows Projected Pool separately from actual Pool", () => {
+  const { sandbox } = loadApp();
+  const data = {
+    status: "ACTIVE", blocked_reason: null,
+    current_cycle: {
+      cycle_id: "TQQQ-c1", start_session: "2026-08-21", end_session: "2026-09-04",
+      V: "8956.08", G: "10", band_pct: "15", pool_start: "1000", pool_current: "1000",
+      pool_to_v_pct: "11.17", planned_buy_spend: "370.93", projected_pool: "629.07",
+      lower_band: "7612.67", upper_band: "10299.49",
+    },
+  };
+  sandbox.renderVrRunningCard("TQQQ", data, null);
+  assert.equal(sandbox.document.getElementById("vrPool").textContent, "$1,000.00");
+  assert.equal(sandbox.document.getElementById("vrProjectedPool").textContent, "$629.07");
+});
+
+test("renderVrRunningCard shows a dash for Projected Pool when not yet armed (older cycle)", () => {
+  const { sandbox } = loadApp();
+  const data = {
+    status: "ACTIVE", blocked_reason: null,
+    current_cycle: {
+      cycle_id: "TQQQ-c1", start_session: "2026-08-21", end_session: "2026-09-04",
+      V: "8956.08", G: "10", band_pct: "15", pool_start: "1000", pool_current: "1000",
+      pool_to_v_pct: "11.17", planned_buy_spend: null, projected_pool: null,
+      lower_band: "7612.67", upper_band: "10299.49",
+    },
+  };
+  sandbox.renderVrRunningCard("TQQQ", data, null);
+  assert.equal(sandbox.document.getElementById("vrProjectedPool").textContent, "-");
+});
+
+test("renderVrRunningCard shows the capacity blocker box with logical counts when present", () => {
+  const { sandbox } = loadApp();
+  const data = {
+    status: "BROKER_CONDITIONAL_CAPACITY_EXCEEDED",
+    blocked_reason: "TQQQ: planned ladder has 118 legs (18 buy + 100 sell), which exceeds the verified capacity of 50.",
+    capacity_blocker: { buy_count: 18, sell_count: 100, total_count: 118, verified_capacity: 50 },
+    current_cycle: null,
+  };
+  sandbox.renderVrRunningCard("TQQQ", data, null);
+  assert.equal(sandbox.document.getElementById("vrCapacityBlocker").hidden, false);
+  assert.equal(sandbox.document.getElementById("vrCapacityBuyCount").textContent, 18);
+  assert.equal(sandbox.document.getElementById("vrCapacitySellCount").textContent, 100);
+  assert.equal(sandbox.document.getElementById("vrCapacityTotalCount").textContent, 118);
+  assert.equal(sandbox.document.getElementById("vrCapacityVerified").textContent, 50);
+  assert.equal(sandbox.document.getElementById("vrStatusBadge").className, "status-badge stopped");
+});
+
+test("renderVrRunningCard shows 확인되지 않음 for verified capacity when it is null (UNKNOWN case)", () => {
+  const { sandbox } = loadApp();
+  const data = {
+    status: "BROKER_CONDITIONAL_CAPACITY_UNKNOWN",
+    blocked_reason: "capacity never verified",
+    capacity_blocker: { buy_count: 4, sell_count: 66, total_count: 70, verified_capacity: null },
+    current_cycle: null,
+  };
+  sandbox.renderVrRunningCard("TQQQ", data, null);
+  assert.equal(sandbox.document.getElementById("vrCapacityVerified").textContent, "확인되지 않음");
+});
+
+test("renderVrRunningCard hides the capacity blocker box when there is none", () => {
+  const { sandbox } = loadApp();
+  const data = { status: "ACTIVE", blocked_reason: null, capacity_blocker: null, current_cycle: null };
+  sandbox.renderVrRunningCard("TQQQ", data, null);
+  assert.equal(sandbox.document.getElementById("vrCapacityBlocker").hidden, true);
+});
+
 test("VR pending config renders G/Band/Pool text, or 없음 when unset", () => {
   const { sandbox } = loadApp();
   const cycle = { cycle_id: "c1", start_session: "s", end_session: "e", V: "1", G: "10", band_pct: "15", pool_current: "1", lower_band: "1", upper_band: "1" };

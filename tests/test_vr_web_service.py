@@ -1,14 +1,28 @@
 import json
 import tempfile
 import unittest
+import unittest.mock
 from dataclasses import replace
 from datetime import date, datetime, timedelta, timezone
 from decimal import Decimal
 from pathlib import Path
 
+import vr_execution_policy
 from runtime_store import get_strategy_type, set_strategy_type
 from vr_engine import CycleTransitionBlocked
+from vr_execution_policy import BrokerCapacityExceededError, BrokerCapacityUnknownError
 from web_gui.trading_service import TradingWebService
+
+
+def setUpModule():
+    # These tests aren't about the broker-capacity gate itself (see
+    # BrokerCapacityGateTests for that) -- a generous verified cap keeps
+    # ladder arming unblocked everywhere else in this module.
+    vr_execution_policy.VERIFIED_MAX_LIVE_CONDITIONAL_ORDERS = 1000
+
+
+def tearDownModule():
+    vr_execution_policy.VERIFIED_MAX_LIVE_CONDITIONAL_ORDERS = None
 
 
 def _session(date_str: str) -> dict:
@@ -304,7 +318,13 @@ class ExactlyOnceFillTests(unittest.TestCase):
 
 
 class RearmTests(unittest.TestCase):
-    def test_fill_triggers_rearm_and_cancels_the_stale_leg(self):
+    """Book Ladder execution policy: the cycle's full BUY/SELL order table
+    is armed once at cycle start and stays fixed for the whole 2-week
+    cycle. A fill updates Pool but never cancels or recomputes any other
+    rung -- there is no rearm (replaces the old V-restore policy's
+    cancel-sibling-and-recompute behavior)."""
+
+    def test_fill_never_cancels_or_recomputes_sibling_rungs(self):
         broker = IntegratedFakeBroker(mode="LIVE")
         service, tempdir = _make_service(broker)
         try:
@@ -314,18 +334,25 @@ class RearmTests(unittest.TestCase):
             state = service.vr_store.load("TQQQ")
             buy_order = next(o for o in state.conditional_orders if o.side == "buy")
             other_orders = [o for o in state.conditional_orders if o.conditional_order_id != buy_order.conditional_order_id]
+            open_ids_before = {o.conditional_order_id for o in other_orders}
 
-            broker.holdings["TQQQ"] = ("105", "105")  # the buy fill changed the position
-            broker.trigger_and_fill(buy_order.conditional_order_id, quantity=5)
+            broker.holdings["TQQQ"] = ("101", "105")  # the buy fill changed the position
+            broker.trigger_and_fill(buy_order.conditional_order_id, quantity=1)
             service.vr_sync_orders("TQQQ")
 
             new_state = service.vr_store.load("TQQQ")
-            # The stale sibling leg(s) from before the fill are cancelled...
+            # Every sibling rung is untouched: still OPEN, same trigger
+            # price/quantity/conditionalOrderId as before the fill -- no
+            # cancel-and-recompute happened.
             for stale in other_orders:
                 match = next(o for o in new_state.conditional_orders if o.client_order_id == stale.client_order_id)
-                self.assertEqual(match.status, "CANCELLED")
-            # ...and fresh OPEN legs exist, recomputed from the new qty/pool.
-            self.assertTrue(any(o.status == "OPEN" for o in new_state.conditional_orders))
+                self.assertEqual(match.status, "OPEN")
+                self.assertEqual(match.conditional_order_id, stale.conditional_order_id)
+                self.assertEqual(match.trigger_price, stale.trigger_price)
+            # No new orders were created at the broker as a side effect of
+            # the fill (the ladder was fully armed at cycle start).
+            still_open_ids = {o.conditional_order_id for o in new_state.conditional_orders if o.status == "OPEN"}
+            self.assertEqual(still_open_ids, open_ids_before)
         finally:
             tempdir.cleanup()
 
@@ -622,7 +649,7 @@ class CrashRecoveryMatrixTests(unittest.TestCase):
         service, tempdir = self._setup_due_cycle(broker)
         try:
             state = service.vr_store.load("TQQQ")
-            self.assertEqual(len(state.conditional_orders), 2, "fixture expects both legs armed")
+            self.assertGreater(len(state.conditional_orders), 1, "fixture expects a multi-rung ladder armed")
             now = datetime(2026, 8, 7, 20, 1, tzinfo=timezone.utc)
 
             broker.crash_after_cancel_count = 1  # first DELETE succeeds, second crashes
@@ -1009,6 +1036,125 @@ class StrategySwitchSafetyTests(unittest.TestCase):
 
             self.assertNotIn("TQQQ", service.runtime.active_symbols)
             self.assertEqual(get_strategy_type(service.runtime, "TQQQ"), "VR_SKILL")
+        finally:
+            tempdir.cleanup()
+
+
+class BrokerCapacityGateTests(unittest.TestCase):
+    """vr_execution_policy.VERIFIED_MAX_LIVE_CONDITIONAL_ORDERS gates arming
+    a ladder on a LIVE broker -- Toss's real open-conditional-order capacity
+    is not documented, so None (unverified) must fail closed rather than
+    guess or silently truncate."""
+
+    def test_vr_initialize_raises_and_persists_a_capacity_unknown_blocked_state(self):
+        with unittest.mock.patch.object(vr_execution_policy, "VERIFIED_MAX_LIVE_CONDITIONAL_ORDERS", None):
+            broker = IntegratedFakeBroker(mode="LIVE")
+            service, tempdir = _make_service(broker)
+            try:
+                broker.holdings["TQQQ"] = ("100", "105")
+                broker.prices["TQQQ"] = "110"
+                with self.assertRaises(BrokerCapacityUnknownError):
+                    service.vr_initialize("TQQQ", Decimal("2000"), Decimal("10"), Decimal("15"))
+                state = service.vr_store.load("TQQQ")
+                # V/band are kept visible (not discarded) even though the
+                # ladder itself never armed.
+                self.assertEqual(state.status, "BROKER_CONDITIONAL_CAPACITY_UNKNOWN")
+                self.assertIsNotNone(state.current_cycle)
+                self.assertIsNotNone(state.blocked_reason)
+                self.assertEqual(state.conditional_orders, [])
+                self.assertEqual(state.capacity_blocker["verified_capacity"], None)
+                self.assertEqual(
+                    state.capacity_blocker["total_count"],
+                    state.capacity_blocker["buy_count"] + state.capacity_blocker["sell_count"],
+                )
+                self.assertGreater(state.capacity_blocker["total_count"], 0)
+            finally:
+                tempdir.cleanup()
+
+    def test_vr_initialize_raises_a_capacity_exceeded_error_with_a_small_verified_cap(self):
+        with unittest.mock.patch.object(vr_execution_policy, "VERIFIED_MAX_LIVE_CONDITIONAL_ORDERS", 2):
+            broker = IntegratedFakeBroker(mode="LIVE")
+            service, tempdir = _make_service(broker)
+            try:
+                broker.holdings["TQQQ"] = ("100", "105")  # ladder needs far more than 2 legs
+                broker.prices["TQQQ"] = "110"
+                with self.assertRaises(BrokerCapacityExceededError):
+                    service.vr_initialize("TQQQ", Decimal("2000"), Decimal("10"), Decimal("15"))
+                state = service.vr_store.load("TQQQ")
+                self.assertEqual(state.status, "BROKER_CONDITIONAL_CAPACITY_EXCEEDED")
+                self.assertEqual(state.capacity_blocker["verified_capacity"], 2)
+                self.assertGreater(state.capacity_blocker["total_count"], 2)
+            finally:
+                tempdir.cleanup()
+
+    def test_dry_run_ignores_the_capacity_gate(self):
+        # DRY_RUN never reaches the broker for create/cancel, so the full
+        # logical ladder can still be planned and tested even with capacity
+        # unverified -- only a LIVE broker is gated.
+        with unittest.mock.patch.object(vr_execution_policy, "VERIFIED_MAX_LIVE_CONDITIONAL_ORDERS", None):
+            broker = IntegratedFakeBroker(mode="DRY_RUN")
+            service, tempdir = _make_service(broker)
+            try:
+                broker.holdings["TQQQ"] = ("100", "105")
+                broker.prices["TQQQ"] = "110"
+                result = service.vr_initialize("TQQQ", Decimal("2000"), Decimal("10"), Decimal("15"))
+                self.assertEqual(result["status"], "ACTIVE")
+                state = service.vr_store.load("TQQQ")
+                self.assertGreater(len(state.conditional_orders), 2)
+            finally:
+                tempdir.cleanup()
+
+    def test_cycle_transition_blocks_with_a_dedicated_status_when_capacity_unverified(self):
+        broker = IntegratedFakeBroker(mode="LIVE")
+        service, tempdir = _make_service(broker)
+        try:
+            broker.holdings["TQQQ"] = ("100", "105")
+            broker.prices["TQQQ"] = "110"
+            broker.candles["TQQQ"] = [{"date": "2026-08-07", "closePrice": "112"}]
+            with unittest.mock.patch.object(vr_execution_policy, "VERIFIED_MAX_LIVE_CONDITIONAL_ORDERS", 1000):
+                service.vr_initialize("TQQQ", Decimal("2000"), Decimal("10"), Decimal("15"))
+            state = service.vr_store.load("TQQQ")
+            state.current_cycle.end_session = "2026-08-07"
+            state.anchor_friday = "2026-08-07"
+            service.vr_store.save(state)
+
+            with unittest.mock.patch.object(vr_execution_policy, "VERIFIED_MAX_LIVE_CONDITIONAL_ORDERS", None):
+                now = datetime(2026, 8, 7, 20, 1, tzinfo=timezone.utc)
+                service.vr_auto_tick_for_symbol("TQQQ", now=now)
+
+            final_state = service.vr_store.load("TQQQ")
+            self.assertEqual(final_state.status, "BROKER_CONDITIONAL_CAPACITY_UNKNOWN")
+            self.assertIsNotNone(final_state.blocked_reason)
+            self.assertEqual(final_state.capacity_blocker["verified_capacity"], None)
+            self.assertGreater(final_state.capacity_blocker["total_count"], 0)
+            # The old cycle's orders were already cancelled before arming
+            # the new ladder was attempted -- this symbol now has none.
+            self.assertEqual([o for o in final_state.conditional_orders if o.status == "OPEN"], [])
+        finally:
+            tempdir.cleanup()
+
+    def test_cycle_transition_blocks_as_exceeded_when_capacity_is_verified_but_too_small(self):
+        broker = IntegratedFakeBroker(mode="LIVE")
+        service, tempdir = _make_service(broker)
+        try:
+            broker.holdings["TQQQ"] = ("100", "105")
+            broker.prices["TQQQ"] = "110"
+            broker.candles["TQQQ"] = [{"date": "2026-08-07", "closePrice": "112"}]
+            with unittest.mock.patch.object(vr_execution_policy, "VERIFIED_MAX_LIVE_CONDITIONAL_ORDERS", 1000):
+                service.vr_initialize("TQQQ", Decimal("2000"), Decimal("10"), Decimal("15"))
+            state = service.vr_store.load("TQQQ")
+            state.current_cycle.end_session = "2026-08-07"
+            state.anchor_friday = "2026-08-07"
+            service.vr_store.save(state)
+
+            with unittest.mock.patch.object(vr_execution_policy, "VERIFIED_MAX_LIVE_CONDITIONAL_ORDERS", 2):
+                now = datetime(2026, 8, 7, 20, 1, tzinfo=timezone.utc)
+                service.vr_auto_tick_for_symbol("TQQQ", now=now)
+
+            final_state = service.vr_store.load("TQQQ")
+            self.assertEqual(final_state.status, "BROKER_CONDITIONAL_CAPACITY_EXCEEDED")
+            self.assertEqual(final_state.capacity_blocker["verified_capacity"], 2)
+            self.assertGreater(final_state.capacity_blocker["total_count"], 2)
         finally:
             tempdir.cleanup()
 

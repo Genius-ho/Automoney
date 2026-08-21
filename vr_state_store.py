@@ -41,6 +41,13 @@ class VRCycle:
     lower_band: Decimal
     upper_band: Decimal
     E_at_close: Decimal | None = None
+    # Projected total BUY-ladder spend if every armed rung eventually fills
+    # (vr_execution_policy.select_buy_ladder_length's chosen cumulative
+    # spend), fixed at arm time. Distinct from pool_current, which only
+    # moves on real Toss fills -- the "Projected Pool" the book's order
+    # table shows is pool_start - planned_buy_spend. None for cycles armed
+    # before this field existed.
+    planned_buy_spend: Decimal | None = None
 
 
 @dataclass
@@ -89,6 +96,12 @@ class VRState:
     # one cycle never drifts later cycles' schedules.
     anchor_friday: str | None = None
     cycle_number: int = 0
+    # Set only when status is BROKER_CONDITIONAL_CAPACITY_UNKNOWN/_EXCEEDED,
+    # so the UI can show the planned ladder's logical BUY/SELL/total counts
+    # alongside the verified capacity (None for the UNKNOWN case) without
+    # parsing blocked_reason's free text. Cleared the moment a ladder is
+    # next successfully armed.
+    capacity_blocker: dict[str, Any] | None = None
 
 
 _CYCLE_DECIMAL_FIELDS = ("V", "G", "band_pct", "pool_start", "pool_current", "lower_band", "upper_band")
@@ -129,6 +142,7 @@ class VRStateStore:
             for key in _CYCLE_DECIMAL_FIELDS:
                 cycle[key] = str(cycle[key])
             cycle["E_at_close"] = None if cycle["E_at_close"] is None else str(cycle["E_at_close"])
+            cycle["planned_buy_spend"] = None if cycle["planned_buy_spend"] is None else str(cycle["planned_buy_spend"])
         pending = asdict(state.pending_config)
         for key in ("G", "band_pct", "pool_adjustment"):
             pending[key] = None if pending[key] is None else str(pending[key])
@@ -151,6 +165,7 @@ class VRStateStore:
             "applied_fill_order_ids": state.applied_fill_order_ids,
             "anchor_friday": state.anchor_friday,
             "cycle_number": state.cycle_number,
+            "capacity_blocker": state.capacity_blocker,
             "updated_at": datetime.now(timezone.utc).isoformat(),
         }
 
@@ -165,6 +180,7 @@ class VRStateStore:
             for key in _CYCLE_DECIMAL_FIELDS:
                 cycle_raw[key] = _dec(cycle_raw.get(key))
             cycle_raw["E_at_close"] = _opt_dec(cycle_raw.get("E_at_close"))
+            cycle_raw["planned_buy_spend"] = _opt_dec(cycle_raw.get("planned_buy_spend"))
             cycle = VRCycle(**cycle_raw)
 
         pending_raw = dict(raw.get("pending_config") or {})
@@ -194,4 +210,5 @@ class VRStateStore:
             applied_fill_order_ids=list(raw.get("applied_fill_order_ids") or []),
             anchor_friday=raw.get("anchor_friday"),
             cycle_number=int(raw.get("cycle_number") or 0),
+            capacity_blocker=raw.get("capacity_blocker"),
         )

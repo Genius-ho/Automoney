@@ -77,13 +77,20 @@
     <article class="card vr-panel-card" id="vrRunningCard" hidden>
       <div class="section-title"><div><p class="eyebrow">VALUE REBALANCING</p><h2 id="vrRunningTitle">TQQQ · Value Rebalancing</h2></div><div class="section-title-actions"><span id="vrStatusBadge" class="status-badge">-</span></div></div>
       <p id="vrBlockedReason" class="warning" role="status" hidden></p>
+      <dl id="vrCapacityBlocker" class="vr-metrics vr-capacity-blocker" hidden>
+        <div><dt>Logical BUY count</dt><dd id="vrCapacityBuyCount">-</dd></div>
+        <div><dt>Logical SELL count</dt><dd id="vrCapacitySellCount">-</dd></div>
+        <div><dt>Total logical count</dt><dd id="vrCapacityTotalCount">-</dd></div>
+        <div><dt>Verified broker capacity</dt><dd id="vrCapacityVerified">-</dd></div>
+      </dl>
       <dl class="vr-metrics">
         <div><dt>Cycle</dt><dd id="vrCycleId">-</dd></div>
         <div><dt>기간</dt><dd id="vrCyclePeriod">-</dd></div>
         <div><dt>V</dt><dd id="vrV">-</dd></div>
         <div><dt>E (직전 사이클 종료)</dt><dd id="vrE">-</dd></div>
-        <div><dt>Pool</dt><dd id="vrPool">-</dd></div>
+        <div><dt>Pool (실제)</dt><dd id="vrPool">-</dd></div>
         <div><dt>Pool / V</dt><dd id="vrPoolToV">-</dd></div>
+        <div><dt>Projected Pool (BUY ladder 전량 체결 가정)</dt><dd id="vrProjectedPool">-</dd></div>
         <div><dt>G</dt><dd id="vrG">-</dd></div>
         <div><dt>Band</dt><dd id="vrBand">-</dd></div>
         <div><dt>Lower Value</dt><dd id="vrLowerBand">-</dd></div>
