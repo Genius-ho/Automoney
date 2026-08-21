@@ -346,7 +346,10 @@ class VRWebServiceMixin:
 
     # --- initialize / start / stop / config -------------------------------
 
-    def vr_initialize(self, symbol: str, initial_pool: Decimal, G: Decimal, band_pct: Decimal) -> dict[str, Any]:
+    def vr_initialize(
+        self, symbol: str, initial_pool: Decimal, G: Decimal, band_pct: Decimal,
+        now: datetime | None = None,
+    ) -> dict[str, Any]:
         symbol = symbol.upper()
         existing = self.vr_store.load(symbol)
         if existing.status != "UNINITIALIZED":
@@ -354,8 +357,15 @@ class VRWebServiceMixin:
         qty, price, _cash = self._vr_fetch_account(symbol)
         if qty <= 0 or price <= 0:
             raise ValueError(f"{symbol}: 초기화하려면 보유수량과 현재가가 모두 0보다 커야 합니다.")
-        today = datetime.now(timezone.utc).date()
+        today = (now or datetime.now(timezone.utc)).date()
         anchor = anchor_friday_on_or_after(today)
+        if anchor == today:
+            # A first cycle can never be zero days long: if today is itself
+            # the anchor Friday, anchor_friday_on_or_after(today) returns
+            # today, which would make cycle 1 end the instant it starts.
+            # Push out to the following Friday instead; every later cycle
+            # still lands on this new anchor + 14/28/... days as usual.
+            anchor += timedelta(days=7)
         end_session, _session = find_last_trading_day_on_or_before(self.broker(), scheduled_cycle_end_friday(anchor, 1))
         state = initialize_cycle(
             symbol=symbol, position_qty=qty, current_price=price,

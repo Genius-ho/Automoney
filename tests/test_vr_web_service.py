@@ -191,6 +191,29 @@ class VRInitializeAndArmTests(unittest.TestCase):
         finally:
             tempdir.cleanup()
 
+    def test_initializing_on_a_friday_never_produces_a_zero_day_first_cycle(self):
+        # Regression: anchor_friday_on_or_after(today) returns today when
+        # today is itself a Friday, which used to make cycle 1's
+        # end_session equal start_session -- a same-day transition. Found
+        # live on 2026-08-21 (a Friday) when TQQQ was switched to VR_SKILL.
+        broker = IntegratedFakeBroker()
+        service, tempdir = _make_service(broker)
+        try:
+            broker.holdings["TQQQ"] = ("100", "105")
+            broker.prices["TQQQ"] = "110"
+            friday = datetime(2026, 8, 21, 3, 0, tzinfo=timezone.utc)
+            self.assertEqual(friday.date().weekday(), 4)  # sanity: is a Friday
+            service.vr_initialize("TQQQ", Decimal("1000"), Decimal("10"), Decimal("15"), now=friday)
+            state = service.vr_store.load("TQQQ")
+            self.assertEqual(state.anchor_friday, "2026-08-28")
+            self.assertNotEqual(state.current_cycle.end_session, state.current_cycle.start_session)
+            self.assertEqual(state.current_cycle.start_session, "2026-08-21")
+            self.assertEqual(state.current_cycle.end_session, "2026-08-28")
+            for order in state.conditional_orders:
+                self.assertEqual(order.expire_date, "2026-08-28")
+        finally:
+            tempdir.cleanup()
+
 
 class StrategyIsolationTests(unittest.TestCase):
     def test_vr_tick_never_touches_mumae_state_and_vice_versa(self):
