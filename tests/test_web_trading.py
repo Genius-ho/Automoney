@@ -625,6 +625,36 @@ class AutoTickTests(unittest.TestCase):
             self.assertEqual(broker.submitted, [])
             self.assertIn("TQQQ", service.orders_synced)
 
+    def test_auto_tick_never_submits_mumae_orders_for_a_vr_skill_symbol_left_in_active_symbols(self):
+        # Regression: found live on 2026-08-21 -- switching a symbol's
+        # strategy_type to VR_SKILL does not by itself clear it from
+        # active_symbols (MUMAE's separate "running" flag). Before this fix,
+        # auto_tick's submission loop only checked active_symbols, so a
+        # same-day MUMAE plan built (but not yet submitted) before the
+        # switch still went out on a later tick, even though VR was now
+        # supposed to exclusively manage the symbol.
+        from runtime_store import set_strategy_type
+
+        with tempfile.TemporaryDirectory() as temp:
+            broker = AutoTickBroker()
+            service = TradingWebService(Path(temp), broker_factory=lambda: broker)
+            service.plan({
+                "symbol": "TQQQ", "current_price": "84.5", "previous_close": "82",
+                "cash_usd": "5000", "position_qty": 0, "avg_cost": "0",
+                "t_value": "0", "base_buy_qty": 2, "mode": "GENERAL",
+            })
+            service.sync_orders("TQQQ")
+            self.assertTrue(service.plan_cache["TQQQ"])  # sanity: a plan with unsent orders exists
+            service.runtime.active_symbols.append("TQQQ")
+            service.runtime.known_symbols.append("TQQQ")
+            set_strategy_type(service.runtime, "TQQQ", "VR_SKILL")
+            service.runtime_store.save(service.runtime)
+            broker.submitted.clear()
+
+            service.auto_tick()
+
+            self.assertEqual(broker.submitted, [])
+
     def test_auto_tick_continues_other_active_symbols_when_one_is_stopped(self):
         with tempfile.TemporaryDirectory() as temp:
             broker = AutoTickBroker()

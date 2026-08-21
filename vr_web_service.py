@@ -552,6 +552,14 @@ class VRWebServiceMixin:
         ok, reason = self.can_switch_strategy(symbol)
         if not ok:
             raise ValueError(reason)
+        if new_strategy_type == "VR_SKILL" and symbol in self.runtime.active_symbols:
+            # MUMAE's active_symbols ("running") flag is a separate piece of
+            # state from strategy_type and switching away from MUMAE does
+            # not clear it on its own -- leaving it set would let a stale
+            # plan_cache entry from before the switch still be submitted by
+            # auto_tick's MUMAE order loop (guarded there too, but this
+            # keeps the ETF-status "running" flag honest as well).
+            self.stop_auto(symbol)
         set_strategy_type(self.runtime, symbol, new_strategy_type)
         self.runtime_store.save(self.runtime)
         return {"symbol": symbol, "strategy_type": new_strategy_type}

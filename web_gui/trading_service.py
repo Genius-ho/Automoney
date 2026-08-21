@@ -1086,6 +1086,14 @@ class TradingWebService(VRWebServiceMixin, WebService):
         cls_sell_ready = cls_sell_start is not None and cls_sell_start <= now
         buy_ready = regular_start + timedelta(minutes=self.runtime.auto_order_delay_minutes) <= now
         for symbol in tuple(self.runtime.active_symbols):
+            if get_strategy_type(self.runtime, symbol) == STRATEGY_VR_SKILL:
+                # A symbol can stay in active_symbols (MUMAE's own "running"
+                # flag) after being switched to VR_SKILL -- switching does
+                # not clear it. Without this guard, a same-day plan_cache
+                # entry built by MUMAE's refresh_account() before the switch
+                # would still be submitted here even though the sync loop
+                # above has already stopped refreshing it.
+                continue
             planned = self.plan_cache.get(symbol, [])
             day_sell_ids = [
                 item.client_order_id

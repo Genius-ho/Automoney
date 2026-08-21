@@ -992,6 +992,26 @@ class StrategySwitchSafetyTests(unittest.TestCase):
         finally:
             tempdir.cleanup()
 
+    def test_switching_to_vr_skill_stops_mumaes_active_symbols_flag(self):
+        # Regression: found live on 2026-08-21 -- MUMAE's active_symbols
+        # ("running") flag is separate state from strategy_type and used to
+        # survive a switch to VR_SKILL untouched, letting auto_tick's MUMAE
+        # order-submission loop keep firing for the symbol.
+        broker = IntegratedFakeBroker()
+        service, tempdir = _make_service(broker)
+        try:
+            service.runtime.active_symbols.append("TQQQ")
+            service.runtime.known_symbols.append("TQQQ")
+            service.runtime_store.save(service.runtime)
+            self.assertIn("TQQQ", service.runtime.active_symbols)
+
+            service.vr_set_strategy_type("TQQQ", "VR_SKILL")
+
+            self.assertNotIn("TQQQ", service.runtime.active_symbols)
+            self.assertEqual(get_strategy_type(service.runtime, "TQQQ"), "VR_SKILL")
+        finally:
+            tempdir.cleanup()
+
 
 class ZeroNetworkCallsTests(unittest.TestCase):
     def test_dry_run_never_calls_real_conditional_order_endpoints(self):
