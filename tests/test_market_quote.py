@@ -55,7 +55,7 @@ class ResolveDayQuoteTests(unittest.TestCase):
 
         self.assertEqual(resolved.previous_close, Decimal("100"))
 
-    def test_returns_no_change_when_quote_timestamp_is_missing(self):
+    def test_returns_no_change_when_quote_timestamp_is_missing_and_no_earlier_candle_exists(self):
         resolved = resolve_day_quote(
             {"lastPrice": "105"},
             [{"timestamp": "2026-08-11T13:00:00+09:00", "closePrice": "100"}],
@@ -64,6 +64,21 @@ class ResolveDayQuoteTests(unittest.TestCase):
         self.assertEqual(resolved.current_price, Decimal("105"))
         self.assertIsNone(resolved.previous_close)
         self.assertIsNone(resolved.day_change_pct)
+
+    def test_falls_back_to_newest_candle_date_when_quote_timestamp_is_null(self):
+        # Toss's market-indicators price endpoint (KOSPI/KOSDAQ) always
+        # returns timestamp: null, unlike the regular stock quote endpoint.
+        resolved = resolve_day_quote(
+            {"lastPrice": "6912.95", "timestamp": None},
+            [
+                {"timestamp": "2026-08-21T00:00:00.000+09:00", "closePrice": "6912.95"},
+                {"timestamp": "2026-08-20T00:00:00.000+09:00", "closePrice": "6852.58"},
+                {"timestamp": "2026-08-19T00:00:00.000+09:00", "closePrice": "6471.17"},
+            ],
+        )
+
+        self.assertEqual(resolved.previous_close, Decimal("6852.58"))
+        self.assertAlmostEqual(float(resolved.day_change_pct), 0.881, places=2)
 
     def test_returns_no_change_for_invalid_or_nonpositive_values(self):
         invalid_price = resolve_day_quote(

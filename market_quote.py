@@ -48,23 +48,37 @@ def _candle_session_date(value: Any):
 
 
 def resolve_day_quote(quote: dict[str, Any], candles: Iterable[dict[str, Any]]) -> DayQuote:
-    """Select the newest completed candle relative to the quote's US date."""
+    """Select the newest completed candle relative to the quote's session date.
+
+    Prefers the quote's own timestamp for the session date (US stock quotes
+    always carry one). Toss's market-indicators price endpoint (KOSPI/KOSDAQ)
+    returns timestamp: null, so when that's missing, the newest candle's own
+    date is used as the session date instead -- still never trusts candle
+    list *position/order*, only actual parsed dates, matching the 0c1cb8a
+    fix this is built on."""
     current = None
     for name in ("lastPrice", "price", "currentPrice"):
         current = _positive_decimal(quote.get(name))
         if current is not None:
             break
     current = current or Decimal("0")
-    session_date = _market_date(quote.get("timestamp"))
-    if current <= 0 or session_date is None:
+    if current <= 0:
         return DayQuote(current, None, None)
 
-    completed = []
+    dated_candles = []
     for candle in candles:
         candle_date = _candle_session_date(candle.get("timestamp") or candle.get("date"))
         close = _positive_decimal(candle.get("closePrice"))
-        if candle_date is not None and candle_date < session_date and close is not None:
-            completed.append((candle_date, close))
+        if candle_date is not None and close is not None:
+            dated_candles.append((candle_date, close))
+
+    session_date = _market_date(quote.get("timestamp"))
+    if session_date is None and dated_candles:
+        session_date = max(candle_date for candle_date, _ in dated_candles)
+    if session_date is None:
+        return DayQuote(current, None, None)
+
+    completed = [(candle_date, close) for candle_date, close in dated_candles if candle_date < session_date]
     if not completed:
         return DayQuote(current, None, None)
     _, previous = max(completed, key=lambda item: item[0])
