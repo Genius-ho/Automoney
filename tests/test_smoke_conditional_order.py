@@ -161,6 +161,27 @@ class CreateGateTests(unittest.TestCase):
         self.assertIn("conditionalOrderId", response["result"])
         self.assertEqual(len(broker.conditional_orders), 1)
 
+    def test_still_blocked_when_open_market_without_the_explicit_override(self):
+        broker = FakeSmokeBroker()
+        with self.assertRaises(RuntimeError):
+            create_smoke_order(broker, self._request(), market_session="REGULAR", approved=True)
+        self.assertEqual(broker.conditional_orders, {})
+
+    def test_succeeds_when_open_market_with_explicit_override(self):
+        broker = FakeSmokeBroker()
+        response = create_smoke_order(
+            broker, self._request(), market_session="REGULAR", approved=True, allow_open_market=True,
+        )
+        self.assertIn("conditionalOrderId", response["result"])
+
+    def test_open_market_override_never_bypasses_the_approval_check(self):
+        broker = FakeSmokeBroker()
+        with self.assertRaises(RuntimeError):
+            create_smoke_order(
+                broker, self._request(), market_session="REGULAR", approved=False, allow_open_market=True,
+            )
+        self.assertEqual(broker.conditional_orders, {})
+
 
 class PostCreateEvaluationTests(unittest.TestCase):
     def _detail(self, status="WATCHING", triggered_order_id=None):

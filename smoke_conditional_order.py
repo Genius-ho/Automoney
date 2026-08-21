@@ -8,13 +8,18 @@ cycle/execution-policy engine, and does not touch mumae.service.
 
 Safety design (see the Phase 13/14 report for the full research behind
 each choice):
-  - Only ever runs when the US market session is CLOSED (no pre/regular/
-    after-market window active), verified against the live market calendar
-    immediately before CREATE -- never assumed.
-  - BUY 1 share, triggerPrice = 70% of current price (a ~30% adverse move
-    within the few minutes this order exists is not realistically
-    achievable even for a 3x leveraged ETF), orderType=LIMIT (never
-    MARKET, which has no price ceiling once triggered).
+  - By default only runs when the US market session is CLOSED, verified
+    against the live market calendar immediately before CREATE -- never
+    assumed. --allow-open-market explicitly overrides this one gate (a
+    deliberate, one-off operator decision -- never the default), for
+    example when waiting for a CLOSED window is impractical; every other
+    safeguard below is unchanged and still fully enforced.
+  - BUY 1 share, triggerPrice = round(70% of current price, 2), orderType=
+    LIMIT (never MARKET, which has no price ceiling once triggered). Price
+    is fetched twice: once to compute triggerPrice/build the printed info
+    block, and again immediately before the actual CREATE call (the human
+    approval step can take any amount of time) -- CREATE is refused if the
+    freshly re-fetched price is not still strictly above triggerPrice.
   - The -30% price margin is NOT treated as sufficient safety by itself,
     because the exact comparator direction for a SINGLE STOP condition is
     not explicitly documented (only inferred from OCO/OTO examples) -- the
@@ -30,6 +35,7 @@ each choice):
 Run (LIVE, real account -- only after the plan and this script are both
 explicitly approved):
     python smoke_conditional_order.py --symbol TQQQ --env-file deploy/mumae.env
+    python smoke_conditional_order.py --symbol TQQQ --env-file deploy/mumae.env --allow-open-market
 
 This must only ever be run from the automoney-dev checkout, as its own
 short-lived process -- never via mumae.service, never with --restart/
@@ -151,9 +157,19 @@ def trigger_already_satisfied(side: str, trigger_price: Decimal, current_price: 
     return current_price >= trigger_price
 
 
-def create_smoke_order(broker: Any, request: ConditionalOrderRequest, market_session: str, approved: bool) -> dict:
-    if market_session != "CLOSED":
-        raise RuntimeError(f"Refusing to CREATE: market_session={market_session!r} (must be CLOSED).")
+def create_smoke_order(
+    broker: Any, request: ConditionalOrderRequest, market_session: str, approved: bool,
+    *, allow_open_market: bool = False,
+) -> dict:
+    """market_session must be CLOSED unless allow_open_market=True is passed
+    explicitly (a deliberate, one-off override -- see main()'s
+    --allow-open-market flag). Even then, the price-margin + WATCHING-only
+    safety net below is unchanged; this only removes the CLOSED gate
+    itself, never any other check."""
+    if market_session != "CLOSED" and not allow_open_market:
+        raise RuntimeError(
+            f"Refusing to CREATE: market_session={market_session!r} (must be CLOSED, or pass allow_open_market=True)."
+        )
     if not approved:
         raise RuntimeError("Refusing to CREATE: explicit human approval was not given.")
     return create_conditional_order(broker, request)
@@ -224,6 +240,11 @@ def main() -> None:
     parser.add_argument("--symbol", required=True, help="US ETF symbol, e.g. TQQQ (must be in mumae_core.ETF_UNIVERSE)")
     parser.add_argument("--env-file", default="deploy/mumae.env", help="Credentials file to load read-only (never modified)")
     parser.add_argument("--artifact-dir", default="smoke_artifacts", help="Where the redacted response log is saved")
+    parser.add_argument(
+        "--allow-open-market", action="store_true",
+        help="Explicitly permit CREATE while the market session is not CLOSED. A deliberate one-off override -- "
+        "every other safeguard (price margin, fresh re-check before CREATE, WATCHING-only proceed) still applies.",
+    )
     args = parser.parse_args()
 
     symbol = args.symbol.upper()
@@ -244,8 +265,16 @@ def main() -> None:
 
     market_session = classify_market_session(broker)
     print(f"현재 미국 시장 session: {market_session}")
+    if market_session != "CLOSED" and not args.allow_open_market:
+        raise SystemExit(
+            f"시장 세션이 CLOSED가 아닙니다({market_session}). --allow-open-market 없이는 진행하지 않습니다."
+        )
     if market_session != "CLOSED":
-        raise SystemExit(f"시장 세션이 CLOSED가 아닙니다({market_session}). 모든 세션이 종료된 뒤 다시 실행하세요.")
+        print(
+            f"\n주의: 시장이 {market_session} 세션으로 열려 있으며 --allow-open-market로 명시적으로 허용되었습니다.\n"
+            "체결 가능성이 0이라고 가정하지 않습니다 -- 가격 마진, CREATE 직전 재조회, WATCHING 확인 등\n"
+            "다른 모든 안전장치는 CLOSED일 때와 동일하게 그대로 적용됩니다."
+        )
 
     current_price = fetch_current_price(broker, symbol)
     buying_power = fetch_buying_power(broker)
@@ -272,7 +301,21 @@ def main() -> None:
     if input("\nCREATE를 실행하려면 정확히 CREATE 를 입력하세요: ").strip() != "CREATE":
         raise SystemExit("사용자 승인이 없어 중단합니다. 실제 API 호출 없음.")
 
-    create_response = create_smoke_order(broker, request, market_session, approved=True)
+    # Re-verify immediately before the actual POST: the human approval step
+    # above can take any amount of time, during which the price may have
+    # moved. Uses the SAME triggerPrice already shown above -- only the
+    # comparison price is refreshed.
+    fresh_price = fetch_current_price(broker, symbol)
+    print(f"CREATE 직전 재조회한 현재가: {fresh_price}")
+    if trigger_already_satisfied("buy", request.trigger_price, fresh_price):
+        raise SystemExit(
+            f"안전장치 발동: CREATE 직전 재조회한 현재가({fresh_price})가 triggerPrice({request.trigger_price}) "
+            "이하로 확인되어 중단합니다. 실제 API 호출 없음."
+        )
+
+    create_response = create_smoke_order(
+        broker, request, market_session, approved=True, allow_open_market=args.allow_open_market,
+    )
     records["create_response"] = create_response
     save_artifact(records, artifact_path)
     conditional_order_id = (create_response.get("result") or {}).get("conditionalOrderId")
