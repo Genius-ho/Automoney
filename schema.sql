@@ -179,6 +179,8 @@ create table if not exists seo_keyword_analysis (
 );
 
 alter table seo_keyword_analysis add column if not exists extracted_keywords jsonb not null default '[]'::jsonb;
+alter table seo_keyword_analysis add column if not exists keyword_scores jsonb not null default '[]'::jsonb;
+alter table seo_keyword_analysis add column if not exists removed_supplier_labels jsonb not null default '[]'::jsonb;
 
 create table if not exists category_mapping (
   id bigserial primary key,
@@ -289,6 +291,157 @@ create table if not exists product_image_generation_requests (
   updated_at timestamptz not null default now(),
   unique (product_draft_id, request_type)
 );
+alter table product_image_generation_requests add column if not exists template_version integer;
+alter table product_image_generation_requests add column if not exists template_hash text;
+alter table product_image_generation_requests add column if not exists source_file_name text;
+alter table product_image_generation_requests add column if not exists revision integer not null default 1;
+alter table product_image_generation_requests add column if not exists regenerated_at timestamptz;
+alter table product_image_generation_requests add column if not exists approved_at timestamptz;
+alter table product_image_generation_requests add column if not exists rejected_at timestamptz;
+create table if not exists product_image_generation_request_revisions (
+ id bigserial primary key, request_id bigint not null references product_image_generation_requests(id) on delete cascade, revision integer not null, template_id bigint, template_version integer, template_hash text, source_file_name text, prompt_original text not null, prompt_rendered text not null, warnings_json jsonb not null default '[]'::jsonb, status text not null, archived_at timestamptz not null default now()
+);
+
+create table if not exists ai_provider_configs (
+  id bigserial primary key,
+  provider_code text not null unique check (provider_code in ('openai','google','anthropic','custom')),
+  display_name text not null,
+  enabled boolean not null default false,
+  api_key_ciphertext text,
+  api_key_iv text,
+  api_key_auth_tag text,
+  base_url text,
+  organization_id text,
+  project_id text,
+  default_text_model text,
+  default_vision_model text,
+  default_image_model text,
+  capabilities jsonb not null default '[]'::jsonb,
+  extra_config jsonb not null default '{}'::jsonb,
+  last_test_status text not null default 'not_tested',
+  last_test_message text,
+  last_tested_at timestamptz,
+  created_at timestamptz not null default now(),
+  updated_at timestamptz not null default now()
+);
+
+create table if not exists ai_task_routing (
+  task_type text primary key,
+  provider_code text not null check (provider_code in ('openai','google','anthropic','custom')),
+  model text,
+  enabled boolean not null default false,
+  quality text,
+  size text,
+  max_images_per_request integer not null default 1,
+  max_retries integer not null default 0,
+  fallback_provider_code text,
+  fallback_enabled boolean not null default false,
+  created_at timestamptz not null default now(),
+  updated_at timestamptz not null default now()
+);
+
+create table if not exists ai_cost_safety_settings (
+  id integer primary key default 1 check (id=1),
+  monthly_budget_krw integer,
+  daily_budget_krw integer,
+  max_cost_per_product_krw integer,
+  max_main_image_versions integer not null default 1,
+  max_detail_images integer not null default 10,
+  automatic_retry_enabled boolean not null default false,
+  require_human_approval boolean not null default true,
+  updated_at timestamptz not null default now()
+);
+insert into ai_cost_safety_settings(id) values(1) on conflict(id) do nothing;
+
+create table if not exists generated_ai_images (
+  id bigserial primary key,
+  product_draft_id bigint not null references product_drafts(id) on delete cascade,
+  prompt_request_id bigint not null references product_image_generation_requests(id) on delete restrict,
+  prompt_revision integer not null,
+  task_type text not null check (task_type = 'main_image'),
+  workflow_mode text not null check (workflow_mode = 'manual_external_ai'),
+  provider_code text not null check (provider_code in ('chatgpt','google_gemini','anthropic_claude','custom')),
+  provider_display_name text,
+  version integer not null,
+  original_stored_url text not null,
+  coupang_stored_url text not null,
+  original_file_size integer not null,
+  coupang_file_size integer not null check (coupang_file_size < 3000000),
+  original_mime_type text not null check (original_mime_type in ('image/png','image/jpeg','image/webp')),
+  coupang_mime_type text not null default 'image/jpeg' check (coupang_mime_type = 'image/jpeg'),
+  original_width integer not null,
+  original_height integer not null,
+  width integer not null default 1000 check (width = 1000),
+  height integer not null default 1000 check (height = 1000),
+  sha256 text not null,
+  status text not null default 'uploaded' check (status in ('uploaded','approved','rejected','superseded')),
+  notes text,
+  approval_note text,
+  created_at timestamptz not null default now(),
+  approved_at timestamptz,
+  rejected_at timestamptz,
+  superseded_at timestamptz,
+  superseded_by_image_id bigint references generated_ai_images(id) on delete set null,
+  unique(product_draft_id, task_type, version)
+);
+create unique index if not exists uq_generated_ai_images_one_approved_main on generated_ai_images(product_draft_id, task_type) where status = 'approved';
+
+create table if not exists generated_ai_detail_sets (
+  id bigserial primary key,
+  product_draft_id bigint not null references product_drafts(id) on delete cascade,
+  prompt_request_id bigint not null references product_image_generation_requests(id) on delete restrict,
+  prompt_revision integer not null check (prompt_revision > 0),
+  task_type text not null check (task_type = 'detail_page'),
+  workflow_mode text not null check (workflow_mode = 'manual_external_ai'),
+  provider_code text not null check (provider_code in ('chatgpt','google_gemini','anthropic_claude','custom')),
+  provider_display_name text,
+  set_version integer not null check (set_version > 0),
+  expected_image_count integer not null default 10 check (expected_image_count = 10),
+  image_count integer not null default 10 check (image_count = 10),
+  sections_json jsonb not null check (jsonb_typeof(sections_json) = 'array' and jsonb_array_length(sections_json) = 10),
+  status text not null default 'uploaded' check (status in ('uploaded','approved','rejected','superseded')),
+  notes text,
+  approval_note text,
+  created_at timestamptz not null default now(),
+  approved_at timestamptz,
+  rejected_at timestamptz,
+  superseded_at timestamptz,
+  superseded_by_set_id bigint references generated_ai_detail_sets(id) on delete set null,
+  unique(product_draft_id, task_type, set_version)
+);
+
+create table if not exists generated_ai_detail_images (
+  id bigserial primary key,
+  detail_set_id bigint not null references generated_ai_detail_sets(id) on delete cascade,
+  image_index integer not null check (image_index between 1 and 10),
+  section_key text not null,
+  section_label text not null,
+  original_stored_url text not null,
+  normalized_stored_url text not null,
+  original_width integer not null check (original_width between 860 and 5000),
+  original_height integer not null check (original_height between 1100 and 5000),
+  normalized_width integer not null check (normalized_width between 1 and 1000),
+  normalized_height integer not null check (normalized_height > 0),
+  original_file_size integer not null check (original_file_size between 1 and 10000000),
+  normalized_file_size integer not null check (normalized_file_size between 1 and 1500000),
+  original_mime_type text not null check (original_mime_type in ('image/png','image/jpeg','image/webp')),
+  normalized_mime_type text not null default 'image/jpeg' check (normalized_mime_type = 'image/jpeg'),
+  jpeg_quality integer not null check (jpeg_quality in (92,88,84,80)),
+  sha256 text not null,
+  status text not null default 'uploaded' check (status in ('uploaded','approved','rejected','superseded')),
+  created_at timestamptz not null default now(),
+  approved_at timestamptz,
+  rejected_at timestamptz,
+  superseded_at timestamptz,
+  check (original_width::bigint * original_height::bigint <= 25000000),
+  check (original_width::bigint * 100 >= original_height::bigint * 45),
+  check (original_width::bigint * 100 <= original_height::bigint * 90),
+  unique(detail_set_id, image_index)
+);
+
+create unique index if not exists uq_generated_ai_detail_sets_one_approved
+on generated_ai_detail_sets(product_draft_id, task_type)
+where status='approved';
 
 insert into shipping_policy_templates (
   name,
@@ -307,3 +460,493 @@ values (
   '{"source":"domeme","notes":["use supplier shipping fee when present","review Jeju/island remote fees"]}'::jsonb
 )
 on conflict (name) do nothing;
+
+alter table product_options add column if not exists stock_quantity integer;
+
+-- Phase 8 (section 12.4/13.4): 도매매's own per-option order code (e.g. "00",
+-- "01_03") -- required verbatim as the `item[상품번호]` option-code segment
+-- when placing a real 주문서 생성 (setOrder) call. Previously discarded:
+-- normalizeDomeggookOptions only read selectOpt.set[].opts[] by array
+-- position, never selectOpt.data (keyed by this exact code). Without it,
+-- Phase 8 cannot construct a valid order for any multi-option product.
+alter table product_options add column if not exists option_code text;
+
+create table if not exists coupang_product_registrations (
+  id bigserial primary key,
+  product_draft_id bigint not null references product_drafts(id) on delete cascade,
+  seller_product_id text,
+  request_hash text not null,
+  status text not null default 'pending',
+  requested boolean not null default false,
+  created_at timestamptz not null default now(),
+  updated_at timestamptz not null default now(),
+  unique (product_draft_id)
+);
+
+alter table coupang_product_registrations add column if not exists approval_response_message text;
+alter table coupang_product_registrations add column if not exists approval_requested_at timestamptz;
+
+alter table coupang_product_registrations add column if not exists linked_via text not null default 'direct_api';
+alter table coupang_product_registrations add column if not exists seller_product_name text;
+alter table coupang_product_registrations add column if not exists images_swapped_at timestamptz;
+alter table coupang_product_registrations add column if not exists last_synced_at timestamptz;
+alter table coupang_product_registrations add column if not exists live_status_name text;
+alter table coupang_product_registrations add column if not exists live_item_snapshot_json jsonb;
+alter table coupang_product_registrations add column if not exists live_total_stock_quantity integer;
+alter table coupang_product_registrations add column if not exists live_sale_price integer;
+alter table coupang_product_registrations add column if not exists telegram_notified_at timestamptz;
+alter table coupang_product_registrations add column if not exists telegram_message_id bigint;
+
+create table if not exists product_analysis_runs (
+  id bigserial primary key,
+  product_draft_id bigint not null references product_drafts(id) on delete cascade,
+  run_number integer not null,
+  status text not null default 'running' check (status in ('running', 'success', 'failed')),
+  python_status text not null default 'skipped' check (python_status in ('skipped', 'success', 'failed')),
+  python_error_code text,
+  python_error_message text,
+  codex_status text not null default 'pending' check (codex_status in ('pending', 'success', 'failed')),
+  codex_error_code text,
+  codex_error_message text,
+  error_code text,
+  error_message text,
+  python_analysis_json jsonb,
+  codex_analysis_json jsonb,
+  merged_analysis_json jsonb,
+  started_at timestamptz not null default now(),
+  finished_at timestamptz,
+  unique (product_draft_id, run_number)
+);
+create index if not exists idx_product_analysis_runs_draft on product_analysis_runs(product_draft_id, run_number desc);
+
+create table if not exists product_analysis_applied (
+  product_draft_id bigint primary key references product_drafts(id) on delete cascade,
+  analysis_run_id bigint not null references product_analysis_runs(id),
+  material text,
+  dimensions text,
+  manufacturer text,
+  country_of_origin text,
+  handling_precautions text,
+  sale_colors jsonb not null default '[]'::jsonb,
+  appearance_traits jsonb not null default '[]'::jsonb,
+  search_tags jsonb not null default '[]'::jsonb,
+  applied_fields jsonb not null default '[]'::jsonb,
+  applied_at timestamptz not null default now(),
+  updated_at timestamptz not null default now()
+);
+
+create table if not exists coupang_seller_settings (
+  id integer primary key default 1 check (id = 1),
+  outbound_shipping_place_code text,
+  outbound_shipping_place_name text,
+  return_center_code text,
+  return_center_name text,
+  confirmed_at timestamptz,
+  updated_at timestamptz not null default now()
+);
+insert into coupang_seller_settings (id) values (1) on conflict (id) do nothing;
+
+-- Category "whitelist" for the 3-day auto-discovery batch. Keyed by curated
+-- search keywords (not a numeric category code) because candidate collection
+-- (src/candidate-collector.mjs) is keyword-driven -- the existing
+-- data/seed-keywords.json convention -- and no full Domeggook/Coupang
+-- category taxonomy is available anywhere in this codebase to validate a
+-- code against. Every row here is a hand-picked *safe* segment; categories
+-- requiring food/health-supplement, medical-device, pharmaceutical,
+-- certification-needed cosmetics, KC-certified children's products,
+-- electrical/battery/charging, household-chemical, brand-authenticity-risk,
+-- adult, hazardous/flammable, install-or-professional-setup, or
+-- unconfirmed origin/certification are deliberately never seeded here.
+create table if not exists category_policy (
+  id bigserial primary key,
+  segment_name text not null,
+  category_name text not null unique,
+  search_keywords jsonb not null default '[]'::jsonb,
+  domeggook_category_code text,
+  is_active boolean not null default true,
+  notes text,
+  created_at timestamptz not null default now()
+);
+
+insert into category_policy (segment_name, category_name, search_keywords, notes) values
+  ('생활/수납', '정리함/수납함', '["수납정리함","다용도정리함","수납박스"]', null),
+  ('생활/수납', '옷걸이/행거', '["행거","옷걸이"]', null),
+  ('주방', '주방정리용품', '["주방정리대","조리도구거치대","주방수납선반"]', '식품 접촉/보관 용기류는 제외, 정리 거치대류만'),
+  ('문구/사무', '데스크정리용품', '["데스크정리함","문구수납함"]', null),
+  ('인테리어소품', '벽선반/벽걸이수납', '["벽선반","벽걸이수납장","벽걸이선반"]', null),
+  ('반려용품', '반려동물 하우스/방석', '["강아지방석","애견하우스","고양이스크래처"]', '사료/간식 등 식품류 제외'),
+  ('패션잡화', '가방/신발 정리용품', '["가방정리함","신발정리함"]', '인증 필요 의류/신발 본품 제외, 정리용품만'),
+  ('욕실용품', '욕실수납/샤워용품', '["욕실수납선반","샤워커튼"]', '전동/설치형 제품 제외'),
+  ('청소용품', '청소도구 정리', '["청소도구걸이","대걸레거치대"]', '세제 등 화학제품 제외, 거치대류만'),
+  ('캠핑/아웃도어', '캠핑정리용품', '["캠핑정리함","캠핑수납박스"]', '버너/가스 등 위험물 제외'),
+  ('자동차용품', '차량 정리용품', '["차량정리함","트렁크정리함"]', '전동/설치형 제품 제외'),
+  ('원예', '화분/원예소품', '["화분받침대","화분걸이"]', '비료/살충제 등 제외, 용기·거치대류만'),
+  ('서재/도서', '책정리용품', '["책꽂이","북엔드"]', null),
+  ('세탁용품', '세탁 정리용품', '["빨래바구니","빨래건조대"]', '세제 등 화학제품 제외'),
+  ('신발정리', '신발장/신발정리대', '["신발장","신발정리대"]', null),
+  ('커튼/블라인드', '커튼 부자재', '["커튼봉","커튼링"]', '전동/설치필요 블라인드 제외, 단순 부자재만'),
+  ('파티/이벤트', '파티장식용품', '["파티장식","풍선용품"]', '식품류 제외'),
+  ('사무용품', '서류/파일 정리', '["서류정리함","파일꽂이"]', null)
+on conflict (category_name) do nothing;
+
+-- Bookkeeping-only fallback row for coupang-keyword-sourcing.mjs -- NOT part
+-- of the curated safe-segment whitelist above. 2026-08-21 사용자 결정: 사람이
+-- 쿠팡에서 직접 고른 키워드는 이 화이트리스트로 걸러지지 않는다(이미 사람이
+-- 판단했으므로) -- 3일 주기 자동발굴만 위 18개로 제한된다. processing_queue/
+-- batch_run_candidates.category_policy_id가 not null FK라서, 키워드가 위
+-- 화이트리스트 어디에도 안 걸릴 때 이 행을 대신 참조해 FK를 만족시킨다.
+insert into category_policy (segment_name, category_name, search_keywords, notes) values
+  ('쿠팡 키워드 소싱', '쿠팡 키워드 소싱 (미분류)', '[]', '사람이 직접 고른 키워드가 위 화이트리스트와 매칭 안 될 때 쓰는 폴백 -- 카테고리 필터 목적이 아님')
+on conflict (category_name) do nothing;
+
+create table if not exists batch_schedule_state (
+  id integer primary key default 1 check (id = 1),
+  interval_days integer not null default 3,
+  next_run_at timestamptz not null default now(),
+  last_run_at timestamptz,
+  is_running boolean not null default false,
+  min_passing_score integer not null default 60,
+  updated_at timestamptz not null default now()
+);
+insert into batch_schedule_state (id) values (1) on conflict (id) do nothing;
+
+create table if not exists batch_runs (
+  id bigserial primary key,
+  started_at timestamptz not null default now(),
+  finished_at timestamptz,
+  status text not null default 'running' check (status in ('running', 'completed', 'failed')),
+  stage_reached text,
+  error_code text,
+  error_message text,
+  created_at timestamptz not null default now()
+);
+
+create table if not exists batch_category_selections (
+  id bigserial primary key,
+  batch_run_id bigint not null references batch_runs(id) on delete cascade,
+  category_policy_id bigint not null references category_policy(id),
+  selected_at timestamptz not null default now()
+);
+create index if not exists idx_batch_category_selections_recent on batch_category_selections(category_policy_id, selected_at desc);
+
+create table if not exists batch_run_candidates (
+  id bigserial primary key,
+  batch_run_id bigint not null references batch_runs(id) on delete cascade,
+  category_policy_id bigint not null references category_policy(id),
+  supplier_product_no text not null,
+  name text,
+  score numeric,
+  score_breakdown jsonb not null default '{}'::jsonb,
+  is_winner boolean not null default false,
+  raw_candidate_json jsonb,
+  created_at timestamptz not null default now()
+);
+create index if not exists idx_batch_run_candidates_run on batch_run_candidates(batch_run_id);
+
+-- Stage 2: links a batch-created draft back to the run/candidate it came
+-- from (null for every manually-created draft, including 27/46/64).
+alter table product_drafts add column if not exists batch_run_id bigint references batch_runs(id);
+alter table product_drafts add column if not exists batch_candidate_id bigint references batch_run_candidates(id);
+
+-- Per-candidate Stage 2 pipeline progress (draft creation -> analysis ->
+-- image generation -> awaiting_image_approval/failed). Only ever set on the
+-- one candidate per category marked is_winner=true; every other stored
+-- candidate keeps these null.
+alter table batch_run_candidates add column if not exists processing_status text;
+alter table batch_run_candidates add column if not exists draft_id bigint references product_drafts(id);
+alter table batch_run_candidates add column if not exists failure_stage text;
+alter table batch_run_candidates add column if not exists failure_message text;
+alter table batch_run_candidates add column if not exists last_processed_at timestamptz;
+alter table batch_run_candidates add column if not exists python_ran boolean;
+alter table batch_run_candidates add column if not exists codex_ran boolean;
+alter table batch_run_candidates add column if not exists main_image_generated boolean;
+alter table batch_run_candidates add column if not exists detail_images_generated_count integer;
+alter table batch_run_candidates add column if not exists unresolved_fields_count integer;
+
+-- Stage 3: separates the light 3-day discovery cycle (pick categories,
+-- score candidates, enqueue winners -- no Codex usage) from a daily
+-- heavy-processing cycle (pop exactly one queue item, run it through
+-- analysis + image generation) so Codex usage is capped at one product/day
+-- regardless of how many candidates discovery finds. The two cycles share
+-- the single is_running lock (still "전체 동시 실행 수 1"); each has its own
+-- interval/next-run-at pair.
+alter table batch_schedule_state add column if not exists processing_interval_days integer not null default 1;
+alter table batch_schedule_state add column if not exists processing_next_run_at timestamptz not null default now();
+alter table batch_schedule_state add column if not exists processing_last_run_at timestamptz;
+alter table batch_schedule_state add column if not exists draft_next_run_at timestamptz;
+alter table batch_schedule_state add column if not exists draft_last_run_at timestamptz;
+alter table batch_schedule_state add column if not exists draft_last_service_date date;
+alter table batch_schedule_state add column if not exists draft_last_outcome text;
+alter table batch_schedule_state add column if not exists analysis_next_run_at timestamptz;
+alter table batch_schedule_state add column if not exists analysis_last_run_at timestamptz;
+alter table batch_schedule_state add column if not exists analysis_last_service_date date;
+alter table batch_schedule_state add column if not exists analysis_last_outcome text;
+alter table batch_schedule_state add column if not exists images_next_run_at timestamptz;
+alter table batch_schedule_state add column if not exists images_last_run_at timestamptz;
+alter table batch_schedule_state add column if not exists images_last_service_date date;
+alter table batch_schedule_state add column if not exists images_last_outcome text;
+alter table batch_schedule_state add column if not exists discovery_last_service_date date;
+alter table batch_schedule_state add column if not exists discovery_last_outcome text;
+alter table batch_schedule_state add column if not exists fixed_schedule_initialized boolean not null default false;
+
+update batch_schedule_state set
+  draft_next_run_at = coalesce(draft_next_run_at, (((now() at time zone 'Asia/Seoul')::date + case when (now() at time zone 'Asia/Seoul')::time >= time '07:00' then 1 else 0 end) + time '07:00') at time zone 'Asia/Seoul'),
+  analysis_next_run_at = coalesce(analysis_next_run_at, (((now() at time zone 'Asia/Seoul')::date + case when (now() at time zone 'Asia/Seoul')::time >= time '08:00' then 1 else 0 end) + time '08:00') at time zone 'Asia/Seoul'),
+  images_next_run_at = coalesce(images_next_run_at, (((now() at time zone 'Asia/Seoul')::date + case when (now() at time zone 'Asia/Seoul')::time >= time '09:00' then 1 else 0 end) + time '09:00') at time zone 'Asia/Seoul'),
+  next_run_at = (((now() at time zone 'Asia/Seoul')::date + case when (now() at time zone 'Asia/Seoul')::time >= time '10:00' then interval_days else 0 end) + time '10:00') at time zone 'Asia/Seoul',
+  fixed_schedule_initialized = true
+where id = 1 and fixed_schedule_initialized = false;
+
+create table if not exists processing_queue (
+  id bigserial primary key,
+  batch_run_candidate_id bigint not null references batch_run_candidates(id),
+  category_policy_id bigint not null references category_policy(id),
+  supplier_product_no text not null,
+  name text,
+  score numeric,
+  status text not null default 'queued' check (status in ('queued', 'draft_created', 'analyzing', 'analysis_completed', 'generating_images', 'awaiting_image_approval', 'registering', 'awaiting_sale_approval', 'completed', 'failed')),
+  draft_id bigint references product_drafts(id),
+  failure_stage text,
+  failure_message text,
+  queued_at timestamptz not null default now(),
+  started_at timestamptz,
+  updated_at timestamptz not null default now()
+);
+create index if not exists idx_processing_queue_status on processing_queue(status, score desc nulls last);
+
+-- Mirrors coupang_product_registrations' shape/dedup approach for the Naver
+-- Commerce API raw-registration flow (naver-registration-flow.mjs).
+create table if not exists naver_product_registrations (
+  id bigserial primary key,
+  product_draft_id bigint not null references product_drafts(id) on delete cascade,
+  origin_product_no text,
+  channel_product_no text,
+  request_hash text not null,
+  status text not null default 'pending',
+  linked_via text not null default 'direct_api',
+  created_at timestamptz not null default now(),
+  updated_at timestamptz not null default now(),
+  unique (product_draft_id)
+);
+
+-- Phase 6 (automoney_complete_automation_implementation_plan.md section 11):
+-- 공급처 가격·재고·판매상태 감시. One row per check, so the monitor can
+-- always compare "now" against the most recent prior row for that supplier
+-- product -- mirrors coupang_product_registrations' one-row-per-event shape
+-- rather than a single mutable "current state" row, so the check history
+-- itself is never lost.
+create table if not exists supplier_snapshots (
+  id bigserial primary key,
+  supplier_product_id bigint not null references supplier_products(id) on delete cascade,
+  supplier_product_no text not null,
+  unit_cost_price integer,
+  shipping_fee integer,
+  min_order_qty integer,
+  is_sold_out boolean not null default false,
+  price_parse_status text,
+  checked_at timestamptz not null default now()
+);
+create index if not exists idx_supplier_snapshots_product_checked on supplier_snapshots(supplier_product_id, checked_at desc);
+
+-- Phase 7 (automoney_complete_automation_implementation_plan.md section 12):
+-- 쿠팡·네이버 주문 자동 수집. One row per channel order LINE (not per order
+-- sheet/product-order as a whole) since a single Coupang shipment box can
+-- bundle several vendorItemIds, each needing its own supplier mapping and
+-- (eventually, Phase 8) its own purchase order. Dedup key is
+-- (channel, channel_order_item_id) -- for Coupang that's
+-- `${shipmentBoxId}:${vendorItemId}` (the real schema has no single
+-- "orderItemId" field the way the plan assumed -- confirmed live against
+-- Coupang's documented v5 ordersheets schema, 2026-07-25); for Naver it's
+-- productOrderId (Naver's per-line order unit already).
+create table if not exists channel_orders (
+  id bigserial primary key,
+  channel text not null,
+  channel_order_id text not null,
+  channel_order_item_id text not null,
+  channel_product_id text,
+  option_info text,
+  quantity integer,
+  sale_price integer,
+  order_status text,
+  recipient_name text,
+  address text,
+  postal_code text,
+  phone text,
+  delivery_memo text,
+  ordered_at timestamptz,
+  cancelled_at timestamptz,
+  supplier_mapping_status text not null default 'mapping_required',
+  supplier_product_id bigint references supplier_products(id),
+  raw_json jsonb,
+  created_at timestamptz not null default now(),
+  updated_at timestamptz not null default now(),
+  unique (channel, channel_order_item_id)
+);
+create index if not exists idx_channel_orders_mapping_status on channel_orders(supplier_mapping_status);
+create index if not exists idx_channel_orders_ordered_at on channel_orders(ordered_at desc);
+
+-- 12.4 상품 매핑: breadcrumb back to the draft the mapper resolved, so
+-- Phase 8's multiplier lookup (product_drafts.bundle_quantity) and the
+-- admin UI can both join off one id instead of re-deriving it from
+-- channel_product_id every time.
+alter table channel_orders add column if not exists product_draft_id bigint references product_drafts(id);
+
+-- 마지막 성공 조회시각 저장 (12.1: "동시 실행 금지", "마지막 성공 조회시각 저장").
+-- Single row, mirrors batch_schedule_state's shape for the same reason: one
+-- authoritative "when did this last actually run" value per channel.
+create table if not exists order_collection_state (
+  channel text primary key,
+  last_success_at timestamptz,
+  is_running boolean not null default false,
+  updated_at timestamptz not null default now()
+);
+insert into order_collection_state (channel) values ('coupang'), ('naver') on conflict (channel) do nothing;
+
+-- Phase 10 (section 15.1/15.3): 'coupang_returns' reuses this same table for
+-- return-request-collector.mjs's lock/overlap bookkeeping -- distinct
+-- channel key, identical concurrency semantics, no reason for a second table.
+insert into order_collection_state (channel) values ('coupang_returns') on conflict (channel) do nothing;
+
+-- Phase 8 (section 13.1/13.3.1): caches the sId a 도매매 setLogin call returns
+-- so every Private API call doesn't have to log in fresh -- sId is valid for
+-- up to ~24h (or 30d with loginKeep=on) per the docs. Single row: this app
+-- talks to 도매매 as one 구매 계정, never per-user.
+create table if not exists domeme_session_state (
+  id integer primary key default 1 check (id = 1),
+  s_id text,
+  c_id text,
+  grade text,
+  s_id_renew_date bigint,
+  logged_in_at timestamptz,
+  updated_at timestamptz not null default now()
+);
+insert into domeme_session_state (id) values (1) on conflict (id) do nothing;
+
+-- Phase 8 (section 13): one row per channel_orders line this app has
+-- attempted to build a 발주안 for. Separate from channel_orders.
+-- supplier_mapping_status (Phase 7's simpler mapped/unmapped flag) -- this
+-- carries the full 13.5 state machine plus every value the 13.4 발주안
+-- screen needs to show a human before they approve real money leaving.
+-- status never advances to supplier_ordering/supplier_ordered except from
+-- an explicit admin approval action (never automatic -- section 3.4 금전
+-- 단계 승인 게이트).
+create table if not exists supplier_orders (
+  id bigserial primary key,
+  channel_order_id bigint not null references channel_orders(id) on delete cascade,
+  product_draft_id bigint not null references product_drafts(id),
+  supplier_product_id bigint not null references supplier_products(id),
+  status text not null default 'validating_supplier',
+  block_reasons jsonb not null default '[]'::jsonb,
+  supplier_market text,
+  supplier_option_code text,
+  supplier_order_qty integer,
+  sale_qty integer,
+  sale_price integer,
+  supplier_unit_price integer,
+  supplier_shipping_fee integer,
+  estimated_profit integer,
+  supplier_checked_at timestamptz,
+  domeme_order_no text,
+  domeme_order_uid text,
+  approved_at timestamptz,
+  ordered_at timestamptz,
+  failure_message text,
+  updated_at timestamptz not null default now(),
+  created_at timestamptz not null default now(),
+  unique (channel_order_id)
+);
+create index if not exists idx_supplier_orders_status on supplier_orders(status);
+
+-- 2.3.5/2.3.6 (주문서 생성 API 연동 가이드): item[]'s market segment ("dome" or
+-- "supply") -- NOT derivable from product_drafts.raw_price_field_name at
+-- read time (confirmed stale for some already-collected drafts, priced
+-- under an older candidate-priority order than processing.mjs's current
+-- one). Set from the FRESH live re-fetch's own priceFieldName every time
+-- buildSupplierOrderDraft runs, same as every other 13.2 revalidated value.
+alter table supplier_orders add column if not exists supplier_market text;
+
+-- Phase 9 (section 14.2/14.3/14.4): 송장 수집 + 택배사 코드 정규화 + 채널 발송 처리.
+-- Kept on supplier_orders rather than a separate table -- 1:1 with an
+-- already-placed order, same lifecycle, no reason to join.
+alter table supplier_orders add column if not exists carrier_code text;
+alter table supplier_orders add column if not exists carrier_name text;
+alter table supplier_orders add column if not exists tracking_number text;
+alter table supplier_orders add column if not exists shipped_at timestamptz;
+alter table supplier_orders add column if not exists channel_carrier_code text;
+alter table supplier_orders add column if not exists channel_ship_status text not null default 'not_shipped';
+alter table supplier_orders add column if not exists channel_ship_error text;
+alter table supplier_orders add column if not exists channel_shipped_at timestamptz;
+create index if not exists idx_supplier_orders_channel_ship_status on supplier_orders(channel_ship_status);
+
+-- Telegram 인라인 버튼 발주 승인 (22.9): tracks whether an
+-- awaiting_purchase_approval row has already had its Telegram approval
+-- prompt sent, so the 30-minute purchaseOrderValidation sweep (which
+-- re-upserts every mapped order's row every tick) doesn't re-notify the
+-- same pending order on every subsequent tick.
+alter table supplier_orders add column if not exists telegram_notified_at timestamptz;
+
+-- Phase 10 (section 15): 관리자 예외 큐. Shared across 15.1's "이미 출고"/
+-- "미출고, 공급처 취소 가능 여부 확인" cancellation cases and 15.3's 반품/교환
+-- (explicitly never auto-processed -- "모든 반품·교환은 관리자 예외 큐로 보낸다").
+-- One open exception per channel order at a time (the unique index) -- a
+-- second detection of the same condition just refreshes detail/updated_at
+-- on the still-open row rather than creating a duplicate.
+create table if not exists order_exceptions (
+  id bigserial primary key,
+  channel_order_id bigint not null references channel_orders(id) on delete cascade,
+  supplier_order_id bigint references supplier_orders(id) on delete cascade,
+  exception_type text not null,
+  status text not null default 'open',
+  detail jsonb not null default '{}'::jsonb,
+  resolution_note text,
+  resolved_at timestamptz,
+  created_at timestamptz not null default now(),
+  updated_at timestamptz not null default now()
+);
+create unique index if not exists idx_order_exceptions_open_per_channel_order
+  on order_exceptions(channel_order_id) where status = 'open';
+create index if not exists idx_order_exceptions_status on order_exceptions(status);
+
+-- section 16.1/16.5 대시보드/공급처 감시: Phase 6's runSupplierMonitorSweep
+-- alerts (SUPPLIER_OUT_OF_STOCK/PRICE_INCREASED/PRICE_DECREASED/MOQ_CHANGED/
+-- DATA_ERROR) were purely ephemeral before this -- computed by diffSnapshots
+-- on every sweep, returned to the caller, and never persisted (only ever
+-- console.logged by scripts/monitor-supplier-products.mjs). This is what
+-- lets the admin dashboard show a running count instead of only whatever
+-- happened to be on screen during the last CLI run.
+create table if not exists supplier_alerts (
+  id bigserial primary key,
+  supplier_product_id bigint not null references supplier_products(id) on delete cascade,
+  code text not null,
+  message text not null,
+  status text not null default 'open',
+  detail jsonb not null default '{}'::jsonb,
+  created_at timestamptz not null default now(),
+  acknowledged_at timestamptz
+);
+create index if not exists idx_supplier_alerts_status on supplier_alerts(status);
+
+-- 2026-08-22 사용자 요청: "링크 입력"(GUI)/텔레그램 링크 답장으로 나온 점수가
+-- 지금까지는 브라우저 메모리(lastLinkAnalysisResults)에만 있어 새로고침하면
+-- 사라졌다 -- 과거에 어떤 키워드/링크를 봤고 점수가 얼마였는지 계속 쌓아두고
+-- 조회할 수 있게 기록. batch_run_candidates(자동발굴)와 같은 모양
+-- (supplier_product_no/name/score/score_breakdown)을 따르되, 이건 사람이 수동으로
+-- 분석한 것이라 keyword(그 링크를 찾을 때 검색한 키워드, GUI "키워드 검색" 입력값 --
+-- 텔레그램 링크 답장이나 keyword 없이 바로 붙여넣은 경우 null)/source로 어디서
+-- 왔는지 구분한다. score가 없는(조회 실패) 후보는 기록하지 않는다 -- 볼 점수 자체가
+-- 없으므로.
+create table if not exists link_analysis_history (
+  id bigserial primary key,
+  supplier_product_no text not null,
+  name text,
+  score numeric,
+  score_breakdown jsonb not null default '{}'::jsonb,
+  filter_status text,
+  source_market text,
+  coupang_sale_price numeric,
+  coupang_expected_profit numeric,
+  keyword text,
+  source text not null default 'link_input',
+  analyzed_at timestamptz not null default now()
+);
+create index if not exists idx_link_analysis_history_analyzed_at on link_analysis_history(analyzed_at desc);

@@ -1,6 +1,6 @@
 import { existsSync } from 'node:fs';
 import { readFile } from 'node:fs/promises';
-import { join } from 'node:path';
+import { join, resolve } from 'node:path';
 
 export async function loadEnvConfig(rootDir = process.cwd()) {
   const values = await loadEnvValues(rootDir);
@@ -15,12 +15,36 @@ export async function loadEnvConfig(rootDir = process.cwd()) {
   };
 }
 
+// Phase 8 (section 13): separate from the public DOMEME_API_KEY lookup
+// endpoint credential above -- the Private API's aid must be issued to the
+// same id used to log in (2.3.2 of the order-creation guide), so this reads
+// the same DOMEME_API_KEY but additionally requires the real 도매꾹 member
+// id/password used for setLogin. Password is never logged (see
+// domeme-private-client.mjs's maskSensitive).
+export async function loadDomemePrivateConfig(rootDir = process.cwd()) {
+  const values = await loadEnvValues(rootDir);
+  const pick = (name) => values[name] || process.env[name];
+  const apiKey = pick('DOMEME_API_KEY');
+  const loginId = pick('DOMEME_LOGIN_ID');
+  const loginPassword = pick('DOMEME_LOGIN_PASSWORD');
+  if (!apiKey) throw new Error('DOMEME_API_KEY is missing in .env');
+  if (!loginId) throw new Error('DOMEME_LOGIN_ID is missing in .env');
+  if (!loginPassword) throw new Error('DOMEME_LOGIN_PASSWORD is missing in .env');
+  return { apiKey, loginId, loginPassword };
+}
+
 export async function loadDatabaseUrl(rootDir = process.cwd()) {
   if (process.env.DATABASE_URL?.trim()) return process.env.DATABASE_URL.trim();
   const values = await loadEnvValues(rootDir);
   const databaseUrl = values.DATABASE_URL?.trim();
   if (!databaseUrl) throw new Error('DATABASE_URL is missing in .env');
   return databaseUrl;
+}
+
+export async function loadAiSecrets(rootDir = process.cwd()) {
+  const values = await loadEnvValues(rootDir);
+  const names = ['OPENAI_API_KEY','GOOGLE_API_KEY','ANTHROPIC_API_KEY','AUTOMONEY_CREDENTIAL_MASTER_KEY'];
+  return Object.fromEntries(names.map(name => [name, process.env[name] || values[name] || null]));
 }
 
 export async function loadNaverConfig(rootDir = process.cwd()) {
@@ -30,6 +54,140 @@ export async function loadNaverConfig(rootDir = process.cwd()) {
   if (!clientId) throw new Error('NAVER_CLIENT_ID is missing in .env');
   if (!clientSecret) throw new Error('NAVER_CLIENT_SECRET is missing in .env');
   return { clientId, clientSecret };
+}
+
+// NCP(네이버클라우드플랫폼) NAVER API HUB 자격증명 -- 위 loadNaverConfig의
+// 개발자센터 검색 API용 키(구, 쇼핑검색은 대체재 없이 종료됨)와는 완전히
+// 별개. 2026-08-22 발급, 쇼핑 인사이트(클릭 트렌드) 전용. naver-api-hub-client.mjs
+// 참고.
+export async function loadNaverApiHubConfig(rootDir = process.cwd()) {
+  const values = await loadEnvValues(rootDir);
+  const clientId = values.NAVER_API_HUB_CLIENT_ID || process.env.NAVER_API_HUB_CLIENT_ID;
+  const clientSecret = values.NAVER_API_HUB_CLIENT_SECRET || process.env.NAVER_API_HUB_CLIENT_SECRET;
+  if (!clientId) throw new Error('NAVER_API_HUB_CLIENT_ID is missing in .env');
+  if (!clientSecret) throw new Error('NAVER_API_HUB_CLIENT_SECRET is missing in .env');
+  return { clientId, clientSecret };
+}
+
+// Separate from loadNaverConfig -- NAVER_CLIENT_ID/SECRET there are the
+// search/데이터랩 openapi.naver.com keys (market research only, see
+// naver-shopping-client.mjs). Registering a real product requires a
+// completely different credential pair, issued via the 네이버 커머스API센터
+// (commerce.naver.com) app registration, so this stays its own function/env
+// var names to make the two impossible to mix up.
+export async function loadNaverCommerceConfig(rootDir = process.cwd()) {
+  const values = await loadEnvValues(rootDir);
+  const pick = (name) => values[name] || process.env[name];
+  const clientId = pick('NAVER_COMMERCE_CLIENT_ID');
+  const clientSecret = pick('NAVER_COMMERCE_CLIENT_SECRET');
+  const channelId = pick('NAVER_COMMERCE_CHANNEL_ID') || null;
+  const asPhoneNumber = pick('NAVER_AS_PHONE_NUMBER') || null;
+  if (!clientId) throw new Error('NAVER_COMMERCE_CLIENT_ID is missing in .env');
+  if (!clientSecret) throw new Error('NAVER_COMMERCE_CLIENT_SECRET is missing in .env');
+  return { clientId, clientSecret, channelId, asPhoneNumber };
+}
+
+// Alerts are supplementary (22.9) -- missing/partial config disables
+// notifications rather than breaking startup, same reasoning as
+// loadCodexConfig. Returns null, never throws.
+export async function loadTelegramConfig(rootDir = process.cwd()) {
+  const values = await loadEnvValues(rootDir).catch(() => ({}));
+  const pick = (name) => values[name] || process.env[name];
+  const botToken = pick('TELEGRAM_BOT_TOKEN');
+  const chatId = pick('TELEGRAM_CHAT_ID');
+  if (!botToken || !chatId) return null;
+  return { botToken, chatId };
+}
+
+export async function loadR2Config(rootDir = process.cwd()) {
+  const values = await loadEnvValues(rootDir);
+  const pick = (name) => values[name] || process.env[name];
+  const accountId = pick('R2_ACCOUNT_ID');
+  const accessKeyId = pick('R2_ACCESS_KEY_ID');
+  const secretAccessKey = pick('R2_SECRET_ACCESS_KEY');
+  const bucket = pick('R2_BUCKET');
+  const publicBaseUrl = pick('R2_PUBLIC_BASE_URL');
+  if (!accountId) throw new Error('R2_ACCOUNT_ID is missing in .env');
+  if (!accessKeyId) throw new Error('R2_ACCESS_KEY_ID is missing in .env');
+  if (!secretAccessKey) throw new Error('R2_SECRET_ACCESS_KEY is missing in .env');
+  if (!bucket) throw new Error('R2_BUCKET is missing in .env');
+  if (!publicBaseUrl) throw new Error('R2_PUBLIC_BASE_URL is missing in .env');
+  return { accountId, accessKeyId, secretAccessKey, bucket, publicBaseUrl };
+}
+
+export async function loadCoupangConfig(rootDir = process.cwd()) {
+  const values = await loadEnvValues(rootDir);
+  const pick = (name) => values[name] || process.env[name];
+  const accessKey = pick('COUPANG_ACCESS_KEY');
+  const secretKey = pick('COUPANG_SECRET_KEY');
+  const vendorId = pick('COUPANG_VENDOR_ID');
+  const vendorUserId = pick('COUPANG_VENDOR_USER_ID') || null;
+  if (!accessKey) throw new Error('COUPANG_ACCESS_KEY is missing in .env');
+  if (!secretKey) throw new Error('COUPANG_SECRET_KEY is missing in .env');
+  if (!vendorId) throw new Error('COUPANG_VENDOR_ID is missing in .env');
+  return { accessKey, secretKey, vendorId, vendorUserId };
+}
+
+// Codex CLI runs as a local process under the operator's own ChatGPT login --
+// no API key is read or required here. Every value has a working default so
+// this never throws; Codex being unconfigured/uninstalled/logged-out is a
+// runtime *capability* check (see codex-client.mjs), not a startup failure.
+export async function loadCodexConfig(rootDir = process.cwd()) {
+  const values = await loadEnvValues(rootDir).catch(() => ({}));
+  const pick = (name) => values[name] || process.env[name];
+  const sandbox = pick('CODEX_SANDBOX') || 'read-only';
+  const concurrency = Number(pick('AI_JOB_CONCURRENCY'));
+  return {
+    executable: pick('CODEX_EXECUTABLE') || 'codex',
+    sandbox,
+    concurrency: Number.isInteger(concurrency) && concurrency > 0 ? concurrency : 1,
+    timeoutMs: Number(pick('CODEX_TIMEOUT_MS')) || 180_000,
+  };
+}
+
+// Claude Code CLI runs as a local process under the operator's own Claude
+// subscription login (`claude auth status`) -- no API key is read or
+// required here, same reasoning as loadCodexConfig. Never throws; being
+// unconfigured/uninstalled/logged-out is a runtime *capability* check (see
+// claude-cli-client.mjs), not a startup failure.
+export async function loadClaudeCliConfig(rootDir = process.cwd()) {
+  const values = await loadEnvValues(rootDir).catch(() => ({}));
+  const pick = (name) => values[name] || process.env[name];
+  const concurrency = Number(pick('AI_JOB_CONCURRENCY'));
+  return {
+    executable: pick('CLAUDE_CLI_EXECUTABLE') || 'claude',
+    model: pick('CLAUDE_CLI_MODEL') || 'sonnet',
+    effort: pick('CLAUDE_CLI_EFFORT') || 'medium',
+    concurrency: Number.isInteger(concurrency) && concurrency > 0 ? concurrency : 1,
+    timeoutMs: Number(pick('CLAUDE_CLI_TIMEOUT_MS')) || 180_000,
+  };
+}
+
+// Data/job directories are resolved relative to rootDir with path.join/
+// path.resolve only -- no "\\" or "/" literals -- so the same config works
+// unchanged on Windows now and Linux later.
+export async function loadJobPathsConfig(rootDir = process.cwd()) {
+  const values = await loadEnvValues(rootDir).catch(() => ({}));
+  const pick = (name) => values[name] || process.env[name];
+  const dataDir = resolve(rootDir, pick('AUTOMONEY_DATA_DIR') || join('data'));
+  const jobDir = resolve(rootDir, pick('AUTOMONEY_JOB_DIR') || join('data', 'jobs'));
+  return { dataDir, jobDir };
+}
+
+export async function loadPythonConfig(rootDir = process.cwd()) {
+  const values = await loadEnvValues(rootDir).catch(() => ({}));
+  const pick = (name) => values[name] || process.env[name];
+  const timeoutMs = Number(pick('PYTHON_TIMEOUT_MS'));
+  return {
+    // Defaults here are intentionally the bare command names, never a
+    // machine-specific absolute path -- real paths belong in .env only
+    // (gitignored), so the same code runs unchanged on Windows and Linux.
+    executable: pick('PYTHON_EXECUTABLE') || 'python',
+    tesseractExecutable: pick('TESSERACT_EXECUTABLE') || null,
+    tessdataPrefix: pick('TESSDATA_PREFIX_DIR') || null,
+    ocrLang: pick('OCR_LANG') || 'kor+eng',
+    timeoutMs: Number.isInteger(timeoutMs) && timeoutMs > 0 ? timeoutMs : 60_000,
+  };
 }
 
 export async function loadProductNumbers(csvPath) {
@@ -58,6 +216,15 @@ export async function loadProductNumbers(csvPath) {
 
 export async function loadPricingRules(path) {
   return normalizeRuleKeys(JSON.parse(await readFile(path, 'utf8')));
+}
+
+// 2026-08-22 사용자 요청: 자동 소싱/등록 파이프라인을 재검토하는 동안 모든
+// 백그라운드 스케줄(주문/배송/반품 처리 포함)을 완전히 멈추는 킬스위치.
+// .env의 AUTOMATION_PAUSED=true로 켜고 끄며, systemd 유닛 파일을 건드릴 필요가
+// 없도록 이 프로젝트의 기존 .env 로딩 경로를 그대로 재사용한다.
+export async function isAutomationPaused(rootDir = process.cwd()) {
+  const values = await loadEnvValues(rootDir).catch(() => ({}));
+  return String(values.AUTOMATION_PAUSED || process.env.AUTOMATION_PAUSED || '').toLowerCase() === 'true';
 }
 
 async function loadEnvValues(rootDir) {

@@ -10,7 +10,7 @@ export function normalizeProduct(productNo, raw, context = {}) {
   });
   const minOrderQty = firstPositiveInteger([
     price.minOrderQty,
-    firstDeepValue([source, raw, context.candidateSource], ['minOrderQty', 'min_order_qty', 'minimumOrderQuantity', 'orderMinQty', 'order_min_qty', 'moq']),
+    firstDeepValue([source, raw, context.candidateSource], ['minOrderQty', 'min_order_qty', 'minimumOrderQuantity', 'orderMinQty', 'order_min_qty', 'moq', 'domeMoq']),
   ]) ?? 1;
   const orderUnit = firstPositiveInteger([
     firstDeepValue([source, raw, context.candidateSource], ['orderUnit', 'order_unit', 'bundleQty', 'bundle_qty', 'unitQty', 'unit_qty']),
@@ -65,22 +65,32 @@ export function filterProduct(product) {
   if (product.priceParseStatus === 'invalid_range') blockReasons.push('price_invalid_range');
   if (!product.name) blockReasons.push('missing_name');
   if (!Number.isFinite(product.cost) || product.cost <= 0) blockReasons.push('missing_or_invalid_cost');
-  const unitCostPrice = Number(product.unitCostPrice ?? product.cost);
-  const saleUnitCost = Number(product.bundleCostPrice ?? product.cost);
-  if (Number.isFinite(saleUnitCost) && saleUnitCost > 0 && saleUnitCost < 3000) {
-    blockReasons.push('blocked_low_cost');
-  }
   if (!Array.isArray(product.images) || product.images.length === 0) blockReasons.push('missing_images');
   if (product.isSoldOut) blockReasons.push('sold_out');
   if (product.sourceMarket === 'domeggook') reviewReasons.push('needs_review_source_market');
   if (product.sourceMarket === 'unknown') reviewReasons.push('needs_review_source_market_unknown');
   const minOrderQty = Number(product.minOrderQty || 1);
-  if (product.sellUnitType === 'bundle') {
-    reviewReasons.push('bundle_candidate');
-  } else if (minOrderQty >= 5) {
+  if (minOrderQty >= 3) {
+    // automoney_complete_automation_implementation_plan.md 8.3: "MOQ 3 이상은
+    // 원칙적으로 자동등록 후보에서 제외한다" -- this used to only block at >=5,
+    // silently letting MOQ 3/4 bundles through as a mere review flag.
     blockReasons.push('blocked_large_bundle');
-  } else if (minOrderQty > 1 && unitCostPrice > 5000) {
-    reviewReasons.push('needs_review_min_order_qty');
+  } else if (product.sellUnitType === 'bundle') {
+    // Only ever MOQ === 2 reaches here now that >=3 is blocked above. Plan
+    // 8.2's 2개 세트 조건: 총 공급원가 15,000원 이하, 예상 판매가 35,000원 이하
+    // 권장 -- these were never checked at all before; only a generic
+    // profit-floor check applied (see minProfit below), so a bundle could
+    // clear that while still being an expensive, poor-fit 2-set (e.g. draft
+    // 24's real bundleCostPrice of 29,260 -- almost double the recommended
+    // ceiling -- currently passes with no signal at all).
+    reviewReasons.push('bundle_candidate');
+    if (Number.isFinite(product.bundleCostPrice) && product.bundleCostPrice > 15000) {
+      reviewReasons.push('needs_review_bundle_cost_over_15000');
+    }
+    const estimatedSale = estimateSalePrice(product);
+    if (estimatedSale !== null && estimatedSale > 35000) {
+      reviewReasons.push('needs_review_bundle_sale_over_35000');
+    }
   } else if (minOrderQty > 1) {
     reviewReasons.push('needs_review_min_order_qty');
   }
@@ -95,8 +105,27 @@ export function filterProduct(product) {
     if (haystack.includes(keyword.toLowerCase())) reviewReasons.push(`risk_keyword:${keyword}`);
   }
 
+  // 2026-08-14 strategy change: target low-cost, high-turnover items priced
+  // 5,000~20,000원 (both bounds set by the user directly) rather than the
+  // previous flat 3,000원 raw-cost floor -- cost itself is no longer checked
+  // directly; whether it's viable is entirely a function of what sale price
+  // it implies. Scoped to single items -- bundles have their own 35,000원
+  // sale-price ceiling above (Plan 8.2) with different economics.
+  if (product.sellUnitType !== 'bundle') {
+    const estimatedSale = estimateSalePrice(product);
+    if (estimatedSale !== null && (estimatedSale < 5000 || estimatedSale > 20000)) {
+      blockReasons.push('blocked_sale_price_out_of_target_range');
+    }
+  }
+
   const minProfit = estimateMinimumProfit(product);
-  if (minProfit !== null && minProfit < 3000) {
+  // Absolute-profit floor lowered from 5,000원 to 1,500원 alongside the
+  // 20,000원 target sale-price ceiling above: at the default 25% margin rate
+  // and 11% Coupang fee, 5,000원 profit requires a ~28,000원 sale price,
+  // which is above that ceiling and would leave nothing passing both checks
+  // at once. 1,500원 still rejects near-zero-margin items while remaining
+  // reachable within the 5,000~20,000원 band.
+  if (minProfit !== null && minProfit < 1500) {
     if (product.sellUnitType === 'bundle') reviewReasons.push('needs_review_low_margin');
     else blockReasons.push('blocked_low_margin');
   }
@@ -455,18 +484,32 @@ function filterResult(filterStatus, blockReasons, reviewReasons, accepted) {
   };
 }
 
+// Rough go/no-go estimate at the filter stage, before calculatePrices' real
+// per-platform fee rates are available (filterProduct only ever sees the
+// product, never pricingRules) -- a flat 25% margin / 6% fee heuristic,
+// same numbers estimateMinimumProfit already used.
+function estimateSalePrice(product) {
+  const cost = product.bundleCostPrice ?? product.cost;
+  if (!Number.isFinite(cost) || cost <= 0) return null;
+  const shippingFee = Number.isFinite(product.shippingFee) ? product.shippingFee : 0;
+  return Math.ceil(((cost + shippingFee) * 1.25) / 0.94);
+}
+
 function estimateMinimumProfit(product) {
   const cost = product.bundleCostPrice ?? product.cost;
   if (!Number.isFinite(cost) || cost <= 0) return null;
   const shippingFee = Number.isFinite(product.shippingFee) ? product.shippingFee : 0;
-  const estimatedSale = Math.ceil(((cost + shippingFee) * 1.25) / 0.94);
+  const estimatedSale = estimateSalePrice(product);
   return estimatedSale - cost - shippingFee;
 }
 
 function determineSellUnit({ unitCostPrice, minOrderQty }) {
   const unitCost = Number(unitCostPrice || 0);
   const qty = Number(minOrderQty || 1);
-  if (qty >= 2 && qty <= 3 && unitCost > 0 && unitCost <= 5000) {
+  // Supplier enforces a minimum purchase quantity: a single unit is never
+  // actually purchasable on its own, so anything with qty > 1 must be sold
+  // as a bundle matching that minimum, regardless of its unit cost.
+  if (qty > 1 && unitCost > 0) {
     return {
       sellUnitType: 'bundle',
       bundleQuantity: qty,
@@ -484,6 +527,7 @@ function determineSellUnit({ unitCostPrice, minOrderQty }) {
 
 function parseProductPrice(source) {
   const candidates = [
+    ['price.dome', source.price?.dome],
     ['price.supply', source.price?.supply],
     ['supplyPrice', source.supplyPrice],
     ['cost', source.cost],
@@ -533,6 +577,7 @@ function inferSourceMarket({ source, raw, context }) {
   );
   if (explicit !== 'unknown') return explicit;
   if (context.requestedMarket === 'dome') return 'domeme';
+  if (context.requestedMarket === 'supply') return 'domeggook';
   return 'unknown';
 }
 
@@ -638,7 +683,7 @@ function normalizeOptions(value) {
       return [];
     }
   }
-  if (value.set && Array.isArray(value.set)) return normalizeDomeggookOptions(value.set);
+  if (value.set && Array.isArray(value.set)) return normalizeDomeggookOptions(value);
   if (Array.isArray(value)) return value.map(normalizeOption);
   if (typeof value === 'object') {
     return Object.entries(value).map(([name, values]) => ({
@@ -651,7 +696,31 @@ function normalizeOptions(value) {
   return [];
 }
 
-function normalizeDomeggookOptions(sets) {
+// selectOpt.data (keyed by 도매매's own order-option-code, e.g. "00" for a
+// single-dimension option or "01_03" for a combination) is the authoritative
+// per-SKU view -- its key IS the exact code Phase 8's setOrder call needs,
+// and its qty is the real per-option supplier stock. Prior to this, only
+// selectOpt.set[].opts[] (display name/price by array position) was read,
+// which has no code at all. Falls back to the set-only reconstruction when
+// `data` is absent (defensive -- not observed live, but set is still the
+// only field the plan's original normalizeOptions ever guaranteed).
+function normalizeDomeggookOptions(value) {
+  const sets = Array.isArray(value.set) ? value.set : [];
+  const data = value.data && typeof value.data === 'object' && !Array.isArray(value.data) ? value.data : null;
+
+  if (data) {
+    const combinedName = sets.map((set) => compactText(set.name ?? '')).filter(Boolean).join('/');
+    return Object.entries(data).map(([code, entry]) =>
+      normalizeOption({
+        name: combinedName,
+        value: entry?.name,
+        additionalPrice: entry?.domPrice ?? 0,
+        optionCode: code,
+        stockQuantity: entry?.qty,
+      }),
+    );
+  }
+
   return sets.flatMap((set) => {
     const name = compactText(set.name ?? '');
     const values = Array.isArray(set.opts) ? set.opts : [];
@@ -670,7 +739,7 @@ function normalizeOption(option) {
   if (!option || typeof option !== 'object') {
     return { name: String(option ?? ''), value: '', additionalPrice: 0, raw: option };
   }
-  return {
+  const normalized = {
     name: compactText(firstValue(option, ['name', 'optionName', 'label']) ?? ''),
     value: compactText(firstValue(option, ['value', 'optionValue', 'text']) ?? ''),
     additionalPrice: toNumber(
@@ -678,6 +747,9 @@ function normalizeOption(option) {
     ),
     raw: option,
   };
+  if (option.optionCode != null) normalized.optionCode = String(option.optionCode);
+  if (option.stockQuantity != null) normalized.stockQuantity = toNumber(option.stockQuantity);
+  return normalized;
 }
 
 export function normalizeImages(value) {

@@ -1,0 +1,11 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "title": "AutomoneyImageQualityScore",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["score", "reason"],
+  "properties": {
+    "score": { "type": "integer", "minimum": 0, "maximum": 100 },
+    "reason": { "type": "string" }
+  }
+}

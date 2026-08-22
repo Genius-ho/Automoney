@@ -1,5 +1,6 @@
 import { summarizeShoppingSearch } from './naver-shopping-client.mjs';
 import { buildSkippedDatalabResult } from './naver-datalab-client.mjs';
+import { fetchShoppingKeywordTrend } from './naver-api-hub-client.mjs';
 
 export function calculateNaverWinnerScore({ mySalePrice, lowestPrice, competitorCount, expectedProfit }) {
   if (!Number.isFinite(Number(mySalePrice)) || !Number.isFinite(Number(lowestPrice)) || Number(lowestPrice) <= 0) {
@@ -49,6 +50,49 @@ export function calculateNaverWinnerScore({ mySalePrice, lowestPrice, competitor
   }
 
   return { priceGapRate, winnerScore: score, winnerStatus: toNaverWinnerStatus(score), reasons };
+}
+
+// 2026-08-22: "링크 입력" 점수의 네이버 경쟁 항목이 항상 "데이터 없음(중립값)"
+// 이었던 걸 채우려 했으나, 개발자센터 쇼핑검색 API가 2026-07-31에 대체재 없이
+// 완전히 종료된 것으로 확인됨 (공식 공지, NAVER API HUB 카탈로그 둘 다 개별
+// 상품 가격/판매처 API가 없음) -- 그래서 "경쟁상품수/가격격차" 방식은 폐기.
+// 대신 사용자 결정: NAVER API HUB의 쇼핑 인사이트(카테고리/키워드 클릭 트렌드)로
+// "꾸준히 높은 클릭 트렌드인지" + "최근 상승 추세인지" 두 신호를 본다.
+// startDate로부터 monthsBack개월치 월간 ratio(0~100, 그 구간 내 상대값)를 받아
+// 평균(꾸준함)과 초반 대비 후반 성장률(상승세)을 계산한다. category는 네이버쇼핑
+// cat_id -- 필수 파라미터라 없으면 이 함수를 호출하지 않는 게 caller의 책임
+// (product-link-analysis.mjs는 category를 모르면 그냥 건너뛰고 중립 프록시로
+// 남긴다).
+export async function checkNaverTrendLive(client, keyword, category, {
+  now = new Date(),
+  monthsBack = 6,
+  fetchShoppingKeywordTrendImpl = fetchShoppingKeywordTrend,
+} = {}) {
+  const endDate = new Date(now);
+  const startDate = new Date(now);
+  startDate.setMonth(startDate.getMonth() - monthsBack);
+  const toDateString = (date) => date.toISOString().slice(0, 10);
+
+  const raw = await fetchShoppingKeywordTrendImpl(client, {
+    keyword,
+    category,
+    startDate: toDateString(startDate),
+    endDate: toDateString(endDate),
+    timeUnit: 'month',
+  });
+  const ratios = (raw?.results?.[0]?.data || [])
+    .map((point) => Number(point.ratio))
+    .filter((value) => Number.isFinite(value));
+  if (ratios.length === 0) return null;
+
+  const avg = (values) => values.reduce((sum, value) => sum + value, 0) / values.length;
+  const avgRatio = avg(ratios);
+  const half = Math.max(1, Math.floor(ratios.length / 2));
+  const earlyAvg = avg(ratios.slice(0, half));
+  const recentAvg = avg(ratios.slice(-half));
+  const growthRate = earlyAvg > 0 ? (recentAvg - earlyAvg) / earlyAvg : (recentAvg > 0 ? 1 : 0);
+
+  return { avgRatio, growthRate, months: ratios.length };
 }
 
 export async function researchNaverDraft(db, client, draft, { keyword } = {}) {

@@ -2,6 +2,7 @@ import assert from 'node:assert/strict';
 import test from 'node:test';
 
 import {
+  countProductDrafts,
   exportProductDraft,
   shouldOverwriteOptimizedTitles,
   shouldCreateGeneratedDetailHtml,
@@ -90,6 +91,58 @@ test('listProductDrafts returns joined draft rows and supports status filtering'
   assert.equal(drafts[0].orderUnit, 1);
   assert.equal(drafts[0].importBatchId, 'batch-1');
   assert.equal(drafts[0].finalDecision, '등록후보');
+});
+
+test('listProductDrafts applies search as an ILIKE match across name/supplier-no columns', async () => {
+  const calls = [];
+  const db = { async query(sql, params) { calls.push({ sql, params }); return { rows: [] }; } };
+
+  await listProductDrafts(db, { search: '옷걸이' });
+
+  assert.equal(calls[0].params[0], '%옷걸이%');
+  assert.match(calls[0].sql, /d\.selling_title ilike \$1/);
+  assert.match(calls[0].sql, /d\.supplier_product_no ilike \$1/);
+});
+
+test('listProductDrafts converts page/pageSize into limit/offset', async () => {
+  const calls = [];
+  const db = { async query(sql, params) { calls.push({ sql, params }); return { rows: [] }; } };
+
+  await listProductDrafts(db, { page: 3, pageSize: 5 });
+
+  assert.deepEqual(calls[0].params, [5, 10]);
+  assert.match(calls[0].sql, /limit \$1/);
+  assert.match(calls[0].sql, /offset \$2/);
+});
+
+test('listProductDrafts rejects page without pageSize', async () => {
+  await assert.rejects(() => listProductDrafts({}, { page: 2 }), /page requires pageSize/);
+});
+
+test('listProductDrafts only accepts whitelisted sortBy columns', async () => {
+  const calls = [];
+  const db = { async query(sql, params) { calls.push({ sql, params }); return { rows: [] }; } };
+
+  await listProductDrafts(db, { sortBy: 'coupangSalePrice', sortDir: 'asc' });
+
+  assert.match(calls[0].sql, /order by\s+d\.coupang_sale_price asc nulls last,/);
+  await assert.rejects(() => listProductDrafts(db, { sortBy: 'dropTableUsers' }), /Invalid sortBy/);
+});
+
+test('countProductDrafts applies the same filters as listProductDrafts and returns a total', async () => {
+  const calls = [];
+  const db = {
+    async query(sql, params) {
+      calls.push({ sql, params });
+      return { rows: [{ total: 42 }] };
+    },
+  };
+
+  const total = await countProductDrafts(db, { status: 'needs_review', search: '선반' });
+
+  assert.equal(total, 42);
+  assert.deepEqual(calls[0].params, ['needs_review', '%선반%']);
+  assert.match(calls[0].sql, /select count\(\*\)::int as total/);
 });
 
 test('updateProductDraft patches editable admin fields', async () => {
@@ -326,6 +379,73 @@ test('exportProductDraft returns channel specific preview JSON', async () => {
   assert.equal(naver.minOrderQty, 2);
   assert.equal(naver.exportBlocked, true);
   assert.deepEqual(naver.blockedReasons, ['blocked_low_margin']);
+});
+
+test('exports prefer only the approved Coupang-safe manual main image', async () => {
+  const db={async query(sql){
+    if(sql.includes('from product_drafts d'))return{rows:[{id:64,supplier_product_id:10,supplier_product_no:'64',raw_name:'raw',selling_title:'selling',cost:1,shipping_fee:0,min_order_qty:1,order_unit:1,coupang_sale_price:2,naver_sale_price:2,filter_status:'pass',block_reasons:[],review_reasons:[],status:'draft',generated_detail_html:'<p>same</p>',price_tiers:[],shipping_tiers:[]}]};
+    if(sql.includes('from product_images'))return{rows:[{id:1,image_index:0,image_type:'main',url:'https://source.test/original.jpg',stored_url:'https://source.test/original.jpg'}]};
+    if(sql.includes('from product_options'))return{rows:[]};
+    if(sql.includes("from generated_ai_images")&&sql.includes("status='approved'"))return{rows:[{id:7,product_draft_id:64,prompt_request_id:91,prompt_revision:2,task_type:'main_image',workflow_mode:'manual_external_ai',provider_code:'chatgpt',version:2,original_stored_url:'/generated-ai-images/original.webp',coupang_stored_url:'/generated-ai-images/drafts/64/main/manual/approved.jpg',original_file_size:100,coupang_file_size:2000000,original_mime_type:'image/webp',coupang_mime_type:'image/jpeg',original_width:1200,original_height:1200,width:1000,height:1000,sha256:'abc',status:'approved'}]};
+    return{rows:[]};
+  }};
+  const coupang=await exportProductDraft(db,64,'coupang');const naver=await exportProductDraft(db,64,'naver');
+  assert.equal(coupang.mainImages[0],'/generated-ai-images/drafts/64/main/manual/approved.jpg');
+  assert.equal(naver.mainImages[0],'/generated-ai-images/drafts/64/main/manual/approved.jpg');
+  assert.ok(!coupang.mainImages.includes('/generated-ai-images/original.webp'));
+});
+
+test('Naver export keeps explicitly typed legacy detail images in stored order', async () => {
+  const db = {
+    async query(sql) {
+      if (sql.includes('from product_drafts d')) {
+        return {
+          rows: [{
+            id: 8,
+            supplier_product_id: 10,
+            supplier_product_no: '8',
+            raw_name: 'raw',
+            selling_title: 'selling',
+            status: 'draft',
+            filter_status: 'pass',
+            block_reasons: [],
+            review_reasons: [],
+            generated_detail_html: '<p>detail</p>',
+            price_tiers: [],
+            shipping_tiers: [],
+          }],
+        };
+      }
+      if (sql.includes('from product_images')) {
+        return {
+          rows: [
+            { id: 1, image_index: 0, image_type: 'main', sort_order: 0, url: 'https://source.test/main.jpg', stored_url: 'https://stored.test/main.jpg', source_section: 'unknown' },
+            { id: 2, image_index: 1, image_type: 'detail', sort_order: 2, url: 'https://source.test/detail-2.jpg', stored_url: 'https://stored.test/detail-2.jpg', source_section: 'unknown' },
+            { id: 3, image_index: 2, image_type: 'detail_slice', sort_order: 4, url: 'https://source.test/slice-2.jpg', stored_url: 'https://stored.test/slice-2.jpg', source_section: 'unknown' },
+            { id: 4, image_index: 3, image_type: 'thumbnail', sort_order: 5, url: 'https://source.test/other.jpg', stored_url: 'https://stored.test/other.jpg', source_section: 'unknown' },
+            { id: 5, image_index: 4, image_type: 'detail', sort_order: 1, url: 'https://source.test/detail-1.jpg', stored_url: 'https://stored.test/detail-1.jpg', source_section: 'detail' },
+            { id: 6, image_index: 5, image_type: 'detail_slice', sort_order: 3, url: 'https://source.test/slice-1.jpg', stored_url: 'https://stored.test/slice-1.jpg', source_section: null },
+          ],
+        };
+      }
+      if (sql.includes('from product_options')) return { rows: [] };
+      return { rows: [] };
+    },
+  };
+
+  const naver = await exportProductDraft(db, 8, 'naver');
+
+  assert.deepEqual(naver.mainImages, ['https://stored.test/main.jpg']);
+  assert.deepEqual(naver.detailImages, [
+    'https://stored.test/detail-1.jpg',
+    'https://stored.test/detail-2.jpg',
+  ]);
+  assert.deepEqual(naver.detailSliceImages, [
+    'https://stored.test/slice-1.jpg',
+    'https://stored.test/slice-2.jpg',
+  ]);
+  assert.ok(!naver.detailImages.includes('https://stored.test/other.jpg'));
+  assert.ok(!naver.detailSliceImages.includes('https://stored.test/other.jpg'));
 });
 
 test('upsertMarketResearch calculates and stores winner result', async () => {

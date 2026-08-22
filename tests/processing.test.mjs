@@ -4,7 +4,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import test from 'node:test';
 
-import { loadEnvConfig, loadPricingRules, loadProductNumbers } from '../src/config.mjs';
+import { isAutomationPaused, loadEnvConfig, loadPricingRules, loadProductNumbers } from '../src/config.mjs';
 import {
   buildDetailHtml,
   calculatePrices,
@@ -28,6 +28,22 @@ test('loadEnvConfig rejects legacy DOME_API_KEY without DOMEME_API_KEY', async (
   await writeFile(join(root, 'env'), 'DOME_API_KEY=legacy-key\n', 'utf8');
 
   await assert.rejects(() => loadEnvConfig(root), /DOMEME_API_KEY is missing/);
+});
+
+test('isAutomationPaused is false when AUTOMATION_PAUSED is missing or not "true"', async () => {
+  const root = await mkdtemp(join(tmpdir(), 'automoney-'));
+  await writeFile(join(root, 'env'), 'DOMEME_API_KEY=x\n', 'utf8');
+  assert.equal(await isAutomationPaused(root), false);
+
+  const root2 = await mkdtemp(join(tmpdir(), 'automoney-'));
+  await writeFile(join(root2, 'env'), 'AUTOMATION_PAUSED=false\n', 'utf8');
+  assert.equal(await isAutomationPaused(root2), false);
+});
+
+test('isAutomationPaused is true when .env sets AUTOMATION_PAUSED=true (case-insensitive)', async () => {
+  const root = await mkdtemp(join(tmpdir(), 'automoney-'));
+  await writeFile(join(root, 'env'), 'AUTOMATION_PAUSED=True\n', 'utf8');
+  assert.equal(await isAutomationPaused(root), true);
 });
 
 test('loadProductNumbers supports a product_no header and plain lines', async () => {
@@ -139,6 +155,43 @@ test('normalizeProduct supports official domeggook getItemView response structur
   ]);
 });
 
+test('normalizeProduct reads the domeme order-option-code from selectOpt.data (confirmed live shape, 2026-07-25), not just set[].opts[]', () => {
+  const normalized = normalizeProduct('40170547', {
+    domeggook: {
+      basis: { title: '옵션 상품' },
+      price: { supply: '9800' },
+      thumb: { original: 'https://example.test/original.jpg' },
+      selectOpt: JSON.stringify({
+        type: 'combination',
+        set: [{ name: '색상', opts: ['화이트+고정클립', '블랙+고정클립'], domPrice: ['0', '0'] }],
+        data: {
+          '00': { name: '화이트+고정클립', domPrice: '0', qty: '30' },
+          '01': { name: '블랙+고정클립', domPrice: '0', qty: '12' },
+        },
+      }),
+    },
+  });
+
+  assert.deepEqual(normalized.options, [
+    {
+      name: '색상',
+      value: '화이트+고정클립',
+      additionalPrice: 0,
+      optionCode: '00',
+      stockQuantity: 30,
+      raw: { name: '색상', value: '화이트+고정클립', additionalPrice: '0', optionCode: '00', stockQuantity: '30' },
+    },
+    {
+      name: '색상',
+      value: '블랙+고정클립',
+      additionalPrice: 0,
+      optionCode: '01',
+      stockQuantity: 12,
+      raw: { name: '색상', value: '블랙+고정클립', additionalPrice: '0', optionCode: '01', stockQuantity: '12' },
+    },
+  ]);
+});
+
 test('normalizeProduct deduplicates thumbnail variants and includes detail images', () => {
   const normalized = normalizeProduct('49168396', {
     domeggook: {
@@ -191,11 +244,36 @@ test('normalizeProduct parses tiered price and shipping strings', () => {
   ]);
 });
 
+test('normalizeProduct prefers domeggook tiered dome price over the misleading flat supply price', () => {
+  const normalized = normalizeProduct('56', {
+    domeggook: {
+      basis: { title: '무타공 레일선반' },
+      qty: { domeMoq: '2', domeUnit: 1, inventory: '95', supplyUnit: 1 },
+      price: { dome: '2+9950|5+9500', supply: 10800, labeledPrice: { useLabeledPrice: false } },
+      thumb: { original: 'https://example.test/a.jpg' },
+    },
+  });
+
+  assert.equal(normalized.rawPriceFieldName, 'price.dome');
+  assert.equal(normalized.rawPriceValue, '2+9950|5+9500');
+  assert.equal(normalized.unitCostPrice, 9950);
+  assert.equal(normalized.priceParseStatus, 'tiered_price');
+  assert.equal(normalized.minOrderQty, 2);
+  assert.equal(normalized.sellUnitType, 'bundle');
+  assert.equal(normalized.bundleQuantity, 2);
+  assert.equal(normalized.bundleCostPrice, 19900);
+  assert.equal(normalized.cost, 19900);
+
+  const filter = filterProduct(normalized);
+  assert.equal(filter.filterStatus, 'needs_review');
+  assert.ok(filter.reviewReasons.includes('bundle_candidate'));
+});
+
 test('filterProduct returns status and reasons for pass and blocked products', () => {
   const good = {
     name: '수납함',
-    cost: 20000,
-    shippingFee: 3000,
+    cost: 6000,
+    shippingFee: 1000,
     priceParseStatus: 'ok',
     images: ['https://example.test/a.jpg'],
     options: [],
@@ -221,12 +299,12 @@ test('filterProduct returns status and reasons for pass and blocked products', (
   assert.equal(filterProduct({ ...good, images: [] }).filterStatus, 'blocked');
 });
 
-test('filterProduct blocks parsing errors and low cost, reviews risk keywords and complex options', () => {
+test('filterProduct blocks parsing errors and out-of-range sale price, reviews risk keywords and complex options', () => {
   const base = {
     name: '일반 상품',
     categoryText: '생활용품',
-    cost: 20000,
-    shippingFee: 3000,
+    cost: 6000,
+    shippingFee: 1000,
     priceParseStatus: 'ok',
     images: ['https://example.test/a.jpg'],
     options: [],
@@ -236,9 +314,16 @@ test('filterProduct blocks parsing errors and low cost, reviews risk keywords an
   assert.deepEqual(filterProduct({ ...base, priceParseStatus: 'parsing_error' }).filterReasons, [
     'price_parsing_error',
   ]);
-  assert.deepEqual(filterProduct({ ...base, cost: 1500 }).filterReasons, [
-    'blocked_low_cost',
+  // cost 1000 + shipping 1000 -> estimated sale ~2,660원, below the 5,000원
+  // target floor and (at that size) also under the 1,500원 profit floor.
+  assert.deepEqual(filterProduct({ ...base, cost: 1000 }).filterReasons, [
+    'blocked_sale_price_out_of_target_range',
     'blocked_low_margin',
+  ]);
+  // cost 20000 + shipping 3000 -> estimated sale ~30,586원, above the
+  // 20,000원 target ceiling.
+  assert.deepEqual(filterProduct({ ...base, cost: 20000, shippingFee: 3000 }).filterReasons, [
+    'blocked_sale_price_out_of_target_range',
   ]);
   assert.deepEqual(filterProduct({ ...base, name: '릴랙시아 옴므 스킨 로션' }).filterReasons, [
     'risk_keyword:스킨',
@@ -247,18 +332,20 @@ test('filterProduct blocks parsing errors and low cost, reviews risk keywords an
   assert.deepEqual(filterProduct({ ...base, options: Array.from({ length: 11 }, () => ({})) }).filterReasons, [
     'needs_review_complex_options',
   ]);
+  // cost 3000 + shipping 1000 -> estimated sale ~5,320원 (still in the
+  // 5,000~20,000원 target band) but only ~1,320원 profit, under the 1,500원 floor.
   assert.deepEqual(
-    filterProduct({ ...base, cost: 5400, shippingFee: 2800, options: Array.from({ length: 11 }, () => ({})) })
+    filterProduct({ ...base, cost: 3000, shippingFee: 1000, options: Array.from({ length: 11 }, () => ({})) })
       .filterReasons,
     ['blocked_low_margin', 'needs_review_complex_options'],
   );
   assert.deepEqual(
-    filterProduct({ ...base, cost: 5400, shippingFee: 2800, options: Array.from({ length: 11 }, () => ({})) })
+    filterProduct({ ...base, cost: 3000, shippingFee: 1000, options: Array.from({ length: 11 }, () => ({})) })
       .blockReasons,
     ['blocked_low_margin'],
   );
   assert.deepEqual(
-    filterProduct({ ...base, cost: 5400, shippingFee: 2800, options: Array.from({ length: 11 }, () => ({})) })
+    filterProduct({ ...base, cost: 3000, shippingFee: 1000, options: Array.from({ length: 11 }, () => ({})) })
       .reviewReasons,
     ['needs_review_complex_options'],
   );
@@ -270,7 +357,7 @@ test('filterProduct blocks parsing errors and low cost, reviews risk keywords an
 test('normalizeProduct and filterProduct classify supplier market and order quantities', () => {
   const domeme = normalizeProduct(
     '49168396',
-    { productName: 'sample', supplyPrice: '10000', images: ['https://example.test/a.jpg'], minOrderQty: 1 },
+    { productName: 'sample', supplyPrice: '6000', images: ['https://example.test/a.jpg'], minOrderQty: 1 },
     { requestedMarket: 'dome' },
   );
   const domemeMoq = normalizeProduct(
@@ -281,28 +368,38 @@ test('normalizeProduct and filterProduct classify supplier market and order quan
   const domeggook = normalizeProduct('49168398', {
     productName: 'sample',
     market: 'domeggook',
-    supplyPrice: '10000',
+    supplyPrice: '6000',
     images: ['https://example.test/a.jpg'],
     minOrderQty: 1,
   });
   const unknown = normalizeProduct('49168399', {
     productName: 'sample',
-    supplyPrice: '10000',
+    supplyPrice: '6000',
     images: ['https://example.test/a.jpg'],
   });
 
   assert.equal(domeme.sourceMarket, 'domeme');
   assert.equal(domeme.minOrderQty, 1);
   assert.equal(filterProduct(domeme).filterStatus, 'pass');
-  assert.equal(domemeMoq.sellUnitType, 'single');
-  assert.equal(domemeMoq.bundleQuantity, 1);
+  assert.equal(domemeMoq.sellUnitType, 'bundle');
+  assert.equal(domemeMoq.bundleQuantity, 2);
   assert.equal(domemeMoq.unitCostPrice, 10000);
+  assert.equal(domemeMoq.bundleCostPrice, 20000);
   assert.equal(filterProduct(domemeMoq).filterStatus, 'needs_review');
-  assert.ok(filterProduct(domemeMoq).reviewReasons.includes('needs_review_min_order_qty'));
+  assert.ok(filterProduct(domemeMoq).reviewReasons.includes('bundle_candidate'));
   assert.equal(filterProduct(domeggook).filterStatus, 'needs_review');
   assert.ok(filterProduct(domeggook).reviewReasons.includes('needs_review_source_market'));
   assert.equal(filterProduct(unknown).filterStatus, 'needs_review');
   assert.ok(filterProduct(unknown).reviewReasons.includes('needs_review_source_market_unknown'));
+});
+
+test('normalizeProduct falls back to sourceMarket=domeggook for requestedMarket:"supply" the same way "dome" falls back to domeme', () => {
+  const viaSupply = normalizeProduct(
+    '49168400',
+    { productName: 'sample', supplyPrice: '6000', images: ['https://example.test/a.jpg'], minOrderQty: 1 },
+    { requestedMarket: 'supply' },
+  );
+  assert.equal(viaSupply.sourceMarket, 'domeggook');
 });
 
 test('low cost min order products become bundle candidates', () => {
@@ -336,6 +433,53 @@ test('low cost min order products become bundle candidates', () => {
   assert.equal(prices.coupang, 11240);
   assert.equal(filterProduct(largeBundle).filterStatus, 'blocked');
   assert.ok(filterProduct(largeBundle).blockReasons.includes('blocked_large_bundle'));
+});
+
+// automoney_complete_automation_implementation_plan.md 8.3: "MOQ 3 이상은
+// 원칙적으로 자동등록 후보에서 제외한다" -- this used to only block at >=5,
+// silently letting MOQ 3/4 bundles through as a mere review flag instead.
+test('MOQ 3 and MOQ 4 are blocked as large bundles, not just flagged for review', () => {
+  const moq3 = normalizeProduct(
+    '49168402',
+    { productName: 'hook', supplyPrice: '2500', images: ['https://example.test/a.jpg'], minOrderQty: 3 },
+    { requestedMarket: 'dome' },
+  );
+  const moq4 = normalizeProduct(
+    '49168403',
+    { productName: 'hook', supplyPrice: '2500', images: ['https://example.test/a.jpg'], minOrderQty: 4 },
+    { requestedMarket: 'dome' },
+  );
+  assert.equal(filterProduct(moq3).filterStatus, 'blocked');
+  assert.ok(filterProduct(moq3).blockReasons.includes('blocked_large_bundle'));
+  assert.equal(filterProduct(moq4).filterStatus, 'blocked');
+  assert.ok(filterProduct(moq4).blockReasons.includes('blocked_large_bundle'));
+});
+
+// Plan 8.2's 2-set conditions (총 공급원가 15,000원 이하, 예상 판매가 35,000원
+// 이하 권장) were never checked at all before -- a bundle only had to clear
+// the generic profit floor, so an expensive 2-set (like the real draft 24 in
+// this project's DB: bundleCostPrice 29,260) passed with no signal.
+test('an MOQ 2 bundle over the 15,000 cost / 35,000 sale-price ceilings is flagged for review, not silently passed', () => {
+  const cheapBundle = normalizeProduct(
+    '49168404',
+    { productName: 'hook', supplyPrice: '3000', images: ['https://example.test/a.jpg'], minOrderQty: 2 },
+    { requestedMarket: 'dome' },
+  );
+  const expensiveBundle = normalizeProduct(
+    '49168405',
+    { productName: 'shelf', supplyPrice: '14000', images: ['https://example.test/a.jpg'], minOrderQty: 2 },
+    { requestedMarket: 'dome' },
+  );
+  assert.equal(cheapBundle.bundleCostPrice, 6000);
+  const cheapFilter = filterProduct(cheapBundle);
+  assert.ok(!cheapFilter.reviewReasons.includes('needs_review_bundle_cost_over_15000'));
+  assert.ok(!cheapFilter.reviewReasons.includes('needs_review_bundle_sale_over_35000'));
+
+  assert.equal(expensiveBundle.bundleCostPrice, 28000);
+  const expensiveFilter = filterProduct(expensiveBundle);
+  assert.equal(expensiveFilter.filterStatus, 'needs_review'); // still review, not a hard block -- the plan phrases both ceilings as "권장" (recommended), not "금지"
+  assert.ok(expensiveFilter.reviewReasons.includes('needs_review_bundle_cost_over_15000'));
+  assert.ok(expensiveFilter.reviewReasons.includes('needs_review_bundle_sale_over_35000'));
 });
 
 test('calculatePrices uses rules for each marketplace', () => {

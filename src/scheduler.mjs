@@ -1,0 +1,209 @@
+import { join } from 'node:path';
+
+import { loadCoupangConfig, loadNaverCommerceConfig, loadEnvConfig, loadDomemePrivateConfig, loadPricingRules, loadTelegramConfig } from './config.mjs';
+import { sendCriticalAlert } from './telegram-notifier.mjs';
+import { notifyPendingPurchaseApprovals } from './telegram-approval-bot.mjs';
+import { notifyPendingCoupangSaleApprovals } from './coupang-telegram-approval.mjs';
+import { requestDailyCoupangKeywords } from './coupang-keyword-telegram.mjs';
+import { createTelegramCallbackRouter } from './telegram-callback-router.mjs';
+import { CoupangClient } from './coupang-client.mjs';
+import { NaverCommerceClient } from './naver-commerce-client.mjs';
+import { DomemeClient } from './domeme-client.mjs';
+import { DomemePrivateClient } from './domeme-private-client.mjs';
+import { runCoupangOrderCollection, runNaverOrderCollection } from './order-collector.mjs';
+import { runCoupangReturnRequestCollection } from './return-request-collector.mjs';
+import { runNaverClaimDetectionSweep } from './naver-claim-collector.mjs';
+import { runSupplierOrderValidationSweep } from './purchase-order-builder.mjs';
+import { runShipmentCollectionSweep } from './shipment-collector.mjs';
+import { runChannelDispatchSweep } from './channel-dispatch.mjs';
+import { runCancellationExceptionSweep } from './cancellation-handler.mjs';
+import { runSupplierMonitorAndSuspendSweep } from './channel-suspension.mjs';
+import { sendDailySummary } from './daily-summary.mjs';
+import { reconcileCoupangQueue } from './image-approval-registration.mjs';
+
+// automoney_complete_automation_implementation_plan.md section 18 스케줄
+// 기준. 상품 카테고리 발굴(3일)/스피드등록/상품개선(매일)은 admin-server.mjs's own
+// pre-existing 5-minute autoBatch tick already covers -- it checks
+// batch_schedule_state's next_run_at/processingNextRunAt itself, so nothing
+// here duplicates that. Everything below is Phase 6-10's own periodic
+// sweeps, none of which ran on any timer before this -- every verification
+// this whole session was a manual `npm run ...` invocation. Every sweep
+// this calls already has its own lock (order_collection_state,
+// batch_schedule_state, etc.) or is naturally idempotent, the same
+// "동시 실행 금지" guarantee the plan requires -- this just decides when to
+// call them, not how they stay safe under overlap.
+export const ORDER_TICK_INTERVAL_MS = 30 * 60 * 1000; // 쿠팡/네이버 주문 조회, 도매매 송장 조회: 30분마다
+export const DISPATCH_TICK_INTERVAL_MS = 90 * 60 * 1000; // 배송상태 동기화: 1~2시간마다
+export const SUPPLIER_MONITOR_TICK_INTERVAL_MS = 6 * 60 * 60 * 1000; // 공급처 가격·재고 감시: 하루 4회
+export const TELEGRAM_APPROVAL_POLL_INTERVAL_MS = 15 * 1000; // 텔레그램 인라인 버튼 응답: 즉시 반응이 필요해 다른 sweep보다 훨씬 짧게
+export const DAILY_SUMMARY_TICK_INTERVAL_MS = 24 * 60 * 60 * 1000; // 등록/이미지교체 현황 요약: 하루 1회 (2026-07-28 사용자 요청)
+export const COUPANG_KEYWORD_REQUEST_TICK_INTERVAL_MS = 24 * 60 * 60 * 1000; // 쿠팡 키워드 답장 요청: 하루 1회 (coupang-keyword-telegram.mjs)
+// 2026-08-21 사용자 요청: dailySummary처럼 "재시작 후 24시간마다"가 아니라 매일
+// 고정 시각(KST 오전 10시)에 오도록. 이 서버(HoAIServer)는 시스템 타임존 자체가
+// Asia/Seoul이므로 `Date`의 로컬 getHours/setHours가 그대로 KST -- 별도 타임존
+// 변환 불필요. 한국은 서머타임이 없어서 24시간 setInterval을 이 시각에 맞춰
+// 시작하기만 하면 이후로도 매번 정확히 10시에 울린다 (드리프트 없음).
+export const COUPANG_KEYWORD_REQUEST_HOUR_KST = 10;
+export const COUPANG_KEYWORD_REQUEST_MINUTE_KST = 0;
+
+// Ms until the next local occurrence of targetHour:targetMinute, rolling to
+// tomorrow if that time already passed today.
+export function msUntilNextDailyTime(targetHour, targetMinute, now = new Date()) {
+  const next = new Date(now);
+  next.setHours(targetHour, targetMinute, 0, 0);
+  if (next.getTime() <= now.getTime()) next.setDate(next.getDate() + 1);
+  return next.getTime() - now.getTime();
+}
+
+// Loaded once at startup, not per-tick -- same reasoning as admin-server.mjs's
+// own loadAutoBatchDeps: missing/invalid config disables scheduling
+// (logged, not fatal) rather than crashing the whole admin server.
+export async function loadSchedulerDeps(rootDir) {
+  // telegramConfig is intentionally not part of the Promise.all above --
+  // loadTelegramConfig never throws (returns null when unconfigured), and
+  // mixing it in would make a missing bot token indistinguishable from a
+  // real credential failure in the catch block below.
+  const telegramConfig = await loadTelegramConfig(rootDir);
+  try {
+    const [coupangConfig, naverConfig, envConfig, domemePrivateConfig, pricingRules] = await Promise.all([
+      loadCoupangConfig(rootDir),
+      loadNaverCommerceConfig(rootDir),
+      loadEnvConfig(rootDir),
+      loadDomemePrivateConfig(rootDir),
+      loadPricingRules(join(rootDir, 'pricing-rules.json')),
+    ]);
+    return {
+      coupangClient: new CoupangClient(coupangConfig),
+      naverClient: new NaverCommerceClient(naverConfig),
+      domemeClient: new DomemeClient({ apiKey: envConfig.domemeApiKey, endpoint: envConfig.domemeEndpoint }),
+      domemePrivateClient: new DomemePrivateClient(domemePrivateConfig),
+      pricingRules,
+      telegramConfig,
+    };
+  } catch (error) {
+    console.error(`scheduler.configUnavailable=${error.message}`);
+    return null;
+  }
+}
+
+export function tick(label, intervalMs, fn, { setIntervalImpl = setInterval, telegramConfig = null, sendCriticalAlertImpl = sendCriticalAlert, consecutiveFailuresBeforeAlert = 1 } = {}) {
+  // Guards against overlapping runs of this same tick -- without it, a
+  // single invocation that runs longer than intervalMs (e.g. a slow/timed-out
+  // Telegram getUpdates call) lets the next timer firing start a second,
+  // concurrent call before the first finishes. For telegramApprovalPoll that
+  // manifested live 2026-08-14 as Telegram's own "Conflict: terminated by
+  // other getUpdates request" -- two overlapping polls from this one process,
+  // not a second bot instance anywhere else.
+  const runNonOverlapping = createNonOverlappingRunner(fn);
+  // consecutiveFailuresBeforeAlert defaults to 1 (alert on the very first
+  // failure), unchanged for every tick except telegramApprovalPoll -- see
+  // startScheduledJobs. That one runs every 15s (TELEGRAM_APPROVAL_POLL_INTERVAL_MS),
+  // so an isolated Telegram getUpdates gateway blip (confirmed live
+  // 2026-08-18) self-heals on the very next poll and was firing a critical
+  // alert for something already resolved 15 seconds later. A higher
+  // threshold there still catches a genuinely persistent failure (bad token,
+  // Telegram down) within roughly threshold*intervalMs, just not every
+  // isolated hiccup.
+  let consecutiveFailures = 0;
+  const handle = setIntervalImpl(async () => {
+    try {
+      const result = await runNonOverlapping();
+      consecutiveFailures = 0;
+      console.log(`scheduler.${label}=${JSON.stringify(result)}`);
+    } catch (error) {
+      consecutiveFailures += 1;
+      console.error(`scheduler.${label}Error=${error.message}`);
+      if (consecutiveFailures < consecutiveFailuresBeforeAlert) return;
+      try {
+        await sendCriticalAlertImpl(telegramConfig, `scheduler.${label}`, error.message);
+      } catch (alertError) {
+        console.error(`scheduler.${label}AlertFailed=${alertError.message}`);
+      }
+    }
+  }, intervalMs);
+  handle.unref?.();
+  return handle;
+}
+
+export function createNonOverlappingRunner(fn) {
+  let running = false;
+  return async (...args) => {
+    if (running) return { skipped: true, reason: 'ALREADY_RUNNING' };
+    running = true;
+    try {
+      return await fn(...args);
+    } finally {
+      running = false;
+    }
+  };
+}
+
+// Returns the interval handles so the caller (admin-server.mjs) can clear
+// them on shutdown, the same lifecycle as the existing autoBatch tick.
+// Returns [] (no-op, nothing scheduled) when config is unavailable.
+export async function startScheduledJobs(db, rootDir, {
+  loadSchedulerDepsImpl = loadSchedulerDeps,
+  tickImpl = tick,
+  notifyPendingCoupangSaleApprovalsImpl = notifyPendingCoupangSaleApprovals,
+  reconcileCoupangQueueImpl = reconcileCoupangQueue,
+  createTelegramCallbackRouterImpl = createTelegramCallbackRouter,
+  requestDailyCoupangKeywordsImpl = requestDailyCoupangKeywords,
+  setTimeoutImpl = setTimeout,
+  nowImpl = () => new Date(),
+  coupangKeywordRequestDelayMsOverride = null,
+} = {}) {
+  const deps = await loadSchedulerDepsImpl(rootDir);
+  if (!deps) return [];
+  const { coupangClient, naverClient, domemeClient, domemePrivateClient, pricingRules = null, telegramConfig = null } = deps;
+  const opts = { telegramConfig };
+  const approvalPoller = createTelegramCallbackRouterImpl();
+  const reconcileRegistrations = createNonOverlappingRunner(
+    () => reconcileCoupangQueueImpl(db, { coupangClient }),
+  );
+
+  return [
+    tickImpl('coupangOrders', ORDER_TICK_INTERVAL_MS, () => runCoupangOrderCollection(db, coupangClient), opts),
+    tickImpl('naverOrders', ORDER_TICK_INTERVAL_MS, () => runNaverOrderCollection(db, naverClient), opts),
+    tickImpl('coupangReturns', ORDER_TICK_INTERVAL_MS, () => runCoupangReturnRequestCollection(db, coupangClient), opts),
+    tickImpl('naverClaims', ORDER_TICK_INTERVAL_MS, () => runNaverClaimDetectionSweep(db, naverClient), opts),
+    tickImpl('purchaseOrderValidation', ORDER_TICK_INTERVAL_MS, () => runSupplierOrderValidationSweep(db, domemeClient), opts),
+    tickImpl('shipments', ORDER_TICK_INTERVAL_MS, () => runShipmentCollectionSweep(db, domemePrivateClient), opts),
+    tickImpl('dispatch', DISPATCH_TICK_INTERVAL_MS, () => runChannelDispatchSweep(db, { coupangClient, naverClient }), opts),
+    tickImpl('cancellationExceptions', DISPATCH_TICK_INTERVAL_MS, () => runCancellationExceptionSweep(db), opts),
+    tickImpl('supplierMonitor', SUPPLIER_MONITOR_TICK_INTERVAL_MS, () => runSupplierMonitorAndSuspendSweep(db, domemeClient, { coupangClient, naverClient }), opts),
+    tickImpl('purchaseOrderTelegramNotify', ORDER_TICK_INTERVAL_MS, () => notifyPendingPurchaseApprovals(db, telegramConfig), opts),
+    tickImpl('coupangSaleApprovalTelegramNotify', ORDER_TICK_INTERVAL_MS, async () => {
+      let reconciliationError = null;
+      try { await reconcileRegistrations(); } catch (error) { reconciliationError = error; }
+      const notification = await notifyPendingCoupangSaleApprovalsImpl(db, telegramConfig, { coupangClient });
+      if (reconciliationError) throw reconciliationError;
+      return notification;
+    }, opts),
+    // consecutiveFailuresBeforeAlert: 4 -- roughly a minute of continuous
+    // failure at this tick's 15s interval before paging; see tick()'s own
+    // comment for why this one specifically needs it.
+    tickImpl(
+      'telegramApprovalPoll',
+      TELEGRAM_APPROVAL_POLL_INTERVAL_MS,
+      () => approvalPoller.pollOnce(
+        db,
+        { domemeClient: domemePrivateClient, coupangClient, domemeSearchClient: domemeClient, pricingRules, rootDir },
+        telegramConfig,
+      ),
+      { ...opts, consecutiveFailuresBeforeAlert: 4 },
+    ),
+    tickImpl('dailySummary', DAILY_SUMMARY_TICK_INTERVAL_MS, () => sendDailySummary(db, telegramConfig), opts),
+    // Fixed KST clock time (default 10:00), not "24h after this process
+    // started" like every other tick above -- waits until the next
+    // occurrence of that time before registering the recurring 24h tick, so
+    // every firing after the first lands on the same time (see
+    // msUntilNextDailyTime's comment: no DST in Korea, so no drift).
+    setTimeoutImpl(() => {
+      tickImpl('coupangKeywordRequest', COUPANG_KEYWORD_REQUEST_TICK_INTERVAL_MS, () => requestDailyCoupangKeywordsImpl(telegramConfig), opts);
+    }, coupangKeywordRequestDelayMsOverride ?? msUntilNextDailyTime(COUPANG_KEYWORD_REQUEST_HOUR_KST, COUPANG_KEYWORD_REQUEST_MINUTE_KST, nowImpl())),
+  ];
+}
+
+export function stopScheduledJobs(handles) {
+  for (const handle of handles || []) clearInterval(handle);
+}

@@ -1,0 +1,13 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "title": "AutomoneyReturnDuplicateRiskScore",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["returnRiskScore", "returnRiskReason", "duplicateScore", "duplicateReason"],
+  "properties": {
+    "returnRiskScore": { "type": "integer", "minimum": 0, "maximum": 100 },
+    "returnRiskReason": { "type": "string" },
+    "duplicateScore": { "type": ["integer", "null"], "minimum": 0, "maximum": 100 },
+    "duplicateReason": { "type": ["string", "null"] }
+  }
+}

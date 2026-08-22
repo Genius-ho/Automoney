@@ -1,0 +1,1 @@
+import {createProvider} from './base-provider.mjs'; export default createProvider({id:'openai',displayName:'OpenAI',capabilities:['text_generation','vision_analysis','image_generation','image_edit']});
