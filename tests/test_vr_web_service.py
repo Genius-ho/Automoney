@@ -497,6 +497,76 @@ class StrategyIsolationTests(unittest.TestCase):
             tempdir.cleanup()
 
 
+class SyncDetectsExternallyCancelledOrdersTests(unittest.TestCase):
+    """Regression: a conditional order DELETE-cancelled outside the normal
+    cycle-transition path (e.g. a manual/one-off cancel) disappears from
+    BOTH the OPEN and CLOSED broker lists entirely (confirmed real
+    behavior, Phase 14) -- vr_sync_orders used to leave such an order
+    stuck at status="OPEN" locally forever, since it only ever checked the
+    two lists for a match and did nothing when neither had it. That stale
+    OPEN status then silently blocked can_switch_strategy indefinitely."""
+
+    def _init(self, broker):
+        service, tempdir = _make_service(broker)
+        broker.holdings["TQQQ"] = ("100", "105")
+        broker.prices["TQQQ"] = "110"
+        service.vr_initialize("TQQQ", Decimal("2000"), Decimal("10"), Decimal("15"))
+        return service, tempdir
+
+    def test_order_missing_from_both_lists_is_marked_cancelled(self):
+        broker = IntegratedFakeBroker(mode="LIVE")
+        service, tempdir = self._init(broker)
+        try:
+            state = service.vr_store.load("TQQQ")
+            order = state.conditional_orders[0]
+            self.assertEqual(order.status, "OPEN")
+            # Simulate an external DELETE (bypassing cancel_cycle_orders) --
+            # the fake broker's dict backs both OPEN and CLOSED queries, so
+            # deleting it here reproduces "vanished from both lists".
+            del broker.conditional_orders[order.conditional_order_id]
+
+            service.vr_sync_orders("TQQQ")
+
+            updated = next(o for o in service.vr_store.load("TQQQ").conditional_orders if o.client_order_id == order.client_order_id)
+            self.assertEqual(updated.status, "CANCELLED")
+        finally:
+            tempdir.cleanup()
+
+    def test_can_switch_strategy_unblocks_after_sync_detects_the_cancellation(self):
+        broker = IntegratedFakeBroker(mode="LIVE")
+        service, tempdir = self._init(broker)
+        try:
+            state = service.vr_store.load("TQQQ")
+            for order in state.conditional_orders:
+                del broker.conditional_orders[order.conditional_order_id]
+
+            ok_before, _ = service.can_switch_strategy("TQQQ")
+            self.assertFalse(ok_before)
+
+            service.vr_sync_orders("TQQQ")
+
+            ok_after, reason_after = service.can_switch_strategy("TQQQ")
+            self.assertTrue(ok_after, reason_after)
+        finally:
+            tempdir.cleanup()
+
+    def test_sync_is_idempotent_when_order_already_missing(self):
+        broker = IntegratedFakeBroker(mode="LIVE")
+        service, tempdir = self._init(broker)
+        try:
+            state = service.vr_store.load("TQQQ")
+            order = state.conditional_orders[0]
+            del broker.conditional_orders[order.conditional_order_id]
+
+            service.vr_sync_orders("TQQQ")
+            service.vr_sync_orders("TQQQ")
+
+            updated = next(o for o in service.vr_store.load("TQQQ").conditional_orders if o.client_order_id == order.client_order_id)
+            self.assertEqual(updated.status, "CANCELLED")
+        finally:
+            tempdir.cleanup()
+
+
 class ExactlyOnceFillTests(unittest.TestCase):
     def _init(self, broker):
         service, tempdir = _make_service(broker)

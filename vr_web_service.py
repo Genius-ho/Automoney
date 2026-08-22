@@ -156,7 +156,18 @@ class VRWebServiceMixin:
                     continue
                 row = conditional_by_id.get(order.conditional_order_id)
                 if row is None:
-                    updated_orders.append(order)
+                    # Confirmed real behavior (Phase 14): a DELETE-cancelled
+                    # conditional order disappears from BOTH the OPEN and
+                    # CLOSED lists entirely -- it never lingers in CLOSED.
+                    # So a locally-OPEN order missing from both here means
+                    # it was cancelled outside the normal cycle-transition
+                    # path (e.g. a manual DELETE) -- the same "gone means
+                    # confirmed" interpretation cancel_and_confirm already
+                    # uses for a 404. Mark it CANCELLED rather than leaving
+                    # it stale forever (which used to silently block
+                    # can_switch_strategy indefinitely).
+                    updated_orders.append(replace(order, status="CANCELLED"))
+                    changed = True
                     continue
                 # VR only ever creates SINGLE conditional orders (one leg,
                 # `first`); OCO/OTO's `second` is a real API feature this
