@@ -20,7 +20,7 @@
 // 하든 GUI로 하든 같은 결과).
 import { analyzeProductLinks } from './product-link-analysis.mjs';
 import { dedupeKeywords } from './coupang-keyword-extractor.mjs';
-import { generateManualImportImagesAndNotify, importDraftFromSupplierUrl, parseSupplierProductNo } from './manual-url-import.mjs';
+import { importDraftFromSupplierUrl, parseSupplierProductNo } from './manual-url-import.mjs';
 import { sourceCandidatesFromKeywords } from './coupang-keyword-sourcing.mjs';
 import {
   answerCallbackQuery,
@@ -151,10 +151,12 @@ export async function handleCoupangKeywordMessage(db, domemeClient, pricingRules
 
 // Runs after a tap on the "📥 등록" button productLinkImportKeyboard attaches
 // to a link-analysis reply -- commits that one product to a draft via the
-// exact same importDraftFromSupplierUrl + generateManualImportImagesAndNotify
-// path the "URL 등록" GUI screen's POST /api/product-drafts/import-by-url
-// route uses, so a Telegram tap and a GUI paste both end up in the same
-// place. Answering/editing failures are swallowed (not rethrown) the same
+// exact same importDraftFromSupplierUrl path the "URL 등록"/"점수" GUI
+// screens' POST /api/product-drafts/import-by-url route uses, so a Telegram
+// tap and a GUI click both end up in the same place. 2026-08-22 사용자 요청:
+// 등록이 이미지 생성을 자동으로 시작하지 않는다 -- GUI "이미지 개선" 탭에서
+// 사람이 명시적으로 시작해야 한다 (admin-server.mjs의 그 결정과 일관성 유지).
+// Answering/editing failures are swallowed (not rethrown) the same
 // way coupang-telegram-approval.mjs/telegram-approval-bot.mjs already do --
 // by the time Telegram's response window can close, the draft itself may
 // already be genuinely created, so none of these notification steps may
@@ -184,7 +186,6 @@ async function presentImportResult(telegramConfig, query, resultText, {
 
 export async function handleProductLinkImportCallback(db, domemeClient, pricingRules, rootDir, telegramConfig, query, {
   importDraftFromSupplierUrlImpl = importDraftFromSupplierUrl,
-  generateManualImportImagesAndNotifyImpl = generateManualImportImagesAndNotify,
   answerCallbackQueryImpl = answerCallbackQuery,
   editTelegramMessageTextImpl = editTelegramMessageText,
   sendTelegramMessageImpl = sendTelegramMessage,
@@ -198,16 +199,11 @@ export async function handleProductLinkImportCallback(db, domemeClient, pricingR
   try {
     const imported = await importDraftFromSupplierUrlImpl(domemeClient, productNo, pricingRules, { db });
     draftId = imported.draftId;
-    resultText = `✅ 초안 #${draftId} 등록됨 (필터 상태: ${imported.filterStatus}) -- 이미지 1차 생성 중, 완료되면 다시 알려드려요.`;
+    resultText = `✅ 초안 #${draftId} 등록됨 (필터 상태: ${imported.filterStatus}) -- 관리자 화면 "이미지 개선" 탭에서 이미지 생성을 시작해주세요.`;
   } catch (error) {
     resultText = `⚠️ 등록 실패: ${error.message}`;
   }
   await presentImportResult(telegramConfig, query, resultText, presentation);
 
-  if (draftId != null) {
-    generateManualImportImagesAndNotifyImpl(db, rootDir, draftId).catch((error) => {
-      console.error(`coupangKeywordTelegram.imageGenerationFailed=${error.message}`);
-    });
-  }
   return { handled: true, action: 'import_link', productNo, draftId };
 }

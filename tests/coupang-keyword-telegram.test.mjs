@@ -177,7 +177,7 @@ test('handleCoupangKeywordMessage routes an all-links message to link analysis i
   assert.deepEqual(result.productNos, ['49168396', '49168397']);
 });
 
-test('handleCoupangKeywordMessage passes db and rootDir through to analyzeProductLinks (so its AI scoring can load Claude CLI config and fetch existing draft titles)', async () => {
+test('handleCoupangKeywordMessage passes db and rootDir through to analyzeProductLinks (so its AI scoring can load Codex config and fetch existing draft titles)', async () => {
   let analyzeOpts = null;
   await handleCoupangKeywordMessage(
     { name: 'db' },
@@ -235,8 +235,7 @@ test('handleProductLinkImportCallback ignores callback data with an unrecognized
   assert.deepEqual(result, { handled: false });
 });
 
-test('handleProductLinkImportCallback imports the tapped product, edits the message, and kicks off image generation in the background', async () => {
-  const generateCalls = [];
+test('handleProductLinkImportCallback imports the tapped product and edits the message, without triggering image generation (that is now a separate explicit "이미지 개선" tab step)', async () => {
   let edited = null;
   let answered = null;
   const result = await handleProductLinkImportCallback(
@@ -252,9 +251,6 @@ test('handleProductLinkImportCallback imports the tapped product, edits the mess
         assert.equal(opts.db.name, 'db');
         return { draftId: 77, filterStatus: 'pass', sourceMarket: 'domeggook' };
       },
-      generateManualImportImagesAndNotifyImpl: async (db, rootDir, draftId) => {
-        generateCalls.push({ db, rootDir, draftId });
-      },
       answerCallbackQueryImpl: async (config, id, options) => { answered = { id, options }; },
       editTelegramMessageTextImpl: async (config, messageId, text) => { edited = { messageId, text }; },
       sendTelegramMessageImpl: async () => { throw new Error('must not be called when edit succeeds'); },
@@ -264,14 +260,12 @@ test('handleProductLinkImportCallback imports the tapped product, edits the mess
   assert.deepEqual(result, { handled: true, action: 'import_link', productNo: '49168396', draftId: 77 });
   assert.equal(answered.id, 'q1');
   assert.match(answered.options.text, /초안 #77 등록됨/);
+  assert.match(answered.options.text, /이미지 개선.*탭/);
   assert.equal(edited.messageId, 5);
   assert.match(edited.text, /초안 #77 등록됨/);
-  // Image generation is fire-and-forget -- give its microtask a tick to run.
-  await new Promise((resolve) => setImmediate(resolve));
-  assert.deepEqual(generateCalls, [{ db: { name: 'db' }, rootDir: '/root', draftId: 77 }]);
 });
 
-test('handleProductLinkImportCallback reports an import failure without throwing or triggering image generation', async () => {
+test('handleProductLinkImportCallback reports an import failure without throwing', async () => {
   const result = await handleProductLinkImportCallback(
     {},
     {},
@@ -281,7 +275,6 @@ test('handleProductLinkImportCallback reports an import failure without throwing
     { id: 'q2', data: 'import_link:1', message: { message_id: 6, text: 'x' } },
     {
       importDraftFromSupplierUrlImpl: async () => { throw new Error('상품을 찾을 수 없습니다'); },
-      generateManualImportImagesAndNotifyImpl: async () => { throw new Error('must not be called on failure'); },
       answerCallbackQueryImpl: async () => {},
       editTelegramMessageTextImpl: async () => {},
       sendTelegramMessageImpl: async () => {},

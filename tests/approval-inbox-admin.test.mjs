@@ -105,7 +105,7 @@ test('admin HTML includes the three active tabs (링크 입력/점수/이미지 
   assert.match(html, /function loadScoreView\(\)/);
   assert.match(html, /function loadImageImprovementView\(\)/);
   assert.match(html, /api\('\/api\/product-drafts\/analyze-links',\{method:'POST',body:JSON\.stringify\(\{text:value,keyword:lastSearchedKeyword\}\)\}\)/);
-  assert.match(html, /api\('\/api\/product-drafts\?status=awaiting_image_approval&pageSize=50'\)/);
+  assert.match(html, /api\('\/api\/product-drafts\?pageSize=100'\)/);
 });
 
 test('admin HTML remembers the last searched keyword and sends it along with the 링크 입력 analyze request (so history can record which keyword found a link)', () => {
@@ -135,7 +135,7 @@ test('admin HTML puts a 산출 과정 toggle on the 점수 table that renders th
   assert.match(html, /startsWith\('\[AI\]'\)/);
 });
 
-test('admin HTML puts a per-row 등록 button on the 점수 table that imports that product via import-by-url', () => {
+test('admin HTML puts a per-row 등록 button on the 점수 table that imports that product via import-by-url, without claiming image generation starts automatically', () => {
   const html = adminHtml();
 
   assert.match(html, /<th>등록<\/th>/);
@@ -143,7 +143,42 @@ test('admin HTML puts a per-row 등록 button on the 점수 table that imports t
   assert.match(html, /data-score-import-result="'\+attr\(r\.productNo\)\+'"/);
   assert.match(html, /querySelectorAll\('\[data-score-import-product-no\]'\)\.forEach\(button=>button\.onclick=async\(\)=>\{/);
   assert.match(html, /api\('\/api\/product-drafts\/import-by-url',\{method:'POST',body:JSON\.stringify\(\{url:productNo\}\)\}\)/);
-  assert.match(html, /등록됨, 이미지 생성 중\.\.\./);
+  // Regression: registering used to say "이미지 생성 중..." even though
+  // nothing had actually started yet (import-by-url no longer auto-triggers
+  // generation) -- it must now point to the explicit "이미지 개선" step.
+  assert.match(html, /등록됨 -- "이미지 개선" 탭에서 이미지 생성을 시작하세요/);
+  assert.doesNotMatch(html, /등록됨, 이미지 생성 중/);
+});
+
+test('admin HTML no longer claims import-by-url ("URL 등록" tab / 점수 tab route) auto-starts image generation', () => {
+  const html = adminHtml();
+
+  assert.doesNotMatch(html, /이미지 1차 생성은 백그라운드에서 진행 중이며/);
+  assert.doesNotMatch(html, /대표\/상세 이미지 1차 생성이 백그라운드로 시작됩니다/);
+  assert.match(html, /"이미지 개선" 탭에서 이미지 생성을 시작하세요/);
+});
+
+test('admin HTML title/header say 오토쿠팡봇, not Automoney', () => {
+  const html = adminHtml();
+
+  assert.match(html, /<title>오토쿠팡봇<\/title>/);
+  assert.match(html, /<h1>오토쿠팡봇<\/h1>/);
+  assert.doesNotMatch(html, /Automoney/);
+});
+
+test('admin HTML\'s 이미지 개선 tab lists non-approved drafts (not the invalid status=awaiting_image_approval filter) and re-checks generatedAiImageCount per item via debug-export', () => {
+  const html = adminHtml();
+
+  // Regression: product_drafts.status can only be draft/needs_review/blocked/
+  // approved -- 'awaiting_image_approval' is a different table's (processing_queue)
+  // status and always threw "Invalid status" when queried here.
+  assert.doesNotMatch(html, /status=awaiting_image_approval/);
+  assert.match(html, /api\('\/api\/product-drafts\?pageSize=100'\)/);
+  assert.match(html, /candidates=\(data\.drafts\|\|\[\]\)\.filter\(d=>d\.status!=='approved'\)/);
+  assert.match(html, /api\('\/api\/product-drafts\/'\+d\.id\+'\/debug-export'\)/);
+  assert.match(html, /generatedAiImageCount: debugExport\?\.generatedAiImageCount\|\|0/);
+  assert.match(html, /data-generate-images-draft-id="'\+d\.id\+'"/);
+  assert.match(html, /api\('\/api\/product-drafts\/'\+draftId\+'\/generate-images',\{method:'POST',body:'\{\}'\}\)/);
 });
 
 test('admin HTML includes a 사용자 키워드 tab wired to the keyword-queue API', () => {

@@ -1119,10 +1119,12 @@ async function handleRequest({ request, response, db, aiSecrets, rootDir }) {
   }
 
   // "URL로 상품 등록" -- 사람이 도매매/도매꾹에서 직접 고른 상품 URL(또는 상품번호)을
-  // 붙여넣으면 그 상품 하나만 초안으로 만들고, 대표/상세 이미지 1차 생성까지 백그라운드로
-  // 돌린 뒤 텔레그램으로 완료 여부를 알린다. HTTP 응답은 초안 생성 직후 바로 돌려주고
-  // (Codex 이미지 생성은 수 분 걸릴 수 있어 요청을 붙잡아두지 않는다), 이후 검수/승인/
-  // 등록은 기존 관리자 화면(승인함, draft 상세 탭)을 그대로 사용한다.
+  // 붙여넣으면 그 상품 하나만 초안으로 만든다. 2026-08-22 사용자 요청: 등록 시점에
+  // 이미지 생성을 자동으로 시작하지 않는다 -- 등록(초안 생성)과 이미지 생성을 분리해서,
+  // "이미지 개선" 탭에서 사람이 명시적으로 눌러야 시작되게 한다 (예전엔 자동 시작 +
+  // 화면에 "생성 중..."을 띄웠는데, 그 문구가 탭을 옮기면 사라지고 실제 완료 여부와도
+  // 동기화가 안 돼서 "화면은 멈춘 것 같은데 텔레그램은 완료라고 뜨는" 혼란이 있었음).
+  // 이후 검수/승인/등록은 기존 관리자 화면(승인함, draft 상세 탭)을 그대로 사용한다.
   if (url.pathname === '/api/product-drafts/import-by-url' && request.method === 'POST') {
     try {
       const body = await readJson(request);
@@ -1132,13 +1134,25 @@ async function handleRequest({ request, response, db, aiSecrets, rootDir }) {
       ]);
       const domemeClient = new DomemeClient({ apiKey: envConfig.domemeApiKey, endpoint: envConfig.domemeEndpoint });
       const imported = await importDraftFromSupplierUrl(domemeClient, body.url, pricingRules, { db });
-      generateManualImportImagesAndNotify(db, rootDir, imported.draftId).catch((error) => {
-        console.error(`manualUrlImport.processError=${error.message}`);
-      });
       sendJson(response, 201, imported);
     } catch (error) {
       sendJson(response, error.code === 'INVALID_INPUT' ? 400 : 500, { error: error.message, code: error.code });
     }
+    return;
+  }
+
+  // "이미지 개선" 탭의 "이미지 생성 시작" 버튼 -- import-by-url이 더 이상 자동으로
+  // 하지 않는 대표/상세 이미지 1차 생성을 여기서 명시적으로 시작한다. HTTP 응답은
+  // 즉시 돌려주고(Codex 생성은 수 분 걸림), 완료되면 기존과 동일하게 텔레그램으로
+  // 알린다 -- "이미지 개선" 탭을 다시 열면 실제 생성 여부를 DB에서 그때그때 다시
+  // 조회하므로, 화면을 옮겨도 상태가 사라지거나 어긋나지 않는다.
+  const generateImagesMatch = url.pathname.match(/^\/api\/product-drafts\/(\d+)\/generate-images$/);
+  if (generateImagesMatch && request.method === 'POST') {
+    const draftId = Number(generateImagesMatch[1]);
+    generateManualImportImagesAndNotify(db, rootDir, draftId).catch((error) => {
+      console.error(`manualUrlImport.processError=${error.message}`);
+    });
+    sendJson(response, 202, { draftId, status: 'started' });
     return;
   }
 
@@ -1373,7 +1387,7 @@ export function adminHtml() {
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
-  <title>Automoney Admin</title>
+  <title>오토쿠팡봇</title>
   <style>
     body{margin:0;background:#f5f6f8;color:#1f2933;font-family:Arial,sans-serif}
     header{background:#fff;border-bottom:1px solid #d8dee7;padding:14px 18px;display:flex;gap:14px;align-items:center}
@@ -1431,7 +1445,7 @@ export function adminHtml() {
   </style>
 </head>
 <body>
-  <header><h1>Automoney Admin</h1><span class="muted">Product draft review</span><button id="aiSettingsButton" type="button">AI API 설정</button></header>
+  <header><h1>오토쿠팡봇</h1><span class="muted">Product draft review</span><button id="aiSettingsButton" type="button">AI API 설정</button></header>
   <main class="singleView">
     <section class="list">
       <div class="viewNav">
@@ -1775,7 +1789,7 @@ export function adminHtml() {
       const el=document.getElementById('specialView');
       el.innerHTML='<div style="padding:12px">'
         +'<div class="section"><h3>URL로 상품 등록</h3>'
-        +'<p class="muted">도매매/도매꾹에서 직접 고른 상품의 URL(또는 상품번호)을 붙여넣으면 초안을 만들고, 대표/상세 이미지 1차 생성까지 자동으로 진행한 뒤 텔레그램으로 완료 여부를 알려줍니다. 그 다음 검수·승인·등록은 승인함/초안 상세 화면에서 그대로 하면 됩니다.</p>'
+        +'<p class="muted">도매매/도매꾹에서 직접 고른 상품의 URL(또는 상품번호)을 붙여넣으면 초안을 만듭니다. 이미지 생성은 자동으로 시작되지 않으니 "이미지 개선" 탭에서 직접 시작해주세요. 그 다음 검수·승인·등록은 승인함/초안 상세 화면에서 그대로 하면 됩니다.</p>'
         +'<input id="urlImportInput" style="width:100%;max-width:600px" placeholder="https://domeggook.com/main/item/itemView.php?no=... 또는 상품번호">'
         +'<p><button id="urlImportSubmitButton" type="button">등록 시작</button></p>'
         +'<div id="urlImportResult" class="muted"></div>'
@@ -1789,7 +1803,7 @@ export function adminHtml() {
         resultEl.textContent='초안 생성 중...';
         try{
           const data=await api('/api/product-drafts/import-by-url',{method:'POST',body:JSON.stringify({url:value})});
-          resultEl.innerHTML='초안 #'+data.draftId+' 생성 완료 (필터 상태: '+escapeHtml(data.filterStatus)+') -- 이미지 1차 생성은 백그라운드에서 진행 중이며 완료되면 텔레그램으로 알려줍니다. <a href="/admin?draftId='+data.draftId+'">지금 열어보기</a>';
+          resultEl.innerHTML='초안 #'+data.draftId+' 생성 완료 (필터 상태: '+escapeHtml(data.filterStatus)+') -- "이미지 개선" 탭에서 이미지 생성을 시작하세요. <a href="/admin?draftId='+data.draftId+'">지금 열어보기</a>';
           input.value='';
         }catch(error){
           resultEl.textContent='등록 실패: '+error.message;
@@ -1866,7 +1880,7 @@ export function adminHtml() {
         el.innerHTML='<div style="padding:12px"><p class="muted">아직 분석한 링크가 없습니다. "링크 입력" 탭에서 먼저 분석해주세요.</p></div>';
         return;
       }
-      el.innerHTML='<div style="padding:12px"><div class="section"><h3>점수 (높은 순)</h3><p class="muted">마음에 드는 상품의 "등록" 버튼을 누르면 초안이 만들어지고 대표/상세 이미지 1차 생성이 백그라운드로 시작됩니다 -- 완료되면 "이미지 개선" 탭에서 확인/재생성/직접 업로드할 수 있습니다. "산출 과정"을 누르면 9개 항목별 점수와, AI가 실제로 판단한 항목(이미지품질/반품리스크/중복위험, "[AI]" 표시)을 볼 수 있습니다.</p><table><thead><tr><th>점수</th><th>상품명</th><th>마켓</th><th>필터상태</th><th>판매가</th><th>예상마진</th><th>상품번호</th><th>등록</th><th>산출 과정</th></tr></thead><tbody>'
+      el.innerHTML='<div style="padding:12px"><div class="section"><h3>점수 (높은 순)</h3><p class="muted">마음에 드는 상품의 "등록" 버튼을 누르면 초안이 만들어집니다 (이미지 생성은 자동으로 시작되지 않음) -- "이미지 개선" 탭에서 이미지 생성을 직접 시작하세요. "산출 과정"을 누르면 9개 항목별 점수와, AI가 실제로 판단한 항목(이미지품질/반품리스크/중복위험, "[AI]" 표시)을 볼 수 있습니다.</p><table><thead><tr><th>점수</th><th>상품명</th><th>마켓</th><th>필터상태</th><th>판매가</th><th>예상마진</th><th>상품번호</th><th>등록</th><th>산출 과정</th></tr></thead><tbody>'
         +lastLinkAnalysisResults.map(r=>r.status==='error'
           ?'<tr><td colspan="8">⚠️ 조회 실패: '+escapeHtml(r.error||'')+'</td><td>'+escapeHtml(r.productNo)+'</td></tr>'
           :'<tr><td>'+r.score+'</td><td>'+escapeHtml(r.name||'-')+'</td><td>'+escapeHtml(r.sourceMarket||'-')+'</td><td>'+escapeHtml(r.filterStatus||'-')+'</td><td>'+money(r.coupangSalePrice)+'</td><td>'+money(r.coupangExpectedProfit)+'</td><td>'+escapeHtml(r.productNo)+'</td><td><button type="button" data-score-import-product-no="'+attr(r.productNo)+'">등록</button><span class="muted" data-score-import-result="'+attr(r.productNo)+'"></span></td><td><button type="button" data-score-detail-toggle="'+attr(r.productNo)+'">산출 과정</button></td></tr>'
@@ -1884,25 +1898,58 @@ export function adminHtml() {
         resultEl.textContent=' 등록 중...';
         try{
           const data=await api('/api/product-drafts/import-by-url',{method:'POST',body:JSON.stringify({url:productNo})});
-          resultEl.innerHTML=' ✅ 초안 <a href="/admin?draftId='+data.draftId+'">#'+data.draftId+'</a> 등록됨, 이미지 생성 중...';
+          resultEl.innerHTML=' ✅ 초안 <a href="/admin?draftId='+data.draftId+'">#'+data.draftId+'</a> 등록됨 -- "이미지 개선" 탭에서 이미지 생성을 시작하세요.';
         }catch(error){
           button.disabled=false;
           resultEl.textContent=' 등록 실패: '+error.message;
         }
       });
     }
-    function loadImageImprovementView(){
+    // 2026-08-22 사용자 요청: 예전엔 status='awaiting_image_approval'로 조회했는데
+    // (product_drafts.status는 draft/needs_review/blocked/approved만 가능 -- 그
+    // 값은 애초에 나올 수 없어서 항상 "불러오기 실패: Invalid status" 였음, 그리고
+    // 이 값은 자동배치가 쓰는 별개의 processing_queue 테이블 상태라 수동 등록
+    // 흐름과 무관했다). 등록(초안 생성)과 이미지 생성이 이제 분리됐으므로, 여기서
+    // 승인 전 초안을 전부 보여주고 각 항목마다 실제 생성 여부를 debug-export로
+    // 다시 조회해서 "이미지 생성 시작" 또는 "확인/재생성"을 보여준다 -- 탭을
+    // 옮겼다 와도 매번 서버 상태를 새로 읽으므로 화면과 실제 상태가 어긋나지 않는다.
+    async function loadImageImprovementView(){
       const el=document.getElementById('specialView');
       el.innerHTML='<div style="padding:12px"><p class="muted">불러오는 중...</p></div>';
-      api('/api/product-drafts?status=awaiting_image_approval&pageSize=50').then(data=>{
-        const drafts=data.drafts||[];
-        el.innerHTML='<div style="padding:12px"><div class="section"><h3>이미지 개선 (이미지 승인 대기 중인 초안)</h3>'
-          +'<p class="muted">아래 항목을 열면 기존 초안 상세화면의 "이미지" 탭에서 대표/상세 이미지를 다시 생성하거나 직접 만든 이미지를 업로드해 교체할 수 있습니다.</p>'
-          +(drafts.length?'<table><thead><tr><th>상품</th><th>상태</th><th>바로가기</th></tr></thead><tbody>'
-            +drafts.map(d=>'<tr><td>'+escapeHtml(d.sellingTitle||d.originalProductName||d.supplierProductNo)+'</td><td>'+escapeHtml(d.status)+'</td><td><a href="/admin?draftId='+d.id+'">초안 #'+d.id+' 열기</a></td></tr>').join('')
-            +'</tbody></table>':'<p class="muted">이미지 승인 대기 중인 초안이 없습니다.</p>')
+      try{
+        const data=await api('/api/product-drafts?pageSize=100');
+        const candidates=(data.drafts||[]).filter(d=>d.status!=='approved');
+        const withState=await Promise.all(candidates.map(async d=>{
+          const debugExport=await api('/api/product-drafts/'+d.id+'/debug-export').catch(()=>null);
+          return {...d, generatedAiImageCount: debugExport?.generatedAiImageCount||0};
+        }));
+        el.innerHTML='<div style="padding:12px"><div class="section"><h3>이미지 개선 (등록된 초안)</h3>'
+          +'<p class="muted">"점수"/"URL 등록" 탭이나 텔레그램으로 등록한 상품이 여기 나옵니다. 아직 이미지가 없으면 "이미지 생성 시작"을 눌러야 대표/상세 이미지가 만들어집니다 (완료되면 텔레그램으로도 알려드려요). 이미 생성된 건 열어서 재생성하거나 직접 업로드로 교체할 수 있습니다.</p>'
+          +(withState.length?'<table><thead><tr><th>상품</th><th>상태</th><th>이미지</th><th>작업</th></tr></thead><tbody>'
+            +withState.map(d=>'<tr><td>'+escapeHtml(d.sellingTitle||d.originalProductName||d.supplierProductNo)+'</td><td>'+escapeHtml(d.status)+'</td><td>'+(d.generatedAiImageCount>0?'생성됨 ('+d.generatedAiImageCount+'개)':'없음')+'</td><td>'
+              +(d.generatedAiImageCount>0
+                ?'<a href="/admin?draftId='+d.id+'">열어서 확인/재생성</a>'
+                :'<button type="button" data-generate-images-draft-id="'+d.id+'">이미지 생성 시작</button>')
+              +'<span class="muted" data-generate-images-result="'+d.id+'"></span>'
+              +'</td></tr>').join('')
+            +'</tbody></table>':'<p class="muted">등록된 초안이 없습니다. "점수" 탭에서 상품을 등록해보세요.</p>')
           +'</div></div>';
-      }).catch(error=>{el.innerHTML='<div style="padding:12px"><p class="muted">불러오기 실패: '+escapeHtml(error.message)+'</p></div>';});
+        el.querySelectorAll('[data-generate-images-draft-id]').forEach(button=>button.onclick=async()=>{
+          const draftId=button.dataset.generateImagesDraftId;
+          const resultEl=el.querySelector('[data-generate-images-result="'+CSS.escape(draftId)+'"]');
+          button.disabled=true;
+          resultEl.textContent=' 요청 중...';
+          try{
+            await api('/api/product-drafts/'+draftId+'/generate-images',{method:'POST',body:'{}'});
+            resultEl.textContent=' ✅ 이미지 생성 시작됨 -- 완료되면 텔레그램으로 알려드려요 (이 탭을 나중에 다시 열면 완료 여부가 반영됩니다).';
+          }catch(error){
+            button.disabled=false;
+            resultEl.textContent=' 요청 실패: '+error.message;
+          }
+        });
+      }catch(error){
+        el.innerHTML='<div style="padding:12px"><p class="muted">불러오기 실패: '+escapeHtml(error.message)+'</p></div>';
+      }
     }
     // 2026-08-22 사용자 요청: "링크 입력" 점수가 새로고침하면 사라지는 게 아니라
     // link_analysis_history(DB)에 계속 쌓여서, 과거에 어떤 키워드/링크를 보고
