@@ -108,6 +108,17 @@ test('admin HTML includes the three active tabs (링크 입력/점수/이미지 
   assert.match(html, /api\('\/api\/product-drafts\?status=awaiting_image_approval&pageSize=50'\)/);
 });
 
+test('admin HTML puts a per-row 등록 button on the 점수 table that imports that product via import-by-url', () => {
+  const html = adminHtml();
+
+  assert.match(html, /<th>등록<\/th>/);
+  assert.match(html, /data-score-import-product-no="'\+attr\(r\.productNo\)\+'"/);
+  assert.match(html, /data-score-import-result="'\+attr\(r\.productNo\)\+'"/);
+  assert.match(html, /querySelectorAll\('\[data-score-import-product-no\]'\)\.forEach\(button=>button\.onclick=async\(\)=>\{/);
+  assert.match(html, /api\('\/api\/product-drafts\/import-by-url',\{method:'POST',body:JSON\.stringify\(\{url:productNo\}\)\}\)/);
+  assert.match(html, /등록됨, 이미지 생성 중\.\.\./);
+});
+
 test('admin HTML includes a 사용자 키워드 tab wired to the keyword-queue API', () => {
   const html = adminHtml();
 

@@ -1835,11 +1835,24 @@ export function adminHtml() {
         el.innerHTML='<div style="padding:12px"><p class="muted">아직 분석한 링크가 없습니다. "링크 입력" 탭에서 먼저 분석해주세요.</p></div>';
         return;
       }
-      el.innerHTML='<div style="padding:12px"><div class="section"><h3>점수 (높은 순)</h3><table><thead><tr><th>점수</th><th>상품명</th><th>마켓</th><th>필터상태</th><th>판매가</th><th>예상마진</th><th>상품번호</th></tr></thead><tbody>'
+      el.innerHTML='<div style="padding:12px"><div class="section"><h3>점수 (높은 순)</h3><p class="muted">마음에 드는 상품의 "등록" 버튼을 누르면 초안이 만들어지고 대표/상세 이미지 1차 생성이 백그라운드로 시작됩니다 -- 완료되면 "이미지 개선" 탭에서 확인/재생성/직접 업로드할 수 있습니다.</p><table><thead><tr><th>점수</th><th>상품명</th><th>마켓</th><th>필터상태</th><th>판매가</th><th>예상마진</th><th>상품번호</th><th>등록</th></tr></thead><tbody>'
         +lastLinkAnalysisResults.map(r=>r.status==='error'
-          ?'<tr><td colspan="6">⚠️ 조회 실패: '+escapeHtml(r.error||'')+'</td><td>'+escapeHtml(r.productNo)+'</td></tr>'
-          :'<tr><td>'+r.score+'</td><td>'+escapeHtml(r.name||'-')+'</td><td>'+escapeHtml(r.sourceMarket||'-')+'</td><td>'+escapeHtml(r.filterStatus||'-')+'</td><td>'+money(r.coupangSalePrice)+'</td><td>'+money(r.coupangExpectedProfit)+'</td><td>'+escapeHtml(r.productNo)+'</td></tr>').join('')
+          ?'<tr><td colspan="7">⚠️ 조회 실패: '+escapeHtml(r.error||'')+'</td><td>'+escapeHtml(r.productNo)+'</td></tr>'
+          :'<tr><td>'+r.score+'</td><td>'+escapeHtml(r.name||'-')+'</td><td>'+escapeHtml(r.sourceMarket||'-')+'</td><td>'+escapeHtml(r.filterStatus||'-')+'</td><td>'+money(r.coupangSalePrice)+'</td><td>'+money(r.coupangExpectedProfit)+'</td><td>'+escapeHtml(r.productNo)+'</td><td><button type="button" data-score-import-product-no="'+attr(r.productNo)+'">등록</button><span class="muted" data-score-import-result="'+attr(r.productNo)+'"></span></td></tr>').join('')
         +'</tbody></table></div></div>';
+      el.querySelectorAll('[data-score-import-product-no]').forEach(button=>button.onclick=async()=>{
+        const productNo=button.dataset.scoreImportProductNo;
+        const resultEl=el.querySelector('[data-score-import-result="'+CSS.escape(productNo)+'"]');
+        button.disabled=true;
+        resultEl.textContent=' 등록 중...';
+        try{
+          const data=await api('/api/product-drafts/import-by-url',{method:'POST',body:JSON.stringify({url:productNo})});
+          resultEl.innerHTML=' ✅ 초안 <a href="/admin?draftId='+data.draftId+'">#'+data.draftId+'</a> 등록됨, 이미지 생성 중...';
+        }catch(error){
+          button.disabled=false;
+          resultEl.textContent=' 등록 실패: '+error.message;
+        }
+      });
     }
     function loadImageImprovementView(){
       const el=document.getElementById('specialView');
