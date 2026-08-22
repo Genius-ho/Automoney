@@ -184,16 +184,18 @@ test('analyzeProductLinks does not fail the response when the history insert its
 // 2026-08-22: naverCompetition(경쟁상품수/가격격차)은 개발자센터 쇼핑검색
 // API가 대체재 없이 종료돼서 폐기됐다 -- NAVER API HUB 쇼핑 인사이트(클릭
 // 트렌드)로 재정의된 naverTrend를 링크 분석 미리보기(draft 없이, 저장 없이)
-// 에서 채운다. 쇼핑 인사이트는 category(cat_id)가 필수라 resolveNaverCategoryCode
-// 로 후보→카테고리를 못 구하면(기본값) 항상 건너뛴다.
-test('analyzeProductLinks looks up the live Naver trend by the candidate\'s own name and a resolved category code, merging it into the score context as naverTrend', async () => {
+// 에서 채운다. 쇼핑 인사이트는 category(cat_id)와 깨끗한 검색 키워드가 둘 다
+// 필수라 resolveNaverTrendTargetImpl(AI, naver-trend-keyword-resolver.mjs)이
+// 후보→{keyword, categoryCode}를 못 구하면(null) 항상 건너뛴다.
+test('analyzeProductLinks resolves a keyword+category via AI then looks up the live Naver trend, merging it into the score context as naverTrend', async () => {
   let receivedArgs = null;
   const results = await analyzeProductLinks({}, ['1'], {}, {
     aiScoringEnabled: false,
+    loadCodexConfigImpl: async () => ({ executable: 'codex' }),
     loadNaverApiHubConfigImpl: async () => ({ clientId: 'id', clientSecret: 'secret' }),
-    resolveNaverCategoryCode: (candidate) => (candidate.productNo === '1' ? '50000000' : null),
+    resolveNaverTrendTargetImpl: async (candidate) => (candidate.productNo === '1' ? { keyword: '여성 벨트', categoryCode: '50000000' } : null),
     checkNaverTrendLiveImpl: async (client, keyword, categoryCode) => { receivedArgs = { client, keyword, categoryCode }; return { avgRatio: 80, growthRate: 0.3 }; },
-    evaluateCandidatesImpl: async () => [{ productNo: '1', normalized: { name: '여성 벨트' }, filter: { filterStatus: 'pass' }, prices: { naverSalePrice: 15000 } }],
+    evaluateCandidatesImpl: async () => [{ productNo: '1', normalized: { name: '버클 슬림 벨트 원피스 여성' }, filter: { filterStatus: 'pass' }, prices: { naverSalePrice: 15000 } }],
     computeCompetitivenessScoreImpl: (candidate, context) => ({ score: context.naverTrend.avgRatio, breakdown: {} }),
   });
 
@@ -202,23 +204,26 @@ test('analyzeProductLinks looks up the live Naver trend by the candidate\'s own 
   assert.equal(results[0].score, 80);
 });
 
-test('analyzeProductLinks skips the Naver trend lookup entirely when resolveNaverCategoryCode returns null (its default), even with Naver configured', async () => {
+test('analyzeProductLinks skips the Naver trend lookup entirely when the AI target resolver returns null, even with Naver configured', async () => {
   const results = await analyzeProductLinks({}, ['1'], {}, {
     aiScoringEnabled: false,
+    loadCodexConfigImpl: async () => ({ executable: 'codex' }),
     loadNaverApiHubConfigImpl: async () => ({ clientId: 'id', clientSecret: 'secret' }),
-    checkNaverTrendLiveImpl: async () => { throw new Error('must not be called without a category code'); },
+    resolveNaverTrendTargetImpl: async () => null,
+    checkNaverTrendLiveImpl: async () => { throw new Error('must not be called without a resolved target'); },
     evaluateCandidatesImpl: async () => [{ productNo: '1', normalized: { name: 'A' }, filter: { filterStatus: 'pass' }, prices: {} }],
     computeCompetitivenessScoreImpl: (candidate, context) => ({ score: context.naverTrend === null ? 1 : 0, breakdown: {} }),
   });
   assert.equal(results[0].score, 1);
 });
 
-test('analyzeProductLinks does not attempt a Naver lookup when naverTrendEnabled is false, without loading Naver API HUB config', async () => {
+test('analyzeProductLinks does not attempt a Naver lookup when naverTrendEnabled is false, without loading Naver API HUB config or Codex config', async () => {
   await analyzeProductLinks({}, ['1'], {}, {
     aiScoringEnabled: false,
     naverTrendEnabled: false,
+    loadCodexConfigImpl: async () => { throw new Error('must not be called'); },
     loadNaverApiHubConfigImpl: async () => { throw new Error('must not be called'); },
-    resolveNaverCategoryCode: () => '50000000',
+    resolveNaverTrendTargetImpl: async () => { throw new Error('must not be called'); },
     checkNaverTrendLiveImpl: async () => { throw new Error('must not be called'); },
     evaluateCandidatesImpl: async () => [{ productNo: '1', normalized: { name: 'A' }, filter: { filterStatus: 'pass' }, prices: {} }],
     computeCompetitivenessScoreImpl: () => ({ score: 1, breakdown: {} }),
@@ -228,7 +233,8 @@ test('analyzeProductLinks does not attempt a Naver lookup when naverTrendEnabled
 test('analyzeProductLinks falls back to naverTrend:null (proxy-only) when Naver API HUB credentials are unconfigured (loadNaverApiHubConfig throws) or the trend lookup itself fails', async () => {
   const unconfigured = await analyzeProductLinks({}, ['1'], {}, {
     aiScoringEnabled: false,
-    resolveNaverCategoryCode: () => '50000000',
+    loadCodexConfigImpl: async () => ({ executable: 'codex' }),
+    resolveNaverTrendTargetImpl: async () => { throw new Error('must not be called without Naver API HUB config'); },
     loadNaverApiHubConfigImpl: async () => { throw new Error('NAVER_API_HUB_CLIENT_ID is missing in .env'); },
     checkNaverTrendLiveImpl: async () => { throw new Error('must not be called'); },
     evaluateCandidatesImpl: async () => [{ productNo: '1', normalized: { name: 'A' }, filter: { filterStatus: 'pass' }, prices: {} }],
@@ -238,7 +244,8 @@ test('analyzeProductLinks falls back to naverTrend:null (proxy-only) when Naver 
 
   const lookupFailed = await analyzeProductLinks({}, ['1'], {}, {
     aiScoringEnabled: false,
-    resolveNaverCategoryCode: () => '50000000',
+    loadCodexConfigImpl: async () => ({ executable: 'codex' }),
+    resolveNaverTrendTargetImpl: async () => ({ keyword: 'x', categoryCode: '50000000' }),
     loadNaverApiHubConfigImpl: async () => ({ clientId: 'id', clientSecret: 'secret' }),
     checkNaverTrendLiveImpl: async () => { throw new Error('NAVER API HUB request failed: HTTP 401'); },
     evaluateCandidatesImpl: async () => [{ productNo: '1', normalized: { name: 'A' }, filter: { filterStatus: 'pass' }, prices: {} }],

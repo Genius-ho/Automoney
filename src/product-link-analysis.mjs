@@ -14,9 +14,10 @@
 // 같은 이유(사람이 링크 몇 개만 보는 미리보기)로 네이버 트렌드 항목도 여기서는
 // 실시간 조회한다 -- checkNaverTrendLive (naver-research.mjs), draft가 없어도
 // 되는 저장 없는 조회. NAVER API HUB 쇼핑 인사이트는 category(네이버쇼핑
-// cat_id)가 필수 파라미터인데, 이 코드베이스엔 아직 후보→cat_id 매핑이 없다
-// -- naverCategoryCode를 못 정하면(지금은 항상 못 정함) 그냥 건너뛰고 기존
-// 중립 프록시로 남긴다. 매핑이 생기면 caller가 넘겨주기만 하면 바로 활성화됨.
+// cat_id)와 깨끗한 검색 키워드가 둘 다 필수인데 candidate.normalized.name은
+// 브랜드/사이즈까지 뒤섞인 원본 판매 제목이라 그대로 쓰면 데이터가 안 나온다
+// (실제로 확인함) -- resolveNaverTrendTarget (naver-trend-keyword-resolver.mjs)
+// 가 후보마다 Codex로 키워드/카테고리를 매번 추출한다 (2026-08-22 사용자 요청).
 import { evaluateCandidates } from './candidate-collector.mjs';
 import { computeCompetitivenessScore } from './competitiveness-score.mjs';
 import { computeAiScoringContext } from './ai-competitiveness-scoring.mjs';
@@ -24,6 +25,7 @@ import { loadCodexConfig, loadNaverApiHubConfig } from './config.mjs';
 import { listProductDrafts } from './admin-store.mjs';
 import { insertLinkAnalysisHistory } from './link-analysis-history-store.mjs';
 import { checkNaverTrendLive } from './naver-research.mjs';
+import { resolveNaverTrendTarget } from './naver-trend-keyword-resolver.mjs';
 
 const EXISTING_TITLES_LIMIT = 200;
 
@@ -32,10 +34,6 @@ export async function analyzeProductLinks(domemeClient, productNos, pricingRules
   rootDir = process.cwd(),
   aiScoringEnabled = true,
   naverTrendEnabled = true,
-  // 네이버쇼핑 cat_id -- 없으면(기본값) 네이버 트렌드 조회를 건너뛴다. 후보별로
-  // 다른 카테고리를 쓰려면 resolveNaverCategoryCode(candidate)=>string|null 를
-  // 넘기면 된다 (기본은 항상 null, 즉 항상 건너뜀).
-  resolveNaverCategoryCode = () => null,
   // keyword: the GUI's "키워드 검색" input (or a Telegram keyword, if ever
   // wired) that led the human to these links, purely for history context --
   // null for a bare link paste with no preceding keyword search. source:
@@ -48,6 +46,7 @@ export async function analyzeProductLinks(domemeClient, productNos, pricingRules
   loadCodexConfigImpl = loadCodexConfig,
   loadNaverApiHubConfigImpl = loadNaverApiHubConfig,
   checkNaverTrendLiveImpl = checkNaverTrendLive,
+  resolveNaverTrendTargetImpl = resolveNaverTrendTarget,
   listProductDraftsImpl = listProductDrafts,
   insertLinkAnalysisHistoryImpl = insertLinkAnalysisHistory,
 } = {}) {
@@ -59,16 +58,18 @@ export async function analyzeProductLinks(domemeClient, productNos, pricingRules
   );
 
   // All 3 AI dimensions go through Codex now (loadCodexConfigImpl) -- see
-  // ai-competitiveness-scoring.mjs's header comment.
+  // ai-competitiveness-scoring.mjs's header comment. naverTrendEnabled also
+  // needs Codex (resolveNaverTrendTargetImpl), so this loads whenever either
+  // is on.
   let codexConfig = null;
   let existingDraftTitles = [];
-  if (aiScoringEnabled) {
+  if (aiScoringEnabled || naverTrendEnabled) {
     codexConfig = await loadCodexConfigImpl(rootDir).catch(() => null);
-    if (db) {
-      existingDraftTitles = await listProductDraftsImpl(db, { limit: EXISTING_TITLES_LIMIT })
-        .then((drafts) => (drafts || []).map((d) => d.sellingTitle).filter(Boolean))
-        .catch(() => []);
-    }
+  }
+  if (aiScoringEnabled && db) {
+    existingDraftTitles = await listProductDraftsImpl(db, { limit: EXISTING_TITLES_LIMIT })
+      .then((drafts) => (drafts || []).map((d) => d.sellingTitle).filter(Boolean))
+      .catch(() => []);
   }
 
   // loadNaverApiHubConfig throws (not returns null) when NAVER_API_HUB_CLIENT_ID/
@@ -83,18 +84,20 @@ export async function analyzeProductLinks(domemeClient, productNos, pricingRules
     if (candidate.error) {
       return { productNo: candidate.productNo, status: 'error', error: candidate.error.message };
     }
-    const naverCategoryCode = naverApiHubConfig ? resolveNaverCategoryCode(candidate) : null;
     // AI-scoring failures (CLI unavailable, timeout, etc.) never fail the
     // whole candidate -- computeAiScoringContext itself already degrades
     // each dimension independently to its formula proxy.
-    const [aiContext, naverTrend] = await Promise.all([
-      codexConfig
+    const [aiContext, naverTarget] = await Promise.all([
+      aiScoringEnabled && codexConfig
         ? computeAiScoringContextImpl(candidate, existingDraftTitles, { codexConfig, rootDir }).catch(() => ({}))
         : Promise.resolve({}),
-      naverApiHubConfig && naverCategoryCode && candidate.normalized?.name
-        ? checkNaverTrendLiveImpl(naverApiHubConfig, candidate.normalized.name, naverCategoryCode).catch(() => null)
+      naverApiHubConfig && codexConfig
+        ? resolveNaverTrendTargetImpl(candidate, { config: codexConfig, rootDir }).catch(() => null)
         : Promise.resolve(null),
     ]);
+    const naverTrend = naverApiHubConfig && naverTarget?.keyword && naverTarget?.categoryCode
+      ? await checkNaverTrendLiveImpl(naverApiHubConfig, naverTarget.keyword, naverTarget.categoryCode).catch(() => null)
+      : null;
     const { score, breakdown } = computeCompetitivenessScoreImpl(candidate, { ...aiContext, naverTrend });
     return {
       productNo: candidate.productNo,

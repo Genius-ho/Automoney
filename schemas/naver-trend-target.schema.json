@@ -1,0 +1,16 @@
+{
+  "type": "object",
+  "additionalProperties": false,
+  "properties": {
+    "keyword": {
+      "type": "string",
+      "description": "사람이 네이버쇼핑에서 실제로 검색할 법한 2~4어절의 짧은 한국어 명사구 키워드"
+    },
+    "categoryCode": {
+      "type": "string",
+      "enum": ["50000000", "50000001", "50000002", "50000003", "50000004", "50000005", "50000006", "50000007", "50000008", "50000009", "50000010"],
+      "description": "네이버쇼핑 대분류 cat_id"
+    }
+  },
+  "required": ["keyword", "categoryCode"]
+}

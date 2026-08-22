@@ -37,17 +37,17 @@ import { WEIGHTS, scoreDuplicateRisk, scoreImageQuality, scoreReturnRisk } from 
 const MAX_IMAGES_FOR_QUALITY_REVIEW = 3;
 const IMAGE_QUALITY_SCHEMA_PATH = 'schemas/image-quality-score.schema.json';
 const RISK_JUDGMENT_SCHEMA_PATH = 'schemas/return-duplicate-risk-score.schema.json';
-const CODEX_MODEL = 'gpt-5.6-luna';
-const CODEX_REASONING_EFFORT = 'xhigh';
 
-// Every call in this file uses this fixed model/effort regardless of
-// whatever a caller's loaded codexConfig otherwise carries (executable/
-// sandbox/concurrency/timeoutMs) -- codex-client.mjs's runCodexAnalysis only
-// adds -m/-c model_reasoning_effort= when these fields are present, so every
-// other Codex usage in this codebase (image generation, product analysis)
-// is unaffected and keeps using its own configured/default model.
-function withScoringModel(config) {
-  return { ...config, model: CODEX_MODEL, reasoningEffort: CODEX_REASONING_EFFORT };
+// Every call in this file (and naver-trend-target-resolver.mjs, the other AI
+// judgment this manual-flow-only feature set uses) pins this fixed model/
+// effort regardless of whatever a caller's loaded codexConfig otherwise
+// carries (executable/sandbox/concurrency/timeoutMs) -- codex-client.mjs's
+// runCodexAnalysis only adds -m/-c model_reasoning_effort= when these fields
+// are present, so every other Codex usage in this codebase (image
+// generation, product analysis) is unaffected and keeps using its own
+// configured/default model.
+export function withScoringModel(config) {
+  return { ...config, model: 'gpt-5.6-luna', reasoningEffort: 'xhigh' };
 }
 
 function toPoints(score0to100, weight) {
