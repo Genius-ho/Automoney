@@ -193,6 +193,7 @@ test('handleCoupangKeywordMessage passes db and rootDir through to analyzeProduc
   );
   assert.equal(analyzeOpts.db.name, 'db');
   assert.equal(analyzeOpts.rootDir, '/custom/root');
+  assert.equal(analyzeOpts.source, 'telegram');
 });
 
 test('handleCoupangKeywordMessage defaults rootDir to process.cwd() when not supplied', async () => {

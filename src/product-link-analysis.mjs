@@ -15,6 +15,7 @@ import { computeCompetitivenessScore } from './competitiveness-score.mjs';
 import { computeAiScoringContext } from './ai-competitiveness-scoring.mjs';
 import { loadClaudeCliConfig } from './config.mjs';
 import { listProductDrafts } from './admin-store.mjs';
+import { insertLinkAnalysisHistory } from './link-analysis-history-store.mjs';
 
 const EXISTING_TITLES_LIMIT = 200;
 
@@ -22,11 +23,18 @@ export async function analyzeProductLinks(domemeClient, productNos, pricingRules
   db = null,
   rootDir = process.cwd(),
   aiScoringEnabled = true,
+  // keyword: the GUI's "키워드 검색" input (or a Telegram keyword, if ever
+  // wired) that led the human to these links, purely for history context --
+  // null for a bare link paste with no preceding keyword search. source:
+  // 'link_input' (GUI) or 'telegram' (링크 답장) -- see link_analysis_history.
+  keyword = null,
+  source = 'link_input',
   evaluateCandidatesImpl = evaluateCandidates,
   computeCompetitivenessScoreImpl = computeCompetitivenessScore,
   computeAiScoringContextImpl = computeAiScoringContext,
   loadClaudeCliConfigImpl = loadClaudeCliConfig,
   listProductDraftsImpl = listProductDrafts,
+  insertLinkAnalysisHistoryImpl = insertLinkAnalysisHistory,
 } = {}) {
   const evaluated = await evaluateCandidatesImpl(
     domemeClient,
@@ -56,18 +64,36 @@ export async function analyzeProductLinks(domemeClient, productNos, pricingRules
     const aiContext = claudeCliConfig
       ? await computeAiScoringContextImpl(candidate, existingDraftTitles, { config: claudeCliConfig }).catch(() => ({}))
       : {};
-    const { score } = computeCompetitivenessScoreImpl(candidate, aiContext);
+    const { score, breakdown } = computeCompetitivenessScoreImpl(candidate, aiContext);
     return {
       productNo: candidate.productNo,
       status: 'analyzed',
       name: candidate.normalized?.name || null,
       score,
+      // breakdown's imageQuality/returnRisk/duplicateRisk reasons are
+      // prefixed "[AI] " when ai-competitiveness-scoring.mjs actually judged
+      // them (vs. the plain competitiveness-score.mjs proxy on failure/CLI
+      // unavailable) -- exposed so the GUI/사용자 can see, per dimension,
+      // whether AI was actually consulted rather than silently falling back.
+      breakdown,
       filterStatus: candidate.filter?.filterStatus,
       sourceMarket: candidate.normalized?.sourceMarket || null,
       coupangSalePrice: candidate.prices?.coupangSalePrice ?? null,
       coupangExpectedProfit: candidate.prices?.coupangExpectedProfit ?? null,
     };
   }));
+
+  // Best-effort -- a history-write failure (db down, etc.) must never turn
+  // an otherwise-successful analysis into an error response. Only analyzed
+  // (scored) results are recorded; an 'error' result has no score to look
+  // back on later.
+  if (db) {
+    const analyzed = results.filter((r) => r.status === 'analyzed');
+    if (analyzed.length > 0) {
+      await insertLinkAnalysisHistoryImpl(db, analyzed.map((r) => ({ ...r, supplierProductNo: r.productNo, keyword, source })))
+        .catch((error) => console.error(`productLinkAnalysis.historyInsertFailed=${error.message}`));
+    }
+  }
 
   // productNos keeps the caller's original order; the report itself is
   // sorted best-first since that's the whole point of a comparison table.

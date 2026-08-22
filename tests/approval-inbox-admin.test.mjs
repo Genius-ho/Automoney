@@ -104,8 +104,35 @@ test('admin HTML includes the three active tabs (링크 입력/점수/이미지 
   assert.match(html, /function loadLinkInputView\(\)/);
   assert.match(html, /function loadScoreView\(\)/);
   assert.match(html, /function loadImageImprovementView\(\)/);
-  assert.match(html, /api\('\/api\/product-drafts\/analyze-links',\{method:'POST',body:JSON\.stringify\(\{text:value\}\)\}\)/);
+  assert.match(html, /api\('\/api\/product-drafts\/analyze-links',\{method:'POST',body:JSON\.stringify\(\{text:value,keyword:lastSearchedKeyword\}\)\}\)/);
   assert.match(html, /api\('\/api\/product-drafts\?status=awaiting_image_approval&pageSize=50'\)/);
+});
+
+test('admin HTML remembers the last searched keyword and sends it along with the 링크 입력 analyze request (so history can record which keyword found a link)', () => {
+  const html = adminHtml();
+
+  assert.match(html, /let lastSearchedKeyword=null/);
+  assert.match(html, /lastSearchedKeyword=keyword;\s*window\.open\(domeggookSearchUrl\(keyword\),'_blank'\)/);
+});
+
+test('admin HTML includes a 히스토리 tab wired to the link-analysis-history API', () => {
+  const html = adminHtml();
+
+  assert.match(html, /id="viewHistoryButton"[^>]*>히스토리</);
+  assert.match(html, /history:document\.getElementById\('viewHistoryButton'\)/);
+  assert.match(html, /view==='history'\)loadHistoryView\(\)/);
+  assert.match(html, /function loadHistoryView\(\)/);
+  assert.match(html, /api\('\/api\/product-drafts\/link-analysis-history\?limit=100'\)/);
+});
+
+test('admin HTML puts a 산출 과정 toggle on the 점수 table that renders the AI-judged (🤖) vs proxy breakdown rows', () => {
+  const html = adminHtml();
+
+  assert.match(html, /<th>산출 과정<\/th>/);
+  assert.match(html, /data-score-detail-toggle="'\+attr\(r\.productNo\)\+'"/);
+  assert.match(html, /data-score-detail-row="'\+attr\(r\.productNo\)\+'"/);
+  assert.match(html, /function scoreBreakdownHtml\(breakdown\)\{/);
+  assert.match(html, /startsWith\('\[AI\]'\)/);
 });
 
 test('admin HTML puts a per-row 등록 button on the 점수 table that imports that product via import-by-url', () => {

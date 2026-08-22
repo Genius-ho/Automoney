@@ -134,7 +134,7 @@ export async function handleCoupangKeywordMessage(db, domemeClient, pricingRules
 
   const productNos = parseProductLinks(message.text);
   if (productNos) {
-    const results = await analyzeProductLinksImpl(domemeClient, productNos, pricingRules, { db, rootDir });
+    const results = await analyzeProductLinksImpl(domemeClient, productNos, pricingRules, { db, rootDir, source: 'telegram' });
     await sendTelegramMessageImpl(telegramConfig, formatProductLinkAnalysisMessage(results), {
       replyMarkup: productLinkImportKeyboard(results),
     });

@@ -1,4 +1,5 @@
 import { spawn as nodeSpawn } from 'node:child_process';
+import { dirname } from 'node:path';
 
 // Claude Code CLI is a local process authenticated via the operator's own
 // Claude subscription login (`claude auth status`) -- this module never
@@ -92,11 +93,17 @@ function releaseSlot() {
 // Runs one non-interactive Claude Code turn to review the given local image
 // files against `prompt`. `images` are absolute local file paths -- unlike
 // Codex's `-i` flag, Claude Code just needs the path referenced as plain
-// text within the prompt for it to read the file (confirmed live against
-// the real CLI). --allowedTools '' still permits it to read those
-// referenced files while blocking every other tool, which keeps a
-// prompt that embeds supplier-provided text from being able to trigger
-// arbitrary tool use.
+// text within the prompt for it to read the file. --allowedTools '' still
+// permits it to read those referenced files while blocking every other
+// tool, which keeps a prompt that embeds supplier-provided text from being
+// able to trigger arbitrary tool use -- BUT only for files already inside
+// the CLI's allowed directories (its own cwd by default). A scratch temp
+// file downloaded to os.tmpdir() (ai-competitiveness-scoring.mjs's image-
+// quality review, generated-image-qa.mjs's Naver competitor thumbnail) is
+// outside that by default and gets refused with a plain-text "읽기 권한이
+// 거부되어" reply instead of a thrown error (confirmed live 2026-08-22) --
+// so every image's own directory is passed via --add-dir to explicitly
+// allow it, regardless of whether it's already inside cwd or not.
 export async function runClaudeVisionReview({ config, images = [], prompt, spawnImpl }) {
   if (!Array.isArray(images) || images.length === 0) {
     const error = new Error('runClaudeVisionReview requires at least one image');
@@ -111,8 +118,9 @@ export async function runClaudeVisionReview({ config, images = [], prompt, spawn
 
   const imageList = images.map((path, index) => `${index + 1}. ${path}`).join('\n');
   const fullPrompt = `아래 이미지 파일들을 각각 읽고 검수하라:\n${imageList}\n\n${prompt}`;
+  const extraDirs = [...new Set(images.map((path) => dirname(path)))];
 
-  return runClaudeTurn({ config, fullPrompt, spawnImpl });
+  return runClaudeTurn({ config, fullPrompt, spawnImpl, extraDirs });
 }
 
 // Text-only counterpart to runClaudeVisionReview -- same CLI/parsing
@@ -129,7 +137,7 @@ export async function runClaudeTextPrompt({ config, prompt, spawnImpl }) {
   return runClaudeTurn({ config, fullPrompt: prompt, spawnImpl });
 }
 
-async function runClaudeTurn({ config, fullPrompt, spawnImpl }) {
+async function runClaudeTurn({ config, fullPrompt, spawnImpl, extraDirs = [] }) {
   const executable = config?.executable || 'claude';
   const model = config?.model || 'sonnet';
   const effort = config?.effort || 'medium';
@@ -139,6 +147,7 @@ async function runClaudeTurn({ config, fullPrompt, spawnImpl }) {
   await acquireSlot(limit);
   try {
     const args = ['-p', '--output-format', 'json', '--model', model, '--effort', effort, '--allowedTools', ''];
+    if (extraDirs.length > 0) args.push('--add-dir', ...extraDirs);
 
     const result = await new Promise((resolvePromise) => {
       let child;

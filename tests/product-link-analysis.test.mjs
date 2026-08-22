@@ -94,6 +94,7 @@ test('analyzeProductLinks fetches recent draft titles for the AI duplicate check
     computeAiScoringContextImpl: async (candidate, existingDraftTitles) => ({ aiDuplicateRisk: { points: existingDraftTitles.length, reason: 'x' } }),
     evaluateCandidatesImpl: async () => [{ productNo: '1', normalized: { name: 'A' }, filter: { filterStatus: 'pass' }, prices: {} }],
     computeCompetitivenessScoreImpl: (candidate, context) => ({ score: context.aiDuplicateRisk.points, breakdown: {} }),
+    insertLinkAnalysisHistoryImpl: async () => [],
   });
 
   assert.equal(receivedListArgs[0].db.name, 'db');
@@ -108,4 +109,51 @@ test('analyzeProductLinks does not query for existing draft titles when no db is
     evaluateCandidatesImpl: async () => [{ productNo: '1', normalized: { name: 'A' }, filter: { filterStatus: 'pass' }, prices: {} }],
     computeCompetitivenessScoreImpl: () => ({ score: 1, breakdown: {} }),
   });
+});
+
+test('analyzeProductLinks records analyzed (scored) results to history, with the keyword/source context, when db is provided', async () => {
+  const receivedHistoryArgs = [];
+  await analyzeProductLinks({}, ['1', '2'], {}, {
+    db: { name: 'db' },
+    keyword: '여성 벨트',
+    source: 'link_input',
+    loadClaudeCliConfigImpl: async () => ({ executable: 'claude' }),
+    computeAiScoringContextImpl: async () => ({}),
+    evaluateCandidatesImpl: async () => [
+      { productNo: '1', normalized: { name: 'A' }, filter: { filterStatus: 'pass' }, prices: {} },
+      { productNo: '2', error: new Error('조회 실패') },
+    ],
+    computeCompetitivenessScoreImpl: () => ({ score: 70, breakdown: { profitMargin: { points: 10, max: 15, reason: 'x' } } }),
+    insertLinkAnalysisHistoryImpl: async (db, rows) => { receivedHistoryArgs.push({ db, rows }); return []; },
+  });
+
+  assert.equal(receivedHistoryArgs.length, 1);
+  assert.equal(receivedHistoryArgs[0].db.name, 'db');
+  // Only the analyzed (scored) candidate is recorded -- the errored one has
+  // no score to look back on.
+  assert.equal(receivedHistoryArgs[0].rows.length, 1);
+  assert.equal(receivedHistoryArgs[0].rows[0].supplierProductNo, '1');
+  assert.equal(receivedHistoryArgs[0].rows[0].score, 70);
+  assert.equal(receivedHistoryArgs[0].rows[0].keyword, '여성 벨트');
+  assert.equal(receivedHistoryArgs[0].rows[0].source, 'link_input');
+});
+
+test('analyzeProductLinks does not attempt to write history when no db is given', async () => {
+  await analyzeProductLinks({}, ['1'], {}, {
+    aiScoringEnabled: false,
+    evaluateCandidatesImpl: async () => [{ productNo: '1', normalized: { name: 'A' }, filter: { filterStatus: 'pass' }, prices: {} }],
+    computeCompetitivenessScoreImpl: () => ({ score: 70, breakdown: {} }),
+    insertLinkAnalysisHistoryImpl: async () => { throw new Error('must not be called without a db'); },
+  });
+});
+
+test('analyzeProductLinks does not fail the response when the history insert itself rejects', async () => {
+  const results = await analyzeProductLinks({}, ['1'], {}, {
+    db: { name: 'db' },
+    aiScoringEnabled: false,
+    evaluateCandidatesImpl: async () => [{ productNo: '1', normalized: { name: 'A' }, filter: { filterStatus: 'pass' }, prices: {} }],
+    computeCompetitivenessScoreImpl: () => ({ score: 70, breakdown: {} }),
+    insertLinkAnalysisHistoryImpl: async () => { throw new Error('db down'); },
+  });
+  assert.equal(results[0].score, 70);
 });

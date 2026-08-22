@@ -925,3 +925,28 @@ create table if not exists supplier_alerts (
   acknowledged_at timestamptz
 );
 create index if not exists idx_supplier_alerts_status on supplier_alerts(status);
+
+-- 2026-08-22 사용자 요청: "링크 입력"(GUI)/텔레그램 링크 답장으로 나온 점수가
+-- 지금까지는 브라우저 메모리(lastLinkAnalysisResults)에만 있어 새로고침하면
+-- 사라졌다 -- 과거에 어떤 키워드/링크를 봤고 점수가 얼마였는지 계속 쌓아두고
+-- 조회할 수 있게 기록. batch_run_candidates(자동발굴)와 같은 모양
+-- (supplier_product_no/name/score/score_breakdown)을 따르되, 이건 사람이 수동으로
+-- 분석한 것이라 keyword(그 링크를 찾을 때 검색한 키워드, GUI "키워드 검색" 입력값 --
+-- 텔레그램 링크 답장이나 keyword 없이 바로 붙여넣은 경우 null)/source로 어디서
+-- 왔는지 구분한다. score가 없는(조회 실패) 후보는 기록하지 않는다 -- 볼 점수 자체가
+-- 없으므로.
+create table if not exists link_analysis_history (
+  id bigserial primary key,
+  supplier_product_no text not null,
+  name text,
+  score numeric,
+  score_breakdown jsonb not null default '{}'::jsonb,
+  filter_status text,
+  source_market text,
+  coupang_sale_price numeric,
+  coupang_expected_profit numeric,
+  keyword text,
+  source text not null default 'link_input',
+  analyzed_at timestamptz not null default now()
+);
+create index if not exists idx_link_analysis_history_analyzed_at on link_analysis_history(analyzed_at desc);

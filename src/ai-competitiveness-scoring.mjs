@@ -24,7 +24,11 @@ import { WEIGHTS, scoreDuplicateRisk, scoreImageQuality, scoreReturnRisk } from 
 const MAX_IMAGES_FOR_QUALITY_REVIEW = 3;
 
 function parseAiScore(rawText, fields) {
-  const match = rawText.match(/\{[\s\S]*\}/);
+  // Non-greedy -- our JSON schemas here are always flat (no nested braces),
+  // so this takes the first complete {...} object and ignores anything
+  // Claude appends after it (defense in depth alongside the prompt itself
+  // now explicitly asking for exactly one object regardless of image count).
+  const match = rawText.match(/\{[\s\S]*?\}/);
   if (!match) throw Object.assign(new Error('AI scoring response did not contain JSON'), { code: 'UNPARSEABLE_AI_SCORE' });
   let parsed;
   try {
@@ -60,7 +64,11 @@ export async function scoreImageQualityWithAi(images, {
 
   const downloaded = await Promise.all(urls.map((url) => loadRemoteImageForVisionImpl(url)));
   try {
-    const prompt = '너는 이커머스 상품 이미지 품질 평가자다. 첨부된 이미지들이 실제 쿠팡/네이버 판매용 대표·상세 이미지로서 얼마나 매력적이고 고품질인지(선명도, 구도, 배경, 정보 전달력 종합) 0~100점으로 평가해라.\n\n반드시 아래 JSON 형식으로만 답해라 (다른 텍스트 없이):\n{"score": 0~100 사이 정수, "reason": "한 문장 이유"}';
+    // "이미지 하나당 하나의 JSON" 대신 "전체를 종합한 JSON 하나"를 명시하지
+    // 않으면, runClaudeVisionReview의 감싸는 프롬프트("아래 이미지 파일들을
+    // 각각 읽고 검수하라")에 낚여 이미지 장수만큼 JSON을 따로 내놓는다
+    // (2026-08-22 실제로 재현됨 -- {...}\n\n{...} 두 개가 와서 파싱 실패).
+    const prompt = '너는 이커머스 상품 이미지 품질 평가자다. 첨부된 이미지 전체를 하나의 상품 이미지 세트로 보고, 실제 쿠팡/네이버 판매용 대표·상세 이미지로서 얼마나 매력적이고 고품질인지(선명도, 구도, 배경, 정보 전달력 종합) 0~100점으로 평가해라. 이미지별로 따로 평가하지 말고 세트 전체에 대해 단 하나의 점수만 매겨라.\n\n반드시 아래 JSON 하나만 답해라 (이미지 개수와 무관하게 딱 1개, 다른 텍스트 없이):\n{"score": 0~100 사이 정수, "reason": "한 문장 이유"}';
     const result = await runClaudeVisionReviewImpl({ config, images: downloaded.map((d) => d.filePath), prompt });
     const parsed = parseAiScore(result.rawText, ['score']);
     return { points: toPoints(parsed.score, WEIGHTS.imageQuality), reason: `[AI] ${parsed.reason || parsed.score + '점'}` };

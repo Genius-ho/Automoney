@@ -7,6 +7,7 @@ import { createHash } from 'node:crypto';
 import { isAutomationPaused, loadAiSecrets, loadCodexConfig, loadCoupangConfig, loadDatabaseUrl, loadDomemePrivateConfig, loadEnvConfig, loadJobPathsConfig, loadNaverCommerceConfig, loadNaverConfig, loadPricingRules, loadPythonConfig, loadTelegramConfig } from './config.mjs';
 import { generateManualImportImagesAndNotify, importDraftFromSupplierUrl, parseSupplierProductNo } from './manual-url-import.mjs';
 import { analyzeProductLinks } from './product-link-analysis.mjs';
+import { listLinkAnalysisHistory } from './link-analysis-history-store.mjs';
 import { sendCriticalAlert } from './telegram-notifier.mjs';
 import { DomemeClient } from './domeme-client.mjs';
 import { runCandidateDiscoveryBatch, runDueProductAutomationStage, runNextProductAutomationStage } from './auto-discovery-batch.mjs';
@@ -1159,11 +1160,22 @@ async function handleRequest({ request, response, db, aiSecrets, rootDir }) {
         loadPricingRules(join(rootDir, 'pricing-rules.json')),
       ]);
       const domemeClient = new DomemeClient({ apiKey: envConfig.domemeApiKey, endpoint: envConfig.domemeEndpoint });
-      const results = await analyzeProductLinks(domemeClient, productNos, pricingRules, { db, rootDir });
+      const keyword = String(body.keyword || '').trim() || null;
+      const results = await analyzeProductLinks(domemeClient, productNos, pricingRules, { db, rootDir, keyword });
       sendJson(response, 200, { results });
     } catch (error) {
       sendJson(response, 500, { error: error.message, code: error.code });
     }
+    return;
+  }
+
+  // "히스토리" -- link_analysis_history에 쌓인 과거 링크 분석 결과(키워드/링크/
+  // 점수) 조회 전용. 저장은 analyzeProductLinks 안에서 최선의 노력으로 처리된다.
+  if (url.pathname === '/api/product-drafts/link-analysis-history' && request.method === 'GET') {
+    const limit = Number(url.searchParams.get('limit')) || 50;
+    const offset = Number(url.searchParams.get('offset')) || 0;
+    const history = await listLinkAnalysisHistory(db, { limit, offset });
+    sendJson(response, 200, { history });
     return;
   }
 
@@ -1426,6 +1438,7 @@ export function adminHtml() {
         <button id="viewLinkInputButton" class="primary" type="button">링크 입력</button>
         <button id="viewScoreButton" type="button">점수</button>
         <button id="viewImageImprovementButton" type="button">이미지 개선</button>
+        <button id="viewHistoryButton" type="button">히스토리</button>
         <!-- 2026-08-22 사용자 요청: 우선 위 3개 탭만 쓰기로 하고 나머지는 숨김
              (기능은 그대로 남아있음 -- hidden만 지우면 다시 보임) -->
         <button id="viewApprovalInboxButton" type="button" hidden>승인함</button>
@@ -1497,7 +1510,7 @@ export function adminHtml() {
     prevPageButton.addEventListener('click',()=>{if(currentPage>1){currentPage-=1;loadList();}});
     nextPageButton.addEventListener('click',()=>{if(currentPage*currentPageSize<currentTotal){currentPage+=1;loadList();}});
     let currentView='linkInput';
-    const viewButtons={linkInput:document.getElementById('viewLinkInputButton'),score:document.getElementById('viewScoreButton'),imageImprovement:document.getElementById('viewImageImprovementButton'),approvalInbox:document.getElementById('viewApprovalInboxButton'),dashboard:document.getElementById('viewDashboardButton'),all:document.getElementById('viewAllButton'),recommend:document.getElementById('viewRecommendButton'),registrations:document.getElementById('viewRegistrationsButton'),autoBatch:document.getElementById('viewAutoBatchButton'),keywordSourcing:document.getElementById('viewKeywordSourcingButton'),urlImport:document.getElementById('viewUrlImportButton'),channelOrders:document.getElementById('viewChannelOrdersButton'),domemePrecheck:document.getElementById('viewDomemePrecheckButton'),purchaseOrders:document.getElementById('viewPurchaseOrdersButton'),orderExceptions:document.getElementById('viewOrderExceptionsButton')};
+    const viewButtons={linkInput:document.getElementById('viewLinkInputButton'),score:document.getElementById('viewScoreButton'),imageImprovement:document.getElementById('viewImageImprovementButton'),history:document.getElementById('viewHistoryButton'),approvalInbox:document.getElementById('viewApprovalInboxButton'),dashboard:document.getElementById('viewDashboardButton'),all:document.getElementById('viewAllButton'),recommend:document.getElementById('viewRecommendButton'),registrations:document.getElementById('viewRegistrationsButton'),autoBatch:document.getElementById('viewAutoBatchButton'),keywordSourcing:document.getElementById('viewKeywordSourcingButton'),urlImport:document.getElementById('viewUrlImportButton'),channelOrders:document.getElementById('viewChannelOrdersButton'),domemePrecheck:document.getElementById('viewDomemePrecheckButton'),purchaseOrders:document.getElementById('viewPurchaseOrdersButton'),orderExceptions:document.getElementById('viewOrderExceptionsButton')};
     for(const [view,button] of Object.entries(viewButtons))button.addEventListener('click',()=>switchView(view));
     // 'detailOnly' is not a nav tab (no button in viewButtons) -- it's what a
     // draftId deep link (e.g. the Telegram "이미지 1차 가공 완료" notification)
@@ -1518,6 +1531,7 @@ export function adminHtml() {
       if(view==='linkInput')loadLinkInputView();
       else if(view==='score')loadScoreView();
       else if(view==='imageImprovement')loadImageImprovementView();
+      else if(view==='history')loadHistoryView();
       else if(view==='approvalInbox')loadApprovalInbox();
       else if(view==='dashboard')loadDashboardView();
       else if(view==='all')loadList();
@@ -1793,12 +1807,19 @@ export function adminHtml() {
     function domeggookSearchUrl(keyword){
       return 'https://domemedb.domeggook.com/index/item/supplyList.php?sf=subject&enc=utf8&fromOversea=0&mode=search&sw='+encodeURIComponent(keyword)+'&image_file=';
     }
+    // 방금 "도매매에서 검색"으로 찾아본 키워드 -- 2026-08-22 사용자 요청: 이 키워드로
+    // 찾은 링크를 바로 아래 "링크 입력"에 붙여넣어 분석하면, 나중에 히스토리에서
+    // "무슨 키워드로 찾은 링크였는지"를 알 수 있어야 한다. 검색과 분석이 별개
+    // 동작(새 탭 열기 vs 텍스트 분석)이라 서버가 자동으로 연결할 방법이 없으므로,
+    // 가장 최근 검색어를 기억해뒀다가 분석 요청에 같이 실어 보낸다.
+    let lastSearchedKeyword=null;
     (function bindKeywordSearchBar(){
       const keywordSearchButton=document.getElementById('keywordSearchButton');
       const keywordSearchInput=document.getElementById('keywordSearchInput');
       keywordSearchButton.onclick=()=>{
         const keyword=keywordSearchInput.value.trim();
         if(!keyword)return;
+        lastSearchedKeyword=keyword;
         window.open(domeggookSearchUrl(keyword),'_blank');
       };
       keywordSearchInput.addEventListener('keydown',(e)=>{if(e.key==='Enter'){e.preventDefault();keywordSearchButton.click();}});
@@ -1820,7 +1841,7 @@ export function adminHtml() {
         if(!value){resultEl.textContent='링크 또는 상품번호를 입력해주세요.';return;}
         resultEl.textContent='분석 중...';
         try{
-          const data=await api('/api/product-drafts/analyze-links',{method:'POST',body:JSON.stringify({text:value})});
+          const data=await api('/api/product-drafts/analyze-links',{method:'POST',body:JSON.stringify({text:value,keyword:lastSearchedKeyword})});
           lastLinkAnalysisResults=data.results;
           resultEl.textContent='분석 완료 ('+data.results.length+'건) -- "점수" 탭으로 이동합니다.';
           switchView('score');
@@ -1829,17 +1850,33 @@ export function adminHtml() {
         }
       };
     }
+    const SCORE_DIMENSION_LABELS={imageQuality:'이미지 품질',returnRisk:'반품 리스크',duplicateRisk:'중복 위험',profitMargin:'예상마진/가격',naverCompetition:'네이버 경쟁',legalRisk:'법적 리스크',costShipping:'원가/배송비',optionComplexity:'옵션 복잡도',sourceCompleteness:'원본 완성도'};
+    function scoreBreakdownHtml(breakdown){
+      if(!breakdown||!Object.keys(breakdown).length)return '<p class="muted">산출 과정 정보가 없습니다.</p>';
+      return '<table><thead><tr><th>항목</th><th>점수</th><th>이유</th></tr></thead><tbody>'
+        +Object.entries(breakdown).map(([key,part])=>{
+          const isAi=String(part.reason||'').startsWith('[AI]');
+          return '<tr'+(isAi?' style="background:#eef6ff"':'')+'><td>'+escapeHtml(SCORE_DIMENSION_LABELS[key]||key)+(isAi?' 🤖':'')+'</td><td>'+part.points+' / '+part.max+'</td><td>'+escapeHtml(part.reason||'-')+'</td></tr>';
+        }).join('')
+        +'</tbody></table>';
+    }
     function loadScoreView(){
       const el=document.getElementById('specialView');
       if(!lastLinkAnalysisResults||!lastLinkAnalysisResults.length){
         el.innerHTML='<div style="padding:12px"><p class="muted">아직 분석한 링크가 없습니다. "링크 입력" 탭에서 먼저 분석해주세요.</p></div>';
         return;
       }
-      el.innerHTML='<div style="padding:12px"><div class="section"><h3>점수 (높은 순)</h3><p class="muted">마음에 드는 상품의 "등록" 버튼을 누르면 초안이 만들어지고 대표/상세 이미지 1차 생성이 백그라운드로 시작됩니다 -- 완료되면 "이미지 개선" 탭에서 확인/재생성/직접 업로드할 수 있습니다.</p><table><thead><tr><th>점수</th><th>상품명</th><th>마켓</th><th>필터상태</th><th>판매가</th><th>예상마진</th><th>상품번호</th><th>등록</th></tr></thead><tbody>'
+      el.innerHTML='<div style="padding:12px"><div class="section"><h3>점수 (높은 순)</h3><p class="muted">마음에 드는 상품의 "등록" 버튼을 누르면 초안이 만들어지고 대표/상세 이미지 1차 생성이 백그라운드로 시작됩니다 -- 완료되면 "이미지 개선" 탭에서 확인/재생성/직접 업로드할 수 있습니다. "산출 과정"을 누르면 9개 항목별 점수와, AI가 실제로 판단한 항목(이미지품질/반품리스크/중복위험, "[AI]" 표시)을 볼 수 있습니다.</p><table><thead><tr><th>점수</th><th>상품명</th><th>마켓</th><th>필터상태</th><th>판매가</th><th>예상마진</th><th>상품번호</th><th>등록</th><th>산출 과정</th></tr></thead><tbody>'
         +lastLinkAnalysisResults.map(r=>r.status==='error'
-          ?'<tr><td colspan="7">⚠️ 조회 실패: '+escapeHtml(r.error||'')+'</td><td>'+escapeHtml(r.productNo)+'</td></tr>'
-          :'<tr><td>'+r.score+'</td><td>'+escapeHtml(r.name||'-')+'</td><td>'+escapeHtml(r.sourceMarket||'-')+'</td><td>'+escapeHtml(r.filterStatus||'-')+'</td><td>'+money(r.coupangSalePrice)+'</td><td>'+money(r.coupangExpectedProfit)+'</td><td>'+escapeHtml(r.productNo)+'</td><td><button type="button" data-score-import-product-no="'+attr(r.productNo)+'">등록</button><span class="muted" data-score-import-result="'+attr(r.productNo)+'"></span></td></tr>').join('')
+          ?'<tr><td colspan="8">⚠️ 조회 실패: '+escapeHtml(r.error||'')+'</td><td>'+escapeHtml(r.productNo)+'</td></tr>'
+          :'<tr><td>'+r.score+'</td><td>'+escapeHtml(r.name||'-')+'</td><td>'+escapeHtml(r.sourceMarket||'-')+'</td><td>'+escapeHtml(r.filterStatus||'-')+'</td><td>'+money(r.coupangSalePrice)+'</td><td>'+money(r.coupangExpectedProfit)+'</td><td>'+escapeHtml(r.productNo)+'</td><td><button type="button" data-score-import-product-no="'+attr(r.productNo)+'">등록</button><span class="muted" data-score-import-result="'+attr(r.productNo)+'"></span></td><td><button type="button" data-score-detail-toggle="'+attr(r.productNo)+'">산출 과정</button></td></tr>'
+            +'<tr hidden data-score-detail-row="'+attr(r.productNo)+'"><td colspan="9">'+scoreBreakdownHtml(r.breakdown)+'</td></tr>').join('')
         +'</tbody></table></div></div>';
+      el.querySelectorAll('[data-score-detail-toggle]').forEach(button=>button.onclick=()=>{
+        const row=el.querySelector('[data-score-detail-row="'+CSS.escape(button.dataset.scoreDetailToggle)+'"]');
+        row.hidden=!row.hidden;
+        button.textContent=row.hidden?'산출 과정':'접기';
+      });
       el.querySelectorAll('[data-score-import-product-no]').forEach(button=>button.onclick=async()=>{
         const productNo=button.dataset.scoreImportProductNo;
         const resultEl=el.querySelector('[data-score-import-result="'+CSS.escape(productNo)+'"]');
@@ -1864,6 +1901,22 @@ export function adminHtml() {
           +(drafts.length?'<table><thead><tr><th>상품</th><th>상태</th><th>바로가기</th></tr></thead><tbody>'
             +drafts.map(d=>'<tr><td>'+escapeHtml(d.sellingTitle||d.originalProductName||d.supplierProductNo)+'</td><td>'+escapeHtml(d.status)+'</td><td><a href="/admin?draftId='+d.id+'">초안 #'+d.id+' 열기</a></td></tr>').join('')
             +'</tbody></table>':'<p class="muted">이미지 승인 대기 중인 초안이 없습니다.</p>')
+          +'</div></div>';
+      }).catch(error=>{el.innerHTML='<div style="padding:12px"><p class="muted">불러오기 실패: '+escapeHtml(error.message)+'</p></div>';});
+    }
+    // 2026-08-22 사용자 요청: "링크 입력" 점수가 새로고침하면 사라지는 게 아니라
+    // link_analysis_history(DB)에 계속 쌓여서, 과거에 어떤 키워드/링크를 보고
+    // 어떤 점수가 나왔는지 나중에도 볼 수 있어야 한다.
+    function loadHistoryView(){
+      const el=document.getElementById('specialView');
+      el.innerHTML='<div style="padding:12px"><p class="muted">불러오는 중...</p></div>';
+      api('/api/product-drafts/link-analysis-history?limit=100').then(data=>{
+        const history=data.history||[];
+        el.innerHTML='<div style="padding:12px"><div class="section"><h3>히스토리 (최근 분석 순)</h3>'
+          +'<p class="muted">"링크 입력"/텔레그램 링크 분석으로 나온 점수 기록입니다. 저장은 안 하고 점수만 매긴 것도 여기 쌓입니다 (등록 여부와 무관).</p>'
+          +(history.length?'<table><thead><tr><th>분석일시</th><th>키워드</th><th>출처</th><th>점수</th><th>상품명</th><th>마켓</th><th>필터상태</th><th>상품번호</th></tr></thead><tbody>'
+            +history.map(h=>'<tr><td>'+escapeHtml((h.analyzedAt||'').replace('T',' ').slice(0,19))+'</td><td>'+escapeHtml(h.keyword||'-')+'</td><td>'+escapeHtml(h.source==='telegram'?'텔레그램':'GUI')+'</td><td>'+(h.score??'-')+'</td><td>'+escapeHtml(h.name||'-')+'</td><td>'+escapeHtml(h.sourceMarket||'-')+'</td><td>'+escapeHtml(h.filterStatus||'-')+'</td><td>'+escapeHtml(h.supplierProductNo)+'</td></tr>').join('')
+            +'</tbody></table>':'<p class="muted">아직 기록된 히스토리가 없습니다.</p>')
           +'</div></div>';
       }).catch(error=>{el.innerHTML='<div style="padding:12px"><p class="muted">불러오기 실패: '+escapeHtml(error.message)+'</p></div>';});
     }

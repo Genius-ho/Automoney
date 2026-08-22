@@ -88,7 +88,7 @@ test('runClaudeVisionReview writes the image list + prompt to stdin, never as a 
   assert.deepEqual(result.usage, { input_tokens: 1 });
 });
 
-test('runClaudeVisionReview passes --allowedTools \'\', the configured model, and defaults --effort to medium', async () => {
+test('runClaudeVisionReview passes --allowedTools \'\', the configured model, --effort medium by default, and --add-dir for the image\'s directory', async () => {
   let receivedArgs = null;
   const spawnImpl = (executable, args) => {
     receivedArgs = args;
@@ -100,7 +100,34 @@ test('runClaudeVisionReview passes --allowedTools \'\', the configured model, an
     return child;
   };
   await runClaudeVisionReview({ config: { executable: 'claude', model: 'sonnet' }, images: ['/tmp/a.jpg'], prompt: 'x', spawnImpl });
-  assert.deepEqual(receivedArgs, ['-p', '--output-format', 'json', '--model', 'sonnet', '--effort', 'medium', '--allowedTools', '']);
+  assert.deepEqual(receivedArgs, ['-p', '--output-format', 'json', '--model', 'sonnet', '--effort', 'medium', '--allowedTools', '', '--add-dir', '/tmp']);
+});
+
+// Regression (2026-08-22, confirmed live): a temp file downloaded to
+// os.tmpdir() for AI image-quality review is outside the CLI's default
+// allowed directory (its own cwd) and got silently refused with a
+// plain-text "읽기 권한이 거부되어" reply instead of a thrown error --
+// --add-dir is what makes the CLI actually able to read it.
+test('runClaudeVisionReview passes --add-dir once per unique image directory (deduped), preserving cwd-relative images too', async () => {
+  let receivedArgs = null;
+  const spawnImpl = (executable, args) => {
+    receivedArgs = args;
+    const child = fakeChild();
+    queueMicrotask(() => {
+      child.stdout.emit('data', JSON.stringify({ is_error: false, result: 'ok' }));
+      child.emit('close', 0);
+    });
+    return child;
+  };
+  await runClaudeVisionReview({
+    config: { executable: 'claude', model: 'sonnet' },
+    images: ['/tmp/a.jpg', '/tmp/b.jpg', '/home/ho/automoney/public/c.jpg'],
+    prompt: 'x',
+    spawnImpl,
+  });
+  const addDirIndex = receivedArgs.indexOf('--add-dir');
+  assert.ok(addDirIndex > -1);
+  assert.deepEqual(receivedArgs.slice(addDirIndex + 1), ['/tmp', '/home/ho/automoney/public']);
 });
 
 test('runClaudeVisionReview uses config.effort over the default when supplied', async () => {
