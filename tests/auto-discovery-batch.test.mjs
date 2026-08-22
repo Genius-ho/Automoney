@@ -247,6 +247,31 @@ test('collectAndScoreCandidatesForCategory reports no winner when the top score 
   assert.equal(result.top[0].isWinner, false);
 });
 
+test('collectAndScoreCandidatesForCategory defaults includeDomeggook to false (도매매만), matching the 3-day discovery cycle\'s existing behavior', async () => {
+  let receivedCollectOptions = null;
+  let receivedEvaluateIncludeDomeggook = null;
+  await collectAndScoreCandidatesForCategory(policy(1), {
+    minPassingScore: 60,
+    collectCandidatesImpl: async (client, keywords, options) => { receivedCollectOptions = options; return []; },
+    evaluateCandidatesImpl: async (client, candidates, rules, options) => { receivedEvaluateIncludeDomeggook = options.includeDomeggook; return []; },
+  });
+  assert.equal(receivedCollectOptions.includeDomeggook, false);
+  assert.equal(receivedEvaluateIncludeDomeggook, false);
+});
+
+test('collectAndScoreCandidatesForCategory passes includeDomeggook: true through to both collectCandidates and evaluateCandidates when opted in', async () => {
+  let receivedCollectOptions = null;
+  let receivedEvaluateIncludeDomeggook = null;
+  await collectAndScoreCandidatesForCategory(policy(1), {
+    minPassingScore: 60,
+    includeDomeggook: true,
+    collectCandidatesImpl: async (client, keywords, options) => { receivedCollectOptions = options; return []; },
+    evaluateCandidatesImpl: async (client, candidates, rules, options) => { receivedEvaluateIncludeDomeggook = options.includeDomeggook; return []; },
+  });
+  assert.equal(receivedCollectOptions.includeDomeggook, true);
+  assert.equal(receivedEvaluateIncludeDomeggook, true);
+});
+
 function discoveryDeps(overrides = {}) {
   const calls = { finishBatchRun: [], recordBatchCandidates: [], releaseDiscoveryLock: [], releaseLockOnly: [], enqueueCandidate: [] };
   let nextCandidateId = 1;

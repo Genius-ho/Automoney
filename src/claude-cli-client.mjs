@@ -98,12 +98,6 @@ function releaseSlot() {
 // prompt that embeds supplier-provided text from being able to trigger
 // arbitrary tool use.
 export async function runClaudeVisionReview({ config, images = [], prompt, spawnImpl }) {
-  const executable = config?.executable || 'claude';
-  const model = config?.model || 'sonnet';
-  const effort = config?.effort || 'medium';
-  const timeoutMs = config?.timeoutMs || 180_000;
-  const limit = config?.concurrency || 1;
-
   if (!Array.isArray(images) || images.length === 0) {
     const error = new Error('runClaudeVisionReview requires at least one image');
     error.code = 'NO_IMAGES';
@@ -117,6 +111,30 @@ export async function runClaudeVisionReview({ config, images = [], prompt, spawn
 
   const imageList = images.map((path, index) => `${index + 1}. ${path}`).join('\n');
   const fullPrompt = `아래 이미지 파일들을 각각 읽고 검수하라:\n${imageList}\n\n${prompt}`;
+
+  return runClaudeTurn({ config, fullPrompt, spawnImpl });
+}
+
+// Text-only counterpart to runClaudeVisionReview -- same CLI/parsing
+// machinery, just without the image-list preamble, for prompts that only
+// need Claude to reason over text (e.g. extracting keywords from a list of
+// product titles).
+export async function runClaudeTextPrompt({ config, prompt, spawnImpl }) {
+  if (!prompt) {
+    const error = new Error('runClaudeTextPrompt requires a prompt');
+    error.code = 'MISSING_PROMPT';
+    throw error;
+  }
+
+  return runClaudeTurn({ config, fullPrompt: prompt, spawnImpl });
+}
+
+async function runClaudeTurn({ config, fullPrompt, spawnImpl }) {
+  const executable = config?.executable || 'claude';
+  const model = config?.model || 'sonnet';
+  const effort = config?.effort || 'medium';
+  const timeoutMs = config?.timeoutMs || 180_000;
+  const limit = config?.concurrency || 1;
 
   await acquireSlot(limit);
   try {

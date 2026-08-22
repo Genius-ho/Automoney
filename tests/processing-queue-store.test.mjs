@@ -12,6 +12,7 @@ import {
   getNextQueuedItem,
   getNextQueueItem,
   isCandidateActiveOrQueued,
+  listKeywordSourcedCandidates,
   listQueueItemsForRegistrationReconciliation,
   listQueue,
   recordQueueItemPause,
@@ -121,6 +122,22 @@ test('listQueue filters by status when provided', async () => {
   const db = { async query(sql, params) { capturedParams = params; return { rows: [fakeRow()] }; } };
   await listQueue(db, { status: 'awaiting_image_approval' });
   assert.deepEqual(capturedParams, ['awaiting_image_approval']);
+});
+
+test('listKeywordSourcedCandidates joins to batch_runs/category_policy and excludes batch_runs that have any batch_category_selections row', async () => {
+  let capturedSql = null;
+  const db = {
+    async query(sql) {
+      capturedSql = sql;
+      return { rows: [fakeRow({ category_name: '쿠팡 키워드 소싱 (미분류)' })] };
+    },
+  };
+  const items = await listKeywordSourcedCandidates(db);
+  assert.match(capturedSql, /join batch_run_candidates brc on brc\.id = pq\.batch_run_candidate_id/);
+  assert.match(capturedSql, /join batch_runs br on br\.id = brc\.batch_run_id/);
+  assert.match(capturedSql, /not exists \(select 1 from batch_category_selections bcs where bcs\.batch_run_id = br\.id\)/);
+  assert.equal(items[0].categoryName, '쿠팡 키워드 소싱 (미분류)');
+  assert.equal(items[0].id, 1);
 });
 
 test('getNextQueueItem resumes an in-progress item before ever picking a fresh queued one', async () => {

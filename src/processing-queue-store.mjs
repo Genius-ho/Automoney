@@ -88,6 +88,27 @@ export async function listQueue(db, { status } = {}) {
   return result.rows.map(toQueueItem);
 }
 
+// Admin GUI's "사용자 키워드" tab (coupang-keyword-sourcing.mjs). There is no
+// dedicated source-type column on batch_runs/batch_run_candidates -- instead
+// this relies on the one behavioral difference between the two producers of
+// processing_queue rows: the 3-day discovery cycle always calls
+// recordCategorySelections (category-policy-store.mjs) for the batch_run it
+// creates (auto-discovery-batch.mjs's runCandidateDiscoveryBatch), while
+// sourceCandidatesFromKeywords never does. A batch_run with zero
+// batch_category_selections rows is therefore guaranteed keyword-sourced.
+export async function listKeywordSourcedCandidates(db) {
+  const result = await db.query(`
+    select pq.*, cp.category_name
+    from processing_queue pq
+    join batch_run_candidates brc on brc.id = pq.batch_run_candidate_id
+    join batch_runs br on br.id = brc.batch_run_id
+    left join category_policy cp on cp.id = pq.category_policy_id
+    where not exists (select 1 from batch_category_selections bcs where bcs.batch_run_id = br.id)
+    order by pq.queued_at desc
+  `);
+  return result.rows.map((row) => ({ ...toQueueItem(row), categoryName: row.category_name }));
+}
+
 // Priority: resume anything already mid-flight (analyzing/generating_images
 // -- interrupted by a rate limit or a process restart) before ever starting
 // a fresh item, then the highest-scoring still-queued item. This is what

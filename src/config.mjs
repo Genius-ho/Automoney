@@ -205,6 +205,15 @@ export async function loadPricingRules(path) {
   return normalizeRuleKeys(JSON.parse(await readFile(path, 'utf8')));
 }
 
+// 2026-08-22 사용자 요청: 자동 소싱/등록 파이프라인을 재검토하는 동안 모든
+// 백그라운드 스케줄(주문/배송/반품 처리 포함)을 완전히 멈추는 킬스위치.
+// .env의 AUTOMATION_PAUSED=true로 켜고 끄며, systemd 유닛 파일을 건드릴 필요가
+// 없도록 이 프로젝트의 기존 .env 로딩 경로를 그대로 재사용한다.
+export async function isAutomationPaused(rootDir = process.cwd()) {
+  const values = await loadEnvValues(rootDir).catch(() => ({}));
+  return String(values.AUTOMATION_PAUSED || process.env.AUTOMATION_PAUSED || '').toLowerCase() === 'true';
+}
+
 async function loadEnvValues(rootDir) {
   const envPath = existsSync(join(rootDir, '.env')) ? join(rootDir, '.env') : join(rootDir, 'env');
   return parseEnv(await readFile(envPath, 'utf8'));

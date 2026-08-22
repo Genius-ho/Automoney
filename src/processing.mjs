@@ -577,6 +577,7 @@ function inferSourceMarket({ source, raw, context }) {
   );
   if (explicit !== 'unknown') return explicit;
   if (context.requestedMarket === 'dome') return 'domeme';
+  if (context.requestedMarket === 'supply') return 'domeggook';
   return 'unknown';
 }
 

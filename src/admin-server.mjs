@@ -4,13 +4,15 @@ import { mkdir, readFile, rename, rm, writeFile } from 'node:fs/promises';
 import { extname, join, resolve } from 'node:path';
 import { createHash } from 'node:crypto';
 
-import { loadAiSecrets, loadCodexConfig, loadCoupangConfig, loadDatabaseUrl, loadDomemePrivateConfig, loadEnvConfig, loadJobPathsConfig, loadNaverCommerceConfig, loadNaverConfig, loadPricingRules, loadPythonConfig, loadTelegramConfig } from './config.mjs';
+import { isAutomationPaused, loadAiSecrets, loadCodexConfig, loadCoupangConfig, loadDatabaseUrl, loadDomemePrivateConfig, loadEnvConfig, loadJobPathsConfig, loadNaverCommerceConfig, loadNaverConfig, loadPricingRules, loadPythonConfig, loadTelegramConfig } from './config.mjs';
+import { generateManualImportImagesAndNotify, importDraftFromSupplierUrl, parseSupplierProductNo } from './manual-url-import.mjs';
+import { analyzeProductLinks } from './product-link-analysis.mjs';
 import { sendCriticalAlert } from './telegram-notifier.mjs';
 import { DomemeClient } from './domeme-client.mjs';
 import { runCandidateDiscoveryBatch, runDueProductAutomationStage, runNextProductAutomationStage } from './auto-discovery-batch.mjs';
 import { getBatchScheduleState, updateBatchScheduleState } from './batch-schedule-store.mjs';
 import { getBatchRunDetail, listBatchRuns } from './batch-run-store.mjs';
-import { countActiveQueueItems, getNextQueueItem, listQueue, updateQueueItemStatus } from './processing-queue-store.mjs';
+import { countActiveQueueItems, getNextQueueItem, listKeywordSourcedCandidates, listQueue, updateQueueItemStatus } from './processing-queue-store.mjs';
 import { uploadApprovedImagesToR2 } from './r2-publisher.mjs';
 import { clearProviderCredential, listProviderSettings, listTaskRouting, saveProviderSetting, saveTaskRouting, testProviderSetting } from './ai/provider-settings-store.mjs';
 import { NaverShoppingClient } from './naver-shopping-client.mjs';
@@ -202,34 +204,45 @@ export async function createAdminServer({ rootDir = process.cwd() } = {}) {
     });
   });
 
-  const autoBatchDeps = await loadAutoBatchDeps(rootDir);
-  const telegramConfig = await loadTelegramConfig(rootDir);
-  const tickHandle = setInterval(async () => {
-    if (!autoBatchDeps) return;
-    try {
-      const result = await runDueProductAutomationStage(db, { rootDir, ...autoBatchDeps }, { dailyBatchSize: DAILY_PRODUCT_BATCH_SIZE });
-      if (!result.skipped) {
-        const message = result.outcome?.message ? ` message=${JSON.stringify(result.outcome.message)}` : '';
-        console.log(`autoBatch.stageTick=${result.stage}:${result.outcome?.outcome || result.outcome?.reason || 'completed'} processed=${result.processedCount ?? 1}${message}`);
-      }
-    } catch (error) {
-      console.error(`autoBatch.tickError=${error.message}`);
+  // 2026-08-22 사용자 요청: 자동 소싱·등록 파이프라인 신뢰도(옵션 매핑 실패 다수)를
+  // 재검토하는 동안 주문/배송/반품 처리까지 포함한 모든 백그라운드 스케줄을 완전히
+  // 멈춰달라는 명시적 요청 -- AUTOMATION_PAUSED=true면 tick도, scheduler.mjs의 어떤
+  // 틱도 등록하지 않는다. 관리자 HTTP 서버 자체(기존 데이터 조회용 GUI)는 그대로 뜬다.
+  const automationPaused = await isAutomationPaused(rootDir);
+  let tickHandle = null;
+  let scheduledJobHandles = [];
+  if (automationPaused) {
+    console.log('automation.paused=true (AUTOMATION_PAUSED) -- no scheduled jobs registered (주문/배송/반품/자동배치 전부 중단)');
+  } else {
+    const autoBatchDeps = await loadAutoBatchDeps(rootDir);
+    const telegramConfig = await loadTelegramConfig(rootDir);
+    tickHandle = setInterval(async () => {
+      if (!autoBatchDeps) return;
       try {
-        await sendCriticalAlert(telegramConfig, 'autoBatch.tick', error.message);
-      } catch (alertError) {
-        console.error(`autoBatch.tickAlertFailed=${alertError.message}`);
+        const result = await runDueProductAutomationStage(db, { rootDir, ...autoBatchDeps }, { dailyBatchSize: DAILY_PRODUCT_BATCH_SIZE });
+        if (!result.skipped) {
+          const message = result.outcome?.message ? ` message=${JSON.stringify(result.outcome.message)}` : '';
+          console.log(`autoBatch.stageTick=${result.stage}:${result.outcome?.outcome || result.outcome?.reason || 'completed'} processed=${result.processedCount ?? 1}${message}`);
+        }
+      } catch (error) {
+        console.error(`autoBatch.tickError=${error.message}`);
+        try {
+          await sendCriticalAlert(telegramConfig, 'autoBatch.tick', error.message);
+        } catch (alertError) {
+          console.error(`autoBatch.tickAlertFailed=${alertError.message}`);
+        }
       }
-    }
-  }, AUTO_BATCH_TICK_INTERVAL_MS);
-  tickHandle.unref?.();
+    }, AUTO_BATCH_TICK_INTERVAL_MS);
+    tickHandle.unref?.();
 
-  // Phase 6-10's own periodic sweeps (section 18) -- see scheduler.mjs's
-  // header comment for why this is separate from the autoBatch tick above
-  // rather than folded into it.
-  const scheduledJobHandles = await startScheduledJobs(db, rootDir);
+    // Phase 6-10's own periodic sweeps (section 18) -- see scheduler.mjs's
+    // header comment for why this is separate from the autoBatch tick above
+    // rather than folded into it.
+    scheduledJobHandles = await startScheduledJobs(db, rootDir);
+  }
 
   server.on('close', () => {
-    clearInterval(tickHandle);
+    if (tickHandle) clearInterval(tickHandle);
     stopScheduledJobs(scheduledJobHandles);
     db.end().catch(() => {});
   });
@@ -981,6 +994,17 @@ async function handleRequest({ request, response, db, aiSecrets, rootDir }) {
     return;
   }
 
+  // "사용자 키워드" tab -- candidates sourced from a human-typed Telegram
+  // keyword (coupang-keyword-sourcing.mjs), not the 3-day category-discovery
+  // cycle. Read-only: this reuses the exact same processing_queue rows/
+  // pipeline as /api/auto-batch/queue above, so it needs no register/run-now
+  // actions of its own.
+  if (url.pathname === '/api/auto-batch/keyword-queue' && request.method === 'GET') {
+    const queue = await listKeywordSourcedCandidates(db);
+    sendJson(response, 200, { queue });
+    return;
+  }
+
   // Manual "지금 등록" trigger for a queue item sitting at
   // ready_for_registration -- draft + detail-image slicing already happened
   // (prepareCandidateDraft), this is the one gated step that puts a real
@@ -1089,6 +1113,56 @@ async function handleRequest({ request, response, db, aiSecrets, rootDir }) {
       if (error.code === 'RUN_NOT_FOUND' || error.code === 'DRAFT_NOT_FOUND') { sendJson(response, 404, { error: error.message, code: error.code }); return; }
       if (error.code === 'RUN_NOT_APPLICABLE') { sendJson(response, 409, { error: error.message, code: error.code }); return; }
       throw error;
+    }
+    return;
+  }
+
+  // "URL로 상품 등록" -- 사람이 도매매/도매꾹에서 직접 고른 상품 URL(또는 상품번호)을
+  // 붙여넣으면 그 상품 하나만 초안으로 만들고, 대표/상세 이미지 1차 생성까지 백그라운드로
+  // 돌린 뒤 텔레그램으로 완료 여부를 알린다. HTTP 응답은 초안 생성 직후 바로 돌려주고
+  // (Codex 이미지 생성은 수 분 걸릴 수 있어 요청을 붙잡아두지 않는다), 이후 검수/승인/
+  // 등록은 기존 관리자 화면(승인함, draft 상세 탭)을 그대로 사용한다.
+  if (url.pathname === '/api/product-drafts/import-by-url' && request.method === 'POST') {
+    try {
+      const body = await readJson(request);
+      const [envConfig, pricingRules] = await Promise.all([
+        loadEnvConfig(rootDir),
+        loadPricingRules(join(rootDir, 'pricing-rules.json')),
+      ]);
+      const domemeClient = new DomemeClient({ apiKey: envConfig.domemeApiKey, endpoint: envConfig.domemeEndpoint });
+      const imported = await importDraftFromSupplierUrl(domemeClient, body.url, pricingRules, { db });
+      generateManualImportImagesAndNotify(db, rootDir, imported.draftId).catch((error) => {
+        console.error(`manualUrlImport.processError=${error.message}`);
+      });
+      sendJson(response, 201, imported);
+    } catch (error) {
+      sendJson(response, error.code === 'INVALID_INPUT' ? 400 : 500, { error: error.message, code: error.code });
+    }
+    return;
+  }
+
+  // "링크 입력" 탭 -- 사람이 도매매/도매꾹에서 찾은 후보 링크 여러 개(줄바꿈 구분)를
+  // 분석만 한다(저장/등록 없음). coupang-keyword-telegram.mjs의 링크 분석 답장과
+  // 완전히 동일한 로직(product-link-analysis.mjs)을 재사용 -- 텔레그램으로 보내든
+  // GUI에 붙여넣든 같은 결과가 나온다.
+  if (url.pathname === '/api/product-drafts/analyze-links' && request.method === 'POST') {
+    try {
+      const body = await readJson(request);
+      const lines = String(body.text || '').split(/\r?\n/).map((line) => line.trim()).filter(Boolean);
+      const productNos = [...new Set(lines.map((line) => parseSupplierProductNo(line)).filter(Boolean))];
+      if (productNos.length === 0) {
+        sendJson(response, 400, { error: '인식 가능한 링크/상품번호가 없습니다', code: 'NO_VALID_LINKS' });
+        return;
+      }
+      const [envConfig, pricingRules] = await Promise.all([
+        loadEnvConfig(rootDir),
+        loadPricingRules(join(rootDir, 'pricing-rules.json')),
+      ]);
+      const domemeClient = new DomemeClient({ apiKey: envConfig.domemeApiKey, endpoint: envConfig.domemeEndpoint });
+      const results = await analyzeProductLinks(domemeClient, productNos, pricingRules);
+      sendJson(response, 200, { results });
+    } catch (error) {
+      sendJson(response, 500, { error: error.message, code: error.code });
     }
     return;
   }
@@ -1295,11 +1369,31 @@ export function adminHtml() {
     button{border:1px solid #b9c2cf;background:#fff;padding:7px 10px;cursor:pointer}
     button.primary{background:#1f6feb;color:#fff;border-color:#1f6feb}
     main{display:grid;grid-template-rows:minmax(420px,52vh) 1fr;min-height:calc(100vh - 57px)}main.singleView{grid-template-rows:1fr}
+    /* detailOnly (a draftId deep link): .list's only visible content is the
+       thin viewNav bar, so its row must size to content (auto), not stretch
+       to fill like singleView's 1fr would -- otherwise detail gets squeezed
+       into a sliver below the fold. See switchView()'s 'detailOnly' branch. */
+    main.detailOnly{grid-template-rows:auto 1fr}
     main[hidden]{display:none}
     .list{border-bottom:1px solid #d8dee7;background:#fff;overflow:hidden;display:flex;flex-direction:column;min-width:0}
     .detail{padding:18px;overflow:auto}.toolbar{display:flex;gap:8px;flex-wrap:wrap;padding:10px 12px;border-bottom:1px solid #d8dee7;background:#fff;flex:0 0 auto;align-items:center}
+    /* Pre-existing bug (predates this session): the .toolbar class itself
+       sets display:flex, which wins over the browser's default [hidden]
+       {display:none} UA rule by CSS cascade/specificity -- so every non-'all'
+       view (including #paginationToolbar, which also has class="toolbar")
+       kept rendering the status-filter/pagination bar even while .hidden was
+       set true in JS. Confirmed live in Chromium: [hidden] alone is not
+       enough for any element whose own class also sets display. */
+    .toolbar[hidden]{display:none}
     .viewNav{display:flex;gap:10px;padding:14px 16px;border-bottom:1px solid #d8dee7;background:#fff;flex:0 0 auto}
     .viewNav button{flex:1 1 0;font-size:16px;font-weight:700;padding:14px 10px;border-radius:4px;border-color:#c7d1dd;color:#374151}
+    /* Deliberately its own class, not .toolbar -- .toolbar is what
+       switchView()'s document.querySelector('.toolbar') targets by being
+       the *first* .toolbar-classed element in the DOM, and this bar must
+       never be that element (it's a permanent, view-independent widget, see
+       its wiring below) or switchView would start hiding/showing it instead
+       of the real status-filter toolbar. */
+    .keywordSearchBar{display:flex;gap:8px;padding:10px 16px;border-bottom:1px solid #d8dee7;background:#fff;align-items:center;flex:0 0 auto}
     .viewNav button.primary{background:#1f6feb;color:#fff;border-color:#1f6feb}
     .toolbar select,.toolbar input:not([type=checkbox]){width:auto;min-width:120px;flex:0 0 auto}
     .tableWrap{overflow:auto;flex:1 1 auto} table{border-collapse:collapse;width:max-content;min-width:100%;font-size:12px;table-layout:fixed}
@@ -1329,16 +1423,27 @@ export function adminHtml() {
   <main class="singleView">
     <section class="list">
       <div class="viewNav">
-        <button id="viewApprovalInboxButton" class="primary" type="button">승인함</button>
-        <button id="viewDashboardButton" type="button">대시보드</button>
-        <button id="viewAllButton" type="button">전체</button>
-        <button id="viewRecommendButton" type="button">추천</button>
-        <button id="viewRegistrationsButton" type="button">등록·재고관리</button>
-        <button id="viewAutoBatchButton" type="button">자동배치</button>
-        <button id="viewChannelOrdersButton" type="button">주문</button>
-        <button id="viewDomemePrecheckButton" type="button">발주(도매매)</button>
-        <button id="viewPurchaseOrdersButton" type="button">발주안</button>
-        <button id="viewOrderExceptionsButton" type="button">예외 큐</button>
+        <button id="viewLinkInputButton" class="primary" type="button">링크 입력</button>
+        <button id="viewScoreButton" type="button">점수</button>
+        <button id="viewImageImprovementButton" type="button">이미지 개선</button>
+        <!-- 2026-08-22 사용자 요청: 우선 위 3개 탭만 쓰기로 하고 나머지는 숨김
+             (기능은 그대로 남아있음 -- hidden만 지우면 다시 보임) -->
+        <button id="viewApprovalInboxButton" type="button" hidden>승인함</button>
+        <button id="viewDashboardButton" type="button" hidden>대시보드</button>
+        <button id="viewAllButton" type="button" hidden>전체</button>
+        <button id="viewRecommendButton" type="button" hidden>추천</button>
+        <button id="viewRegistrationsButton" type="button" hidden>등록·재고관리</button>
+        <button id="viewAutoBatchButton" type="button" hidden>자동배치</button>
+        <button id="viewKeywordSourcingButton" type="button" hidden>사용자 키워드</button>
+        <button id="viewUrlImportButton" type="button" hidden>URL 등록</button>
+        <button id="viewChannelOrdersButton" type="button" hidden>주문</button>
+        <button id="viewDomemePrecheckButton" type="button" hidden>발주(도매매)</button>
+        <button id="viewPurchaseOrdersButton" type="button" hidden>발주안</button>
+        <button id="viewOrderExceptionsButton" type="button" hidden>예외 큐</button>
+      </div>
+      <div class="keywordSearchBar">
+        <input id="keywordSearchInput" style="max-width:300px" placeholder="키워드로 도매매 검색 (예: 여성 벨트)">
+        <button id="keywordSearchButton" type="button">도매매에서 검색</button>
       </div>
       <div class="toolbar" hidden>
         <select id="statusFilter"><option value="">all</option><option value="draft">draft</option><option value="needs_review">needs_review</option><option value="blocked">blocked</option><option value="approved">approved</option></select>
@@ -1391,24 +1496,36 @@ export function adminHtml() {
     for(const radio of document.querySelectorAll('input[name="pageSize"]'))radio.addEventListener('change',(e)=>{currentPageSize=Number(e.target.value);currentPage=1;loadList();});
     prevPageButton.addEventListener('click',()=>{if(currentPage>1){currentPage-=1;loadList();}});
     nextPageButton.addEventListener('click',()=>{if(currentPage*currentPageSize<currentTotal){currentPage+=1;loadList();}});
-    let currentView='approvalInbox';
-    const viewButtons={approvalInbox:document.getElementById('viewApprovalInboxButton'),dashboard:document.getElementById('viewDashboardButton'),all:document.getElementById('viewAllButton'),recommend:document.getElementById('viewRecommendButton'),registrations:document.getElementById('viewRegistrationsButton'),autoBatch:document.getElementById('viewAutoBatchButton'),channelOrders:document.getElementById('viewChannelOrdersButton'),domemePrecheck:document.getElementById('viewDomemePrecheckButton'),purchaseOrders:document.getElementById('viewPurchaseOrdersButton'),orderExceptions:document.getElementById('viewOrderExceptionsButton')};
+    let currentView='linkInput';
+    const viewButtons={linkInput:document.getElementById('viewLinkInputButton'),score:document.getElementById('viewScoreButton'),imageImprovement:document.getElementById('viewImageImprovementButton'),approvalInbox:document.getElementById('viewApprovalInboxButton'),dashboard:document.getElementById('viewDashboardButton'),all:document.getElementById('viewAllButton'),recommend:document.getElementById('viewRecommendButton'),registrations:document.getElementById('viewRegistrationsButton'),autoBatch:document.getElementById('viewAutoBatchButton'),keywordSourcing:document.getElementById('viewKeywordSourcingButton'),urlImport:document.getElementById('viewUrlImportButton'),channelOrders:document.getElementById('viewChannelOrdersButton'),domemePrecheck:document.getElementById('viewDomemePrecheckButton'),purchaseOrders:document.getElementById('viewPurchaseOrdersButton'),orderExceptions:document.getElementById('viewOrderExceptionsButton')};
     for(const [view,button] of Object.entries(viewButtons))button.addEventListener('click',()=>switchView(view));
+    // 'detailOnly' is not a nav tab (no button in viewButtons) -- it's what a
+    // draftId deep link (e.g. the Telegram "이미지 1차 가공 완료" notification)
+    // switches to, so opening it shows just that one draft's detail panel
+    // instead of dumping the visitor into the full (now-hidden-from-nav)
+    // "전체" list+table view, which used to happen because every deep link
+    // called switchView('all') -- see loadList() not being called below.
     function switchView(view){
       currentView=view;
       for(const [key,button] of Object.entries(viewButtons))button.classList.toggle('primary',key===view);
       document.querySelector('#draftTable').closest('.tableWrap').hidden=view!=='all';
-      document.getElementById('specialView').hidden=view==='all';
+      document.getElementById('specialView').hidden=view==='all'||view==='detailOnly';
       document.querySelector('.toolbar').hidden=view!=='all';
       document.getElementById('paginationToolbar').hidden=view!=='all';
-      detail.hidden=view!=='all';
-      document.querySelector('main').classList.toggle('singleView',view!=='all');
-      if(view==='approvalInbox')loadApprovalInbox();
+      detail.hidden=!(view==='all'||view==='detailOnly');
+      document.querySelector('main').classList.toggle('singleView',view!=='all'&&view!=='detailOnly');
+      document.querySelector('main').classList.toggle('detailOnly',view==='detailOnly');
+      if(view==='linkInput')loadLinkInputView();
+      else if(view==='score')loadScoreView();
+      else if(view==='imageImprovement')loadImageImprovementView();
+      else if(view==='approvalInbox')loadApprovalInbox();
       else if(view==='dashboard')loadDashboardView();
       else if(view==='all')loadList();
       else if(view==='recommend')loadRecommendView();
       else if(view==='registrations')loadRegistrationsView();
       else if(view==='autoBatch')loadAutoBatchView();
+      else if(view==='keywordSourcing')loadKeywordSourcingView();
+      else if(view==='urlImport')loadUrlImportView();
       else if(view==='channelOrders')loadChannelOrdersView();
       else if(view==='domemePrecheck')loadDomemePrecheckView();
       else if(view==='purchaseOrders')loadPurchaseOrdersView();
@@ -1615,11 +1732,127 @@ export function adminHtml() {
           +'<td>-</td></tr>').join('')
         +'</tbody></table>';
     }
+    async function loadKeywordSourcingView(){
+      const el=document.getElementById('specialView');
+      el.innerHTML='<p class="muted" style="padding:12px">불러오는 중...</p>';
+      const data=await api('/api/auto-batch/keyword-queue');
+      el.innerHTML='<div style="padding:12px">'
+        +'<div class="section"><h3>사용자 키워드 (텔레그램으로 직접 보낸 쿠팡 키워드)</h3>'
+        +'<p class="muted">매일 오전 10시 텔레그램 알림에 답장으로 보낸 키워드가 도매꾹에서 매칭되면 여기 뜹니다. 이후 분석·이미지생성·QA·등록은 자동배치와 동일한 큐에서 처리됩니다.</p>'
+        +'<div>'+keywordSourcingListHtml(data.queue)+'</div>'
+        +'</div>'
+        +'</div>';
+    }
+    function keywordSourcingListHtml(queue){
+      if(!queue||!queue.length)return '<p class="muted">아직 큐에 들어간 사용자 키워드 후보가 없습니다.</p>';
+      return '<table><thead><tr><th>상품</th><th>카테고리</th><th>점수</th><th>상태</th><th>draft</th><th>실패사유</th></tr></thead><tbody>'
+        +queue.map(q=>'<tr><td>'+escapeHtml(q.name||q.supplierProductNo)+'</td><td>'+escapeHtml(q.categoryName||'-')+'</td><td>'+(q.score??'-')+'</td><td>'+escapeHtml(QUEUE_STATUS_LABELS[q.status]||q.status)+'</td>'
+          +'<td>'+(q.draftId?'<a href="/admin?draftId='+q.draftId+'">#'+q.draftId+'</a>':'-')+'</td>'
+          +'<td>'+(q.failureMessage?escapeHtml(q.failureStage||'')+': '+escapeHtml(q.failureMessage):'-')+'</td></tr>').join('')
+        +'</tbody></table>';
+    }
     function autoBatchRunsListHtml(runs){
       if(!runs||!runs.length)return '<p class="muted">아직 실행 이력이 없습니다.</p>';
       return runs.map(r=>'<div><button type="button" data-auto-batch-run-id="'+r.id+'">#'+r.id+'</button> '
         +escapeHtml(r.status)+' / '+escapeHtml(r.stageReached||'-')+' / '+escapeHtml(r.startedAt||'-')
         +(r.errorMessage?' / <span class="badge reasonBlock">'+escapeHtml(r.errorMessage)+'</span>':'')+'</div>').join('');
+    }
+    function loadUrlImportView(){
+      const el=document.getElementById('specialView');
+      el.innerHTML='<div style="padding:12px">'
+        +'<div class="section"><h3>URL로 상품 등록</h3>'
+        +'<p class="muted">도매매/도매꾹에서 직접 고른 상품의 URL(또는 상품번호)을 붙여넣으면 초안을 만들고, 대표/상세 이미지 1차 생성까지 자동으로 진행한 뒤 텔레그램으로 완료 여부를 알려줍니다. 그 다음 검수·승인·등록은 승인함/초안 상세 화면에서 그대로 하면 됩니다.</p>'
+        +'<input id="urlImportInput" style="width:100%;max-width:600px" placeholder="https://domeggook.com/main/item/itemView.php?no=... 또는 상품번호">'
+        +'<p><button id="urlImportSubmitButton" type="button">등록 시작</button></p>'
+        +'<div id="urlImportResult" class="muted"></div>'
+        +'</div>'
+        +'</div>';
+      document.getElementById('urlImportSubmitButton').onclick=async()=>{
+        const resultEl=document.getElementById('urlImportResult');
+        const input=document.getElementById('urlImportInput');
+        const value=input.value.trim();
+        if(!value){resultEl.textContent='URL 또는 상품번호를 입력해주세요.';return;}
+        resultEl.textContent='초안 생성 중...';
+        try{
+          const data=await api('/api/product-drafts/import-by-url',{method:'POST',body:JSON.stringify({url:value})});
+          resultEl.innerHTML='초안 #'+data.draftId+' 생성 완료 (필터 상태: '+escapeHtml(data.filterStatus)+') -- 이미지 1차 생성은 백그라운드에서 진행 중이며 완료되면 텔레그램으로 알려줍니다. <a href="/admin?draftId='+data.draftId+'">지금 열어보기</a>';
+          input.value='';
+        }catch(error){
+          resultEl.textContent='등록 실패: '+error.message;
+        }
+      };
+    }
+    let lastLinkAnalysisResults=null;
+    // 사람이 직접 알고 있는 검색어로 도매매 검색 결과 페이지를 새 탭으로 열어주는
+    // 순수 링크 -- sf=subject(제목 검색)/mode=search는 실제 도매매 검색창에서 발매트를
+    // 검색했을 때 뜨는 URL을 그대로 사용자가 확인해준 것 (2026-08-22). 서버를 거치지
+    // 않는 클라이언트 전용 기능이라 API 호출이 없다. .keywordSearchBar는 (viewNav처럼)
+    // 매 view마다 다시 그려지는 게 아니라 최초 HTML에 고정으로 박혀 있는 요소라 -- 2026-08-22
+    // 사용자 요청: draftId 딥링크(detailOnly)에서도 "링크 입력" 탭으로 안 돌아가고 바로
+    // 검색할 수 있어야 한다 -- 리스너도 view별 로더 안이 아니라 여기서 한 번만 붙인다.
+    function domeggookSearchUrl(keyword){
+      return 'https://domemedb.domeggook.com/index/item/supplyList.php?sf=subject&enc=utf8&fromOversea=0&mode=search&sw='+encodeURIComponent(keyword)+'&image_file=';
+    }
+    (function bindKeywordSearchBar(){
+      const keywordSearchButton=document.getElementById('keywordSearchButton');
+      const keywordSearchInput=document.getElementById('keywordSearchInput');
+      keywordSearchButton.onclick=()=>{
+        const keyword=keywordSearchInput.value.trim();
+        if(!keyword)return;
+        window.open(domeggookSearchUrl(keyword),'_blank');
+      };
+      keywordSearchInput.addEventListener('keydown',(e)=>{if(e.key==='Enter'){e.preventDefault();keywordSearchButton.click();}});
+    })();
+    function loadLinkInputView(){
+      const el=document.getElementById('specialView');
+      el.innerHTML='<div style="padding:12px">'
+        +'<div class="section"><h3>링크 입력</h3>'
+        +'<p class="muted">도매매/도매꾹에서 직접 찾은 후보 상품 링크(또는 상품번호)를 한 줄에 하나씩 붙여넣으세요. 저장/등록은 하지 않고 점수만 매겨서 "점수" 탭에 보여줍니다.</p>'
+        +'<textarea id="linkInputTextarea" style="width:100%;max-width:600px;height:160px" placeholder="https://domeggook.com/main/item/itemView.php?no=... / 49168397 (한 줄에 하나씩)"></textarea>'
+        +'<p><button id="linkInputSubmitButton" type="button">분석하기</button></p>'
+        +'<div id="linkInputResult" class="muted"></div>'
+        +'</div>'
+        +'</div>';
+      document.getElementById('linkInputSubmitButton').onclick=async()=>{
+        const resultEl=document.getElementById('linkInputResult');
+        const textarea=document.getElementById('linkInputTextarea');
+        const value=textarea.value.trim();
+        if(!value){resultEl.textContent='링크 또는 상품번호를 입력해주세요.';return;}
+        resultEl.textContent='분석 중...';
+        try{
+          const data=await api('/api/product-drafts/analyze-links',{method:'POST',body:JSON.stringify({text:value})});
+          lastLinkAnalysisResults=data.results;
+          resultEl.textContent='분석 완료 ('+data.results.length+'건) -- "점수" 탭으로 이동합니다.';
+          switchView('score');
+        }catch(error){
+          resultEl.textContent='분석 실패: '+error.message;
+        }
+      };
+    }
+    function loadScoreView(){
+      const el=document.getElementById('specialView');
+      if(!lastLinkAnalysisResults||!lastLinkAnalysisResults.length){
+        el.innerHTML='<div style="padding:12px"><p class="muted">아직 분석한 링크가 없습니다. "링크 입력" 탭에서 먼저 분석해주세요.</p></div>';
+        return;
+      }
+      el.innerHTML='<div style="padding:12px"><div class="section"><h3>점수 (높은 순)</h3><table><thead><tr><th>점수</th><th>상품명</th><th>마켓</th><th>필터상태</th><th>판매가</th><th>예상마진</th><th>상품번호</th></tr></thead><tbody>'
+        +lastLinkAnalysisResults.map(r=>r.status==='error'
+          ?'<tr><td colspan="6">⚠️ 조회 실패: '+escapeHtml(r.error||'')+'</td><td>'+escapeHtml(r.productNo)+'</td></tr>'
+          :'<tr><td>'+r.score+'</td><td>'+escapeHtml(r.name||'-')+'</td><td>'+escapeHtml(r.sourceMarket||'-')+'</td><td>'+escapeHtml(r.filterStatus||'-')+'</td><td>'+money(r.coupangSalePrice)+'</td><td>'+money(r.coupangExpectedProfit)+'</td><td>'+escapeHtml(r.productNo)+'</td></tr>').join('')
+        +'</tbody></table></div></div>';
+    }
+    function loadImageImprovementView(){
+      const el=document.getElementById('specialView');
+      el.innerHTML='<div style="padding:12px"><p class="muted">불러오는 중...</p></div>';
+      api('/api/product-drafts?status=awaiting_image_approval&pageSize=50').then(data=>{
+        const drafts=data.drafts||[];
+        el.innerHTML='<div style="padding:12px"><div class="section"><h3>이미지 개선 (이미지 승인 대기 중인 초안)</h3>'
+          +'<p class="muted">아래 항목을 열면 기존 초안 상세화면의 "이미지" 탭에서 대표/상세 이미지를 다시 생성하거나 직접 만든 이미지를 업로드해 교체할 수 있습니다.</p>'
+          +(drafts.length?'<table><thead><tr><th>상품</th><th>상태</th><th>바로가기</th></tr></thead><tbody>'
+            +drafts.map(d=>'<tr><td>'+escapeHtml(d.sellingTitle||d.originalProductName||d.supplierProductNo)+'</td><td>'+escapeHtml(d.status)+'</td><td><a href="/admin?draftId='+d.id+'">초안 #'+d.id+' 열기</a></td></tr>').join('')
+            +'</tbody></table>':'<p class="muted">이미지 승인 대기 중인 초안이 없습니다.</p>')
+          +'</div></div>';
+      }).catch(error=>{el.innerHTML='<div style="padding:12px"><p class="muted">불러오기 실패: '+escapeHtml(error.message)+'</p></div>';});
     }
     const SUPPLIER_ORDER_STATUS_LABELS={detected:'감지됨',mapping_required:'매핑 필요',validating_supplier:'검증/차단됨',order_draft_ready:'발주안 준비됨',awaiting_purchase_approval:'승인 대기',supplier_ordering:'발주 중',supplier_ordered:'발주 완료',supplier_order_failed:'발주 실패',cancelled:'취소됨'};
     const BLOCK_REASON_LABELS={ORDER_CANCELLED:'채널 주문 취소됨',ADDRESS_INCOMPLETE:'배송지 정보 불완전',OPTION_MISMATCH:'옵션 매칭 실패',DRAFT_NOT_FOUND:'draft를 찾을 수 없음',SUPPLIER_FETCH_FAILED:'공급처 조회 실패',SUPPLIER_SOLD_OUT:'공급처 품절',SUPPLIER_SALE_STOPPED:'공급처 판매중지',MOQ_CHANGED:'최소주문수량 변경됨',LOSS_AT_CURRENT_PRICE:'현재가 기준 손실',MARKET_UNRESOLVED:'도매꾹/도매매 구분 확인 불가'};
@@ -1899,7 +2132,7 @@ export function adminHtml() {
           :'<div class="muted">아직 쿠팡 상품과 연결되지 않았습니다.</div>')
         +'<p><a class="productLink" href="/admin?draftId='+r.productDraftId+'">상세보기(연결/이미지반영/새로고침) →</a></p></div>';
     }
-    window.__adminUiDiagnostics=window.__adminUiDiagnostics||{};window.__adminUiDiagnostics.scriptLoaded=true;const initialId=new URL(location.href).searchParams.get('draftId');window.__adminUiDiagnostics.initialId=Number(initialId)||null;window.__adminUiDiagnostics.initialLoadDetailCallAttempted=Boolean(initialId);if(initialId)switchView('all');else loadApprovalInbox();window.__initialLoadPromise=initialId?Promise.resolve(loadDetail(initialId,false)):Promise.resolve();
+    window.__adminUiDiagnostics=window.__adminUiDiagnostics||{};window.__adminUiDiagnostics.scriptLoaded=true;const initialId=new URL(location.href).searchParams.get('draftId');window.__adminUiDiagnostics.initialId=Number(initialId)||null;window.__adminUiDiagnostics.initialLoadDetailCallAttempted=Boolean(initialId);if(initialId)switchView('detailOnly');else loadLinkInputView();window.__initialLoadPromise=initialId?Promise.resolve(loadDetail(initialId,false)):Promise.resolve();
 
     let currentDrafts=[];
     let columnOrder=null;

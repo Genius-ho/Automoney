@@ -2,7 +2,7 @@ import assert from 'node:assert/strict';
 import { EventEmitter } from 'node:events';
 import test from 'node:test';
 
-import { checkClaudeCliAvailability, runClaudeVisionReview } from '../src/claude-cli-client.mjs';
+import { checkClaudeCliAvailability, runClaudeTextPrompt, runClaudeVisionReview } from '../src/claude-cli-client.mjs';
 
 // A minimal fake child_process.ChildProcess -- enough surface for
 // claude-cli-client.mjs to drive (stdout/stderr 'data', 'error', 'close', a
@@ -194,4 +194,49 @@ test('runClaudeVisionReview respects concurrency=1: a second call does not start
   })));
   assert.equal(maxActive, 1, 'no more than one Claude CLI process should run at a time with concurrency=1');
   assert.equal(results.length, 3);
+});
+
+test('runClaudeTextPrompt writes only the prompt to stdin, with no image-list preamble or images argument', async () => {
+  let receivedArgs = null;
+  let receivedStdin = '';
+  const spawnImpl = (executable, args) => {
+    receivedArgs = args;
+    const child = fakeChild();
+    child.stdin.write = (text) => { receivedStdin += text; };
+    queueMicrotask(() => {
+      child.stdout.emit('data', JSON.stringify({ is_error: false, result: '["여성 벨트","쿨스카프"]' }));
+      child.emit('close', 0);
+    });
+    return child;
+  };
+  const result = await runClaudeTextPrompt({
+    config: { executable: 'claude', model: 'sonnet', timeoutMs: 5000 },
+    prompt: '상품명 목록에서 키워드를 뽑아라: 여성 벨트, 쿨스카프',
+    spawnImpl,
+  });
+  assert.equal(receivedStdin, '상품명 목록에서 키워드를 뽑아라: 여성 벨트, 쿨스카프');
+  assert.deepEqual(receivedArgs, ['-p', '--output-format', 'json', '--model', 'sonnet', '--effort', 'medium', '--allowedTools', '']);
+  assert.equal(result.rawText, '["여성 벨트","쿨스카프"]');
+  assert.equal(result.model, 'sonnet');
+});
+
+test('runClaudeTextPrompt throws MISSING_PROMPT when no prompt is supplied', async () => {
+  await assert.rejects(
+    () => runClaudeTextPrompt({ config: { executable: 'claude' } }),
+    (error) => error.code === 'MISSING_PROMPT',
+  );
+});
+
+test('runClaudeTextPrompt throws CLAUDE_CLI_TIMEOUT and kills the child when the process never exits', async () => {
+  let killed = false;
+  const spawnImpl = () => {
+    const child = fakeChild();
+    child.kill = () => { killed = true; };
+    return child;
+  };
+  await assert.rejects(
+    () => runClaudeTextPrompt({ config: { executable: 'claude', timeoutMs: 20 }, prompt: 'x', spawnImpl }),
+    (error) => error.code === 'CLAUDE_CLI_TIMEOUT',
+  );
+  assert.equal(killed, true);
 });

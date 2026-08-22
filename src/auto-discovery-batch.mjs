@@ -148,6 +148,11 @@ export async function collectAndScoreCandidatesForCategory(policy, {
   targetCandidateCount = 30,
   pageSize = 20,
   scoreContext = {},
+  // false (도매매만) is the 3-day discovery cycle's own default and stays
+  // unchanged; the Coupang-keyword sourcing flow (coupang-keyword-sourcing.mjs)
+  // passes true to search 도매꾹 too, reusing this same scoring/minPassingScore
+  // gate instead of duplicating it.
+  includeDomeggook = false,
   collectCandidatesImpl = collectCandidatesReal,
   evaluateCandidatesImpl = evaluateCandidatesReal,
   computeCompetitivenessScoreImpl = computeCompetitivenessScoreReal,
@@ -157,12 +162,12 @@ export async function collectAndScoreCandidatesForCategory(policy, {
     targetCandidateCount,
     pageSize,
     category: policy.domeggookCategoryCode || undefined,
-    includeDomeggook: false,
+    includeDomeggook,
     root: rootDir,
     summary,
   });
 
-  const evaluated = await evaluateCandidatesImpl(domemeClientImpl, raw, pricingRules, { includeNeedsReview: true, includeDomeggook: false });
+  const evaluated = await evaluateCandidatesImpl(domemeClientImpl, raw, pricingRules, { includeNeedsReview: true, includeDomeggook });
   const scorable = evaluated.filter((item) => item.filter.filterStatus === 'pass' || item.filter.filterStatus === 'needs_review');
 
   const scored = scorable

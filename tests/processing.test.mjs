@@ -4,7 +4,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import test from 'node:test';
 
-import { loadEnvConfig, loadPricingRules, loadProductNumbers } from '../src/config.mjs';
+import { isAutomationPaused, loadEnvConfig, loadPricingRules, loadProductNumbers } from '../src/config.mjs';
 import {
   buildDetailHtml,
   calculatePrices,
@@ -28,6 +28,22 @@ test('loadEnvConfig rejects legacy DOME_API_KEY without DOMEME_API_KEY', async (
   await writeFile(join(root, 'env'), 'DOME_API_KEY=legacy-key\n', 'utf8');
 
   await assert.rejects(() => loadEnvConfig(root), /DOMEME_API_KEY is missing/);
+});
+
+test('isAutomationPaused is false when AUTOMATION_PAUSED is missing or not "true"', async () => {
+  const root = await mkdtemp(join(tmpdir(), 'automoney-'));
+  await writeFile(join(root, 'env'), 'DOMEME_API_KEY=x\n', 'utf8');
+  assert.equal(await isAutomationPaused(root), false);
+
+  const root2 = await mkdtemp(join(tmpdir(), 'automoney-'));
+  await writeFile(join(root2, 'env'), 'AUTOMATION_PAUSED=false\n', 'utf8');
+  assert.equal(await isAutomationPaused(root2), false);
+});
+
+test('isAutomationPaused is true when .env sets AUTOMATION_PAUSED=true (case-insensitive)', async () => {
+  const root = await mkdtemp(join(tmpdir(), 'automoney-'));
+  await writeFile(join(root, 'env'), 'AUTOMATION_PAUSED=True\n', 'utf8');
+  assert.equal(await isAutomationPaused(root), true);
 });
 
 test('loadProductNumbers supports a product_no header and plain lines', async () => {
@@ -375,6 +391,15 @@ test('normalizeProduct and filterProduct classify supplier market and order quan
   assert.ok(filterProduct(domeggook).reviewReasons.includes('needs_review_source_market'));
   assert.equal(filterProduct(unknown).filterStatus, 'needs_review');
   assert.ok(filterProduct(unknown).reviewReasons.includes('needs_review_source_market_unknown'));
+});
+
+test('normalizeProduct falls back to sourceMarket=domeggook for requestedMarket:"supply" the same way "dome" falls back to domeme', () => {
+  const viaSupply = normalizeProduct(
+    '49168400',
+    { productName: 'sample', supplyPrice: '6000', images: ['https://example.test/a.jpg'], minOrderQty: 1 },
+    { requestedMarket: 'supply' },
+  );
+  assert.equal(viaSupply.sourceMarket, 'domeggook');
 });
 
 test('low cost min order products become bundle candidates', () => {

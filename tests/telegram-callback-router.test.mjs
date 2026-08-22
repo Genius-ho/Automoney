@@ -65,3 +65,72 @@ test('router is a no-op when Telegram is unconfigured', async () => {
     getTelegramUpdatesImpl: async () => { throw new Error('must not fetch'); },
   }), { processed: 0 });
 });
+
+test('router routes a plain-text update to the keyword-message handler with the search client/pricing rules deps, separate from the private domemeClient', async () => {
+  let call = 0;
+  const router = createTelegramCallbackRouter();
+  const received = [];
+  const impls = {
+    getTelegramUpdatesImpl: async () => {
+      call += 1;
+      if (call > 1) return [];
+      return [{ update_id: 40, message: { text: '여성 벨트', chat: { id: 1 } } }];
+    },
+    handlePurchaseOrderImpl: async () => { throw new Error('must not be called for a plain message'); },
+    handleCoupangImpl: async () => { throw new Error('must not be called for a plain message'); },
+    handleCoupangKeywordMessageImpl: async (db, domemeSearchClient, pricingRules, config, message) => {
+      received.push({ domemeSearchClient, pricingRules, message });
+      return { handled: true };
+    },
+  };
+  const result = await router.pollOnce(
+    {},
+    { domemeClient: { name: 'private' }, domemeSearchClient: { name: 'search' }, pricingRules: { defaultMarginRate: 0.25 } },
+    { botToken: 't', chatId: '1' },
+    impls,
+  );
+  assert.deepEqual(result, { processed: 1 });
+  assert.equal(received[0].domemeSearchClient.name, 'search');
+  assert.deepEqual(received[0].pricingRules, { defaultMarginRate: 0.25 });
+  assert.equal(received[0].message.text, '여성 벨트');
+});
+
+test('router routes an import_link callback to the product-link-import handler with the search client/pricing rules/rootDir deps', async () => {
+  let call = 0;
+  const router = createTelegramCallbackRouter();
+  const received = [];
+  const impls = {
+    getTelegramUpdatesImpl: async () => {
+      call += 1;
+      if (call > 1) return [];
+      return [{ update_id: 50, callback_query: { id: 'i1', data: 'import_link:49168396' } }];
+    },
+    handlePurchaseOrderImpl: async () => ({ handled: false }),
+    handleCoupangImpl: async () => ({ handled: false }),
+    handleProductLinkImportImpl: async (db, domemeSearchClient, pricingRules, rootDir, config, query) => {
+      received.push({ domemeSearchClient, pricingRules, rootDir, query });
+      return { handled: true };
+    },
+  };
+  const result = await router.pollOnce(
+    {},
+    { domemeClient: { name: 'private' }, domemeSearchClient: { name: 'search' }, pricingRules: { defaultMarginRate: 0.25 }, rootDir: '/root' },
+    { botToken: 't', chatId: '1' },
+    impls,
+  );
+  assert.deepEqual(result, { processed: 1 });
+  assert.equal(received[0].domemeSearchClient.name, 'search');
+  assert.deepEqual(received[0].pricingRules, { defaultMarginRate: 0.25 });
+  assert.equal(received[0].rootDir, '/root');
+  assert.equal(received[0].query.data, 'import_link:49168396');
+});
+
+test('router does not count an unhandled plain-text update', async () => {
+  const router = createTelegramCallbackRouter();
+  let call = 0;
+  const result = await router.pollOnce({}, {}, { botToken: 't' }, {
+    getTelegramUpdatesImpl: async () => { call += 1; return call > 1 ? [] : [{ update_id: 41, message: { text: '/start', chat: { id: 1 } } }]; },
+    handleCoupangKeywordMessageImpl: async () => ({ handled: false }),
+  });
+  assert.deepEqual(result, { processed: 0 });
+});

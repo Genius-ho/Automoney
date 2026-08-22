@@ -11,36 +11,46 @@ import { DomemeApiError, maskUrl } from './domeme-client.mjs';
 import { calculatePrices, cleanProductName, filterProduct, normalizeProduct } from './processing.mjs';
 import { saveImportResult } from './postgres-store.mjs';
 
+// The search API (unlike buildSupplierProductUrl's human-facing web link)
+// has no "no market filter" option -- confirmed live 2026-08-21, an empty/
+// omitted market param is rejected with PARAMETER_ERROR, not treated as
+// "search everything". 'dome' (도매매) and 'supply' (도매꾹, see
+// processing.mjs's normalizeSourceMarket) are the only two valid values, so
+// includeDomeggook searches both and merges results instead of passing a
+// single "both" value that doesn't exist.
 export async function collectCandidates(client, keywords, { targetCandidateCount, pageSize, category, includeDomeggook, root, summary }) {
   const seen = new Set();
   const candidates = [];
-  const pagesPerKeyword = Math.max(1, Math.ceil(targetCandidateCount / Math.max(1, keywords.length) / pageSize) + 1);
+  const markets = includeDomeggook ? ['dome', 'supply'] : ['dome'];
+  const pagesPerKeyword = Math.max(1, Math.ceil(targetCandidateCount / Math.max(1, keywords.length) / markets.length / pageSize) + 1);
 
   for (const keyword of keywords) {
-    for (let page = 1; page <= pagesPerKeyword && candidates.length < targetCandidateCount; page += 1) {
-      const market = includeDomeggook ? '' : 'dome';
-      const debugUrl = client.buildProductSearchUrl({ keyword, category, page, size: pageSize, market });
-      printSearchRequestDiagnostics(debugUrl);
-      let result;
-      try {
-        result = await client.searchProducts({ keyword, category, page, size: pageSize, market });
-      } catch (error) {
-        if (error instanceof DomemeApiError) {
-          printSearchErrorDiagnostics(error);
-          if (error.code === 'FORBIDDEN' || error.status === 403) return loadFallbackCandidates(root);
+    for (const market of markets) {
+      for (let page = 1; page <= pagesPerKeyword && candidates.length < targetCandidateCount; page += 1) {
+        const debugUrl = client.buildProductSearchUrl({ keyword, category, page, size: pageSize, market });
+        printSearchRequestDiagnostics(debugUrl);
+        let result;
+        try {
+          result = await client.searchProducts({ keyword, category, page, size: pageSize, market });
+        } catch (error) {
+          if (error instanceof DomemeApiError) {
+            printSearchErrorDiagnostics(error);
+            if (error.code === 'FORBIDDEN' || error.status === 403) return loadFallbackCandidates(root);
+          }
+          throw error;
         }
-        throw error;
-      }
-      for (const candidate of result.candidates) {
-        if (seen.has(candidate.productNo)) {
-          summary.duplicateSkipped += 1;
-          continue;
+        for (const candidate of result.candidates) {
+          if (seen.has(candidate.productNo)) {
+            summary.duplicateSkipped += 1;
+            continue;
+          }
+          seen.add(candidate.productNo);
+          candidates.push({ ...candidate, keyword, requestedMarket: market });
+          if (candidates.length >= targetCandidateCount) break;
         }
-        seen.add(candidate.productNo);
-        candidates.push({ ...candidate, keyword, requestedMarket: market || 'all' });
-        if (candidates.length >= targetCandidateCount) break;
+        if (result.candidates.length === 0) break;
       }
-      if (result.candidates.length === 0) break;
+      if (candidates.length >= targetCandidateCount) break;
     }
     if (candidates.length >= targetCandidateCount) break;
   }
@@ -96,7 +106,7 @@ export async function evaluateCandidates(client, candidates, pricingRules, { inc
     try {
       const raw = await client.fetchProductDetail(candidate.productNo);
       const normalized = normalizeProduct(candidate.productNo, raw, {
-        requestedMarket: candidate.requestedMarket === 'dome' ? 'dome' : null,
+        requestedMarket: ['dome', 'supply'].includes(candidate.requestedMarket) ? candidate.requestedMarket : null,
         candidateSource: candidate.source,
       });
       const filter = filterProduct(normalized);

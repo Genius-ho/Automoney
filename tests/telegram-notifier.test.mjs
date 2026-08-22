@@ -73,13 +73,13 @@ test('getTelegramUpdates returns [] when config is missing', async () => {
   assert.equal(fetchImpl.calls.length, 0);
 });
 
-test('getTelegramUpdates passes offset and restricts allowed_updates to callback_query', async () => {
+test('getTelegramUpdates passes offset and restricts allowed_updates to callback_query and message', async () => {
   const fetchImpl = fakeFetch([{ update_id: 5 }]);
   const result = await getTelegramUpdates(config, { offset: 42, fetchImpl });
   assert.deepEqual(result, [{ update_id: 5 }]);
   const url = new URL(fetchImpl.calls[0].url);
   assert.equal(url.searchParams.get('offset'), '42');
-  assert.equal(url.searchParams.get('allowed_updates'), JSON.stringify(['callback_query']));
+  assert.equal(url.searchParams.get('allowed_updates'), JSON.stringify(['callback_query', 'message']));
 });
 
 test('answerCallbackQuery is a no-op when config is missing', async () => {

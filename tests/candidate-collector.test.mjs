@@ -52,6 +52,47 @@ test('collectCandidates dedups by productNo across pages and stops once the targ
   assert.equal(summary.duplicateSkipped, 1);
 });
 
+test('collectCandidates searches both dome and supply markets (never an empty/omitted market) when includeDomeggook is true, tagging each candidate with the market it actually came from', async () => {
+  const seenMarkets = [];
+  const returnedOnce = new Set();
+  const client = {
+    buildProductSearchUrl: () => 'https://example.test/search',
+    async searchProducts({ market }) {
+      seenMarkets.push(market);
+      if (returnedOnce.has(market)) return { candidates: [] };
+      returnedOnce.add(market);
+      if (market === 'dome') return { candidates: [{ productNo: '1' }] };
+      if (market === 'supply') return { candidates: [{ productNo: '2' }] };
+      throw new Error(`unexpected market: ${market}`);
+    },
+  };
+  const summary = { duplicateSkipped: 0 };
+  const candidates = await collectCandidates(client, ['keyword'], {
+    targetCandidateCount: 10, pageSize: 50, includeDomeggook: true, root: '/repo', summary,
+  });
+  assert.ok(seenMarkets.every((m) => m === 'dome' || m === 'supply'), 'market must always be a real value, never empty/omitted');
+  assert.deepEqual(new Set(seenMarkets), new Set(['dome', 'supply']));
+  assert.deepEqual(
+    candidates.map((c) => ({ productNo: c.productNo, requestedMarket: c.requestedMarket })),
+    [{ productNo: '1', requestedMarket: 'dome' }, { productNo: '2', requestedMarket: 'supply' }],
+  );
+});
+
+test('collectCandidates only ever searches the dome market when includeDomeggook is false (unchanged 3-day discovery behavior)', async () => {
+  const seenMarkets = [];
+  const client = {
+    buildProductSearchUrl: () => 'https://example.test/search',
+    async searchProducts({ market }) {
+      seenMarkets.push(market);
+      return { candidates: [] };
+    },
+  };
+  await collectCandidates(client, ['keyword'], {
+    targetCandidateCount: 10, pageSize: 50, includeDomeggook: false, root: '/repo', summary: { duplicateSkipped: 0 },
+  });
+  assert.deepEqual(seenMarkets, ['dome']);
+});
+
 test('collectCandidates falls back to CSV candidates when Domeme returns 403 FORBIDDEN', async () => {
   const root = await mkdtemp(join(tmpdir(), 'automoney-'));
   const { mkdir } = await import('node:fs/promises');

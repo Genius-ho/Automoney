@@ -589,6 +589,16 @@ insert into category_policy (segment_name, category_name, search_keywords, notes
   ('사무용품', '서류/파일 정리', '["서류정리함","파일꽂이"]', null)
 on conflict (category_name) do nothing;
 
+-- Bookkeeping-only fallback row for coupang-keyword-sourcing.mjs -- NOT part
+-- of the curated safe-segment whitelist above. 2026-08-21 사용자 결정: 사람이
+-- 쿠팡에서 직접 고른 키워드는 이 화이트리스트로 걸러지지 않는다(이미 사람이
+-- 판단했으므로) -- 3일 주기 자동발굴만 위 18개로 제한된다. processing_queue/
+-- batch_run_candidates.category_policy_id가 not null FK라서, 키워드가 위
+-- 화이트리스트 어디에도 안 걸릴 때 이 행을 대신 참조해 FK를 만족시킨다.
+insert into category_policy (segment_name, category_name, search_keywords, notes) values
+  ('쿠팡 키워드 소싱', '쿠팡 키워드 소싱 (미분류)', '[]', '사람이 직접 고른 키워드가 위 화이트리스트와 매칭 안 될 때 쓰는 폴백 -- 카테고리 필터 목적이 아님')
+on conflict (category_name) do nothing;
+
 create table if not exists batch_schedule_state (
   id integer primary key default 1 check (id = 1),
   interval_days integer not null default 3,

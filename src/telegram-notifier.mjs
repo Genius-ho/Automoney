@@ -61,7 +61,11 @@ export async function getTelegramUpdates(telegramConfig, { offset, timeoutSecond
   if (!telegramConfig) return [];
   const params = new URLSearchParams({ timeout: String(timeoutSeconds) });
   if (offset !== undefined && offset !== null) params.set('offset', String(offset));
-  params.set('allowed_updates', JSON.stringify(['callback_query']));
+  // 'message' added alongside 'callback_query' for the Coupang keyword-request
+  // reply flow (coupang-keyword-telegram.mjs) -- createTelegramApprovalPoller
+  // (telegram-approval-bot.mjs) is the only other reader of getUpdates and it
+  // already ignores updates with no callback_query, so this is additive.
+  params.set('allowed_updates', JSON.stringify(['callback_query', 'message']));
 
   const response = await fetchImpl(`${TELEGRAM_API_BASE}/bot${telegramConfig.botToken}/getUpdates?${params}`);
   const json = await response.json();
