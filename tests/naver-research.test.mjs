@@ -2,7 +2,7 @@ import assert from 'node:assert/strict';
 import test from 'node:test';
 
 import { NaverShoppingClient, summarizeShoppingSearch } from '../src/naver-shopping-client.mjs';
-import { calculateNaverWinnerScore, checkNaverCompetitionLive } from '../src/naver-research.mjs';
+import { calculateNaverWinnerScore, checkNaverTrendLive } from '../src/naver-research.mjs';
 
 test('NaverShoppingClient calls shopping search API with required headers and params', async () => {
   const calls = [];
@@ -79,24 +79,52 @@ test('calculateNaverWinnerScore handles candidate and reject scoring', () => {
   assert.equal(bad.winnerScore, -25);
 });
 
-// 2026-08-22 added so the "링크 입력" quick preview's naverCompetition
-// dimension (previously always "데이터 없음") can be filled from a real,
-// unsaved search -- researchNaverDraft can't be reused here because
-// market_research_results.product_draft_id is a not-null FK and this runs
-// before any draft exists. No persistence happens; it's just
-// searchShop + summarizeShoppingSearch, returned directly.
-test('checkNaverCompetitionLive searches by keyword and returns competitorCount/priceGapRate from the live summary, without persisting anything', async () => {
-  let receivedQuery = null;
-  const client = { searchShop: async ({ query }) => { receivedQuery = query; return { total: 42, items: [{ lprice: '9500', title: 'A', mallName: 'M', link: 'l' }] }; } };
-  const result = await checkNaverCompetitionLive(client, '여성 벨트', 10000);
+// 2026-08-22: naverCompetition(경쟁상품수/가격격차)은 개발자센터 쇼핑검색
+// API가 2026-07-31에 대체재 없이 완전히 종료돼서 폐기됐다 (공식 공지 확인,
+// checkNaverCompetitionLive/NaverShoppingClient.searchShop도 그 API에
+// 의존했으므로 함께 죽음). 대신 NAVER API HUB 쇼핑 인사이트(월별 클릭
+// ratio)로 "꾸준히 높은지" + "최근 상승 추세인지" 두 신호를 계산한다 --
+// researchNaverDraft처럼 저장하지 않고 draft 없이 바로 쓸 수 있다.
+test('checkNaverTrendLive queries a monthsBack window ending at `now` and returns avgRatio/growthRate from the monthly ratio series', async () => {
+  let receivedArgs = null;
+  const client = { clientId: 'id', clientSecret: 'secret' };
+  const result = await checkNaverTrendLive(client, '여성 벨트', '50000000', {
+    now: new Date('2026-08-22'),
+    monthsBack: 4,
+    fetchShoppingKeywordTrendImpl: async (c, args) => {
+      receivedArgs = args;
+      return { results: [{ title: '여성 벨트', keyword: ['여성 벨트'], data: [
+        { period: '2026-04-01', ratio: 20 },
+        { period: '2026-05-01', ratio: 30 },
+        { period: '2026-06-01', ratio: 60 },
+        { period: '2026-07-01', ratio: 90 },
+      ] }] };
+    },
+  });
 
-  assert.equal(receivedQuery, '여성 벨트');
-  assert.equal(result.competitorCount, 42);
-  assert.equal(result.lowestPrice, 9500);
-  assert.ok(result.priceGapRate > 0 && result.priceGapRate < 0.1);
+  assert.equal(receivedArgs.keyword, '여성 벨트');
+  assert.equal(receivedArgs.category, '50000000');
+  assert.equal(receivedArgs.timeUnit, 'month');
+  assert.equal(receivedArgs.startDate, '2026-04-22');
+  assert.equal(receivedArgs.endDate, '2026-08-22');
+  assert.equal(result.months, 4);
+  assert.equal(result.avgRatio, 50); // (20+30+60+90)/4
+  // early half avg (20+30)/2=25, recent half avg (60+90)/2=75 -> +200% growth
+  assert.equal(result.growthRate, 2);
 });
 
-test('checkNaverCompetitionLive propagates a search failure (callers like product-link-analysis.mjs are responsible for catching and falling back)', async () => {
-  const client = { searchShop: async () => { throw new Error('Naver Shopping API failed: HTTP 404'); } };
-  await assert.rejects(() => checkNaverCompetitionLive(client, '여성 벨트', 10000), /HTTP 404/);
+test('checkNaverTrendLive returns null (not an error) when the API responds with no data points for the window', async () => {
+  const result = await checkNaverTrendLive({}, 'x', 'y', {
+    fetchShoppingKeywordTrendImpl: async () => ({ results: [{ title: 'x', keyword: ['x'], data: [] }] }),
+  });
+  assert.equal(result, null);
+});
+
+test('checkNaverTrendLive propagates an API failure (callers like product-link-analysis.mjs are responsible for catching and falling back)', async () => {
+  await assert.rejects(
+    () => checkNaverTrendLive({}, '여성 벨트', '50000000', {
+      fetchShoppingKeywordTrendImpl: async () => { throw new Error('NAVER API HUB request failed: HTTP 401'); },
+    }),
+    /HTTP 401/,
+  );
 });

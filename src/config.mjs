@@ -56,6 +56,19 @@ export async function loadNaverConfig(rootDir = process.cwd()) {
   return { clientId, clientSecret };
 }
 
+// NCP(네이버클라우드플랫폼) NAVER API HUB 자격증명 -- 위 loadNaverConfig의
+// 개발자센터 검색 API용 키(구, 쇼핑검색은 대체재 없이 종료됨)와는 완전히
+// 별개. 2026-08-22 발급, 쇼핑 인사이트(클릭 트렌드) 전용. naver-api-hub-client.mjs
+// 참고.
+export async function loadNaverApiHubConfig(rootDir = process.cwd()) {
+  const values = await loadEnvValues(rootDir);
+  const clientId = values.NAVER_API_HUB_CLIENT_ID || process.env.NAVER_API_HUB_CLIENT_ID;
+  const clientSecret = values.NAVER_API_HUB_CLIENT_SECRET || process.env.NAVER_API_HUB_CLIENT_SECRET;
+  if (!clientId) throw new Error('NAVER_API_HUB_CLIENT_ID is missing in .env');
+  if (!clientSecret) throw new Error('NAVER_API_HUB_CLIENT_SECRET is missing in .env');
+  return { clientId, clientSecret };
+}
+
 // Separate from loadNaverConfig -- NAVER_CLIENT_ID/SECRET there are the
 // search/데이터랩 openapi.naver.com keys (market research only, see
 // naver-shopping-client.mjs). Registering a real product requires a

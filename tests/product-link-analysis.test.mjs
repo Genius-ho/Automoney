@@ -4,11 +4,10 @@ import test from 'node:test';
 import { analyzeProductLinks } from '../src/product-link-analysis.mjs';
 
 // Every test below stubs computeAiScoringContextImpl/loadCodexConfigImpl and
-// disables naverResearchEnabled -- their real implementations spawn the
-// actual `codex` CLI or hit the real Naver Shopping API, both slow/
-// non-deterministic (or, for Naver, outright broken in this environment --
-// see the dedicated checkNaverCompetitionLive tests below) in a unit test.
-const noAiScoring = { loadCodexConfigImpl: async () => ({ executable: 'codex' }), computeAiScoringContextImpl: async () => ({}), naverResearchEnabled: false };
+// disables naverTrendEnabled -- their real implementations spawn the actual
+// `codex` CLI or hit the real NAVER API HUB, both slow/non-deterministic in
+// a unit test (see the dedicated checkNaverTrendLive tests further down).
+const noAiScoring = { loadCodexConfigImpl: async () => ({ executable: 'codex' }), computeAiScoringContextImpl: async () => ({}), naverTrendEnabled: false };
 
 test('analyzeProductLinks evaluates every product number and sorts by score, best first', async () => {
   const receivedCandidates = [];
@@ -52,35 +51,35 @@ test('analyzeProductLinks reports a per-link error without throwing or scoring i
 test('analyzeProductLinks passes the AI-judged context into computeCompetitivenessScore for each non-error candidate', async () => {
   const receivedContexts = [];
   await analyzeProductLinks({}, ['1'], {}, {
-    naverResearchEnabled: false,
+    naverTrendEnabled: false,
     loadCodexConfigImpl: async () => ({ executable: 'codex' }),
     computeAiScoringContextImpl: async (candidate) => ({ aiImageQuality: { points: 10, reason: `[AI] for ${candidate.productNo}` } }),
     evaluateCandidatesImpl: async () => [{ productNo: '1', normalized: { name: 'A' }, filter: { filterStatus: 'pass' }, prices: {} }],
     computeCompetitivenessScoreImpl: (candidate, context) => { receivedContexts.push(context); return { score: 70, breakdown: {} }; },
   });
 
-  assert.deepEqual(receivedContexts, [{ aiImageQuality: { points: 10, reason: '[AI] for 1' }, naverResearch: null }]);
+  assert.deepEqual(receivedContexts, [{ aiImageQuality: { points: 10, reason: '[AI] for 1' }, naverTrend: null }]);
 });
 
 test('analyzeProductLinks skips AI scoring entirely (empty context) when aiScoringEnabled is false, without loading Codex config', async () => {
   const receivedContexts = [];
   await analyzeProductLinks({}, ['1'], {}, {
     aiScoringEnabled: false,
-    naverResearchEnabled: false,
+    naverTrendEnabled: false,
     loadCodexConfigImpl: async () => { throw new Error('must not be called'); },
     computeAiScoringContextImpl: async () => { throw new Error('must not be called'); },
     evaluateCandidatesImpl: async () => [{ productNo: '1', normalized: { name: 'A' }, filter: { filterStatus: 'pass' }, prices: {} }],
     computeCompetitivenessScoreImpl: (candidate, context) => { receivedContexts.push(context); return { score: 70, breakdown: {} }; },
   });
 
-  assert.deepEqual(receivedContexts, [{ naverResearch: null }]);
+  assert.deepEqual(receivedContexts, [{ naverTrend: null }]);
 });
 
 test('analyzeProductLinks loads Codex config and passes it through as codexConfig, plus rootDir', async () => {
   let receivedOpts = null;
   await analyzeProductLinks({}, ['1'], {}, {
     rootDir: '/custom/root',
-    naverResearchEnabled: false,
+    naverTrendEnabled: false,
     loadCodexConfigImpl: async () => ({ executable: 'codex' }),
     computeAiScoringContextImpl: async (candidate, titles, opts) => { receivedOpts = opts; return {}; },
     evaluateCandidatesImpl: async () => [{ productNo: '1', normalized: { name: 'A' }, filter: { filterStatus: 'pass' }, prices: {} }],
@@ -93,7 +92,7 @@ test('analyzeProductLinks loads Codex config and passes it through as codexConfi
 
 test('analyzeProductLinks falls back to an empty (proxy-only) context, not a thrown error, when AI scoring itself rejects', async () => {
   const results = await analyzeProductLinks({}, ['1'], {}, {
-    naverResearchEnabled: false,
+    naverTrendEnabled: false,
     loadCodexConfigImpl: async () => ({ executable: 'codex' }),
     computeAiScoringContextImpl: async () => { throw new Error('codex not logged in'); },
     evaluateCandidatesImpl: async () => [{ productNo: '1', normalized: { name: 'A' }, filter: { filterStatus: 'pass' }, prices: {} }],
@@ -108,7 +107,7 @@ test('analyzeProductLinks fetches recent draft titles for the AI duplicate check
   const receivedListArgs = [];
   await analyzeProductLinks({}, ['1'], {}, {
     db: { name: 'db' },
-    naverResearchEnabled: false,
+    naverTrendEnabled: false,
     loadCodexConfigImpl: async () => ({ executable: 'codex' }),
     listProductDraftsImpl: async (db, opts) => { receivedListArgs.push({ db, opts }); return [{ sellingTitle: '기존 상품 A' }, { sellingTitle: null }, { sellingTitle: '기존 상품 B' }]; },
     computeAiScoringContextImpl: async (candidate, existingDraftTitles) => ({ aiDuplicateRisk: { points: existingDraftTitles.length, reason: 'x' } }),
@@ -123,7 +122,7 @@ test('analyzeProductLinks fetches recent draft titles for the AI duplicate check
 
 test('analyzeProductLinks does not query for existing draft titles when no db is given', async () => {
   await analyzeProductLinks({}, ['1'], {}, {
-    naverResearchEnabled: false,
+    naverTrendEnabled: false,
     loadCodexConfigImpl: async () => ({ executable: 'codex' }),
     listProductDraftsImpl: async () => { throw new Error('must not be called without a db'); },
     computeAiScoringContextImpl: async () => ({}),
@@ -138,7 +137,7 @@ test('analyzeProductLinks records analyzed (scored) results to history, with the
     db: { name: 'db' },
     keyword: '여성 벨트',
     source: 'link_input',
-    naverResearchEnabled: false,
+    naverTrendEnabled: false,
     loadCodexConfigImpl: async () => ({ executable: 'codex' }),
     computeAiScoringContextImpl: async () => ({}),
     evaluateCandidatesImpl: async () => [
@@ -163,7 +162,7 @@ test('analyzeProductLinks records analyzed (scored) results to history, with the
 test('analyzeProductLinks does not attempt to write history when no db is given', async () => {
   await analyzeProductLinks({}, ['1'], {}, {
     aiScoringEnabled: false,
-    naverResearchEnabled: false,
+    naverTrendEnabled: false,
     evaluateCandidatesImpl: async () => [{ productNo: '1', normalized: { name: 'A' }, filter: { filterStatus: 'pass' }, prices: {} }],
     computeCompetitivenessScoreImpl: () => ({ score: 70, breakdown: {} }),
     insertLinkAnalysisHistoryImpl: async () => { throw new Error('must not be called without a db'); },
@@ -174,7 +173,7 @@ test('analyzeProductLinks does not fail the response when the history insert its
   const results = await analyzeProductLinks({}, ['1'], {}, {
     db: { name: 'db' },
     aiScoringEnabled: false,
-    naverResearchEnabled: false,
+    naverTrendEnabled: false,
     evaluateCandidatesImpl: async () => [{ productNo: '1', normalized: { name: 'A' }, filter: { filterStatus: 'pass' }, prices: {} }],
     computeCompetitivenessScoreImpl: () => ({ score: 70, breakdown: {} }),
     insertLinkAnalysisHistoryImpl: async () => { throw new Error('db down'); },
@@ -182,50 +181,68 @@ test('analyzeProductLinks does not fail the response when the history insert its
   assert.equal(results[0].score, 70);
 });
 
-// 2026-08-22 사용자 요청: naverCompetition이 "링크 입력"에서 늘 "데이터 없음"
-// 이었던 걸 실시간 검색으로 채운다 -- draft가 없어도 되는, 저장 없는 검색.
-test('analyzeProductLinks looks up live Naver competition by the candidate\'s own name and naverSalePrice, merging it into the score context as naverResearch', async () => {
+// 2026-08-22: naverCompetition(경쟁상품수/가격격차)은 개발자센터 쇼핑검색
+// API가 대체재 없이 종료돼서 폐기됐다 -- NAVER API HUB 쇼핑 인사이트(클릭
+// 트렌드)로 재정의된 naverTrend를 링크 분석 미리보기(draft 없이, 저장 없이)
+// 에서 채운다. 쇼핑 인사이트는 category(cat_id)가 필수라 resolveNaverCategoryCode
+// 로 후보→카테고리를 못 구하면(기본값) 항상 건너뛴다.
+test('analyzeProductLinks looks up the live Naver trend by the candidate\'s own name and a resolved category code, merging it into the score context as naverTrend', async () => {
   let receivedArgs = null;
   const results = await analyzeProductLinks({}, ['1'], {}, {
     aiScoringEnabled: false,
-    loadNaverConfigImpl: async () => ({ clientId: 'id', clientSecret: 'secret' }),
-    checkNaverCompetitionLiveImpl: async (client, keyword, mySalePrice) => { receivedArgs = { client, keyword, mySalePrice }; return { competitorCount: 5, priceGapRate: 0.02 }; },
+    loadNaverApiHubConfigImpl: async () => ({ clientId: 'id', clientSecret: 'secret' }),
+    resolveNaverCategoryCode: (candidate) => (candidate.productNo === '1' ? '50000000' : null),
+    checkNaverTrendLiveImpl: async (client, keyword, categoryCode) => { receivedArgs = { client, keyword, categoryCode }; return { avgRatio: 80, growthRate: 0.3 }; },
     evaluateCandidatesImpl: async () => [{ productNo: '1', normalized: { name: '여성 벨트' }, filter: { filterStatus: 'pass' }, prices: { naverSalePrice: 15000 } }],
-    computeCompetitivenessScoreImpl: (candidate, context) => ({ score: context.naverResearch.competitorCount, breakdown: {} }),
+    computeCompetitivenessScoreImpl: (candidate, context) => ({ score: context.naverTrend.avgRatio, breakdown: {} }),
   });
 
   assert.equal(receivedArgs.keyword, '여성 벨트');
-  assert.equal(receivedArgs.mySalePrice, 15000);
-  assert.equal(results[0].score, 5);
+  assert.equal(receivedArgs.categoryCode, '50000000');
+  assert.equal(results[0].score, 80);
 });
 
-test('analyzeProductLinks does not attempt a Naver lookup when naverResearchEnabled is false, without loading Naver config', async () => {
+test('analyzeProductLinks skips the Naver trend lookup entirely when resolveNaverCategoryCode returns null (its default), even with Naver configured', async () => {
+  const results = await analyzeProductLinks({}, ['1'], {}, {
+    aiScoringEnabled: false,
+    loadNaverApiHubConfigImpl: async () => ({ clientId: 'id', clientSecret: 'secret' }),
+    checkNaverTrendLiveImpl: async () => { throw new Error('must not be called without a category code'); },
+    evaluateCandidatesImpl: async () => [{ productNo: '1', normalized: { name: 'A' }, filter: { filterStatus: 'pass' }, prices: {} }],
+    computeCompetitivenessScoreImpl: (candidate, context) => ({ score: context.naverTrend === null ? 1 : 0, breakdown: {} }),
+  });
+  assert.equal(results[0].score, 1);
+});
+
+test('analyzeProductLinks does not attempt a Naver lookup when naverTrendEnabled is false, without loading Naver API HUB config', async () => {
   await analyzeProductLinks({}, ['1'], {}, {
     aiScoringEnabled: false,
-    naverResearchEnabled: false,
-    loadNaverConfigImpl: async () => { throw new Error('must not be called'); },
-    checkNaverCompetitionLiveImpl: async () => { throw new Error('must not be called'); },
+    naverTrendEnabled: false,
+    loadNaverApiHubConfigImpl: async () => { throw new Error('must not be called'); },
+    resolveNaverCategoryCode: () => '50000000',
+    checkNaverTrendLiveImpl: async () => { throw new Error('must not be called'); },
     evaluateCandidatesImpl: async () => [{ productNo: '1', normalized: { name: 'A' }, filter: { filterStatus: 'pass' }, prices: {} }],
     computeCompetitivenessScoreImpl: () => ({ score: 1, breakdown: {} }),
   });
 });
 
-test('analyzeProductLinks falls back to naverResearch:null (proxy-only) when Naver credentials are unconfigured (loadNaverConfig throws) or the search itself fails', async () => {
+test('analyzeProductLinks falls back to naverTrend:null (proxy-only) when Naver API HUB credentials are unconfigured (loadNaverApiHubConfig throws) or the trend lookup itself fails', async () => {
   const unconfigured = await analyzeProductLinks({}, ['1'], {}, {
     aiScoringEnabled: false,
-    loadNaverConfigImpl: async () => { throw new Error('NAVER_CLIENT_ID is missing in .env'); },
-    checkNaverCompetitionLiveImpl: async () => { throw new Error('must not be called'); },
+    resolveNaverCategoryCode: () => '50000000',
+    loadNaverApiHubConfigImpl: async () => { throw new Error('NAVER_API_HUB_CLIENT_ID is missing in .env'); },
+    checkNaverTrendLiveImpl: async () => { throw new Error('must not be called'); },
     evaluateCandidatesImpl: async () => [{ productNo: '1', normalized: { name: 'A' }, filter: { filterStatus: 'pass' }, prices: {} }],
-    computeCompetitivenessScoreImpl: (candidate, context) => ({ score: context.naverResearch === null ? 1 : 0, breakdown: {} }),
+    computeCompetitivenessScoreImpl: (candidate, context) => ({ score: context.naverTrend === null ? 1 : 0, breakdown: {} }),
   });
   assert.equal(unconfigured[0].score, 1);
 
-  const searchFailed = await analyzeProductLinks({}, ['1'], {}, {
+  const lookupFailed = await analyzeProductLinks({}, ['1'], {}, {
     aiScoringEnabled: false,
-    loadNaverConfigImpl: async () => ({ clientId: 'id', clientSecret: 'secret' }),
-    checkNaverCompetitionLiveImpl: async () => { throw new Error('Naver Shopping API failed: HTTP 404'); },
+    resolveNaverCategoryCode: () => '50000000',
+    loadNaverApiHubConfigImpl: async () => ({ clientId: 'id', clientSecret: 'secret' }),
+    checkNaverTrendLiveImpl: async () => { throw new Error('NAVER API HUB request failed: HTTP 401'); },
     evaluateCandidatesImpl: async () => [{ productNo: '1', normalized: { name: 'A' }, filter: { filterStatus: 'pass' }, prices: {} }],
-    computeCompetitivenessScoreImpl: (candidate, context) => ({ score: context.naverResearch === null ? 1 : 0, breakdown: {} }),
+    computeCompetitivenessScoreImpl: (candidate, context) => ({ score: context.naverTrend === null ? 1 : 0, breakdown: {} }),
   });
-  assert.equal(searchFailed[0].score, 1);
+  assert.equal(lookupFailed[0].score, 1);
 });

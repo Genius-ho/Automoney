@@ -88,9 +88,19 @@ test('duplicateRisk drops toward 0 when the candidate title strongly overlaps an
   assert.ok(breakdown.duplicateRisk.points < breakdown.duplicateRisk.max * 0.5);
 });
 
-test('naverCompetition rewards low competitor count and small price gap when research data is present', () => {
-  const { breakdown } = computeCompetitivenessScore(strongCandidate(), {
-    naverResearch: { competitorCount: 2, priceGapRate: 0.02 },
+test('naverTrend rewards a high, growing click-trend ratio and gives a neutral half-credit when no trend data is present', () => {
+  const strong = computeCompetitivenessScore(strongCandidate(), {
+    naverTrend: { avgRatio: 90, growthRate: 0.4 },
   });
-  assert.ok(breakdown.naverCompetition.points > breakdown.naverCompetition.max * 0.8);
+  assert.ok(strong.breakdown.naverTrend.points > strong.breakdown.naverTrend.max * 0.8);
+
+  const noData = computeCompetitivenessScore(strongCandidate());
+  assert.equal(noData.breakdown.naverTrend.points, noData.breakdown.naverTrend.max * 0.5);
+});
+
+test('naverTrend gives a low score for a low, declining click-trend ratio', () => {
+  const { breakdown } = computeCompetitivenessScore(strongCandidate(), {
+    naverTrend: { avgRatio: 5, growthRate: -0.4 },
+  });
+  assert.ok(breakdown.naverTrend.points < breakdown.naverTrend.max * 0.2);
 });

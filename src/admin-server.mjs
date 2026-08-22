@@ -1864,7 +1864,7 @@ export function adminHtml() {
         }
       };
     }
-    const SCORE_DIMENSION_LABELS={imageQuality:'이미지 품질',returnRisk:'반품 리스크',duplicateRisk:'중복 위험',profitMargin:'예상마진/가격',naverCompetition:'네이버 경쟁',legalRisk:'법적 리스크',costShipping:'원가/배송비',optionComplexity:'옵션 복잡도',sourceCompleteness:'원본 완성도'};
+    const SCORE_DIMENSION_LABELS={imageQuality:'이미지 품질',returnRisk:'반품 리스크',duplicateRisk:'중복 위험',profitMargin:'예상마진/가격',naverTrend:'네이버 트렌드',legalRisk:'법적 리스크',costShipping:'원가/배송비',optionComplexity:'옵션 복잡도',sourceCompleteness:'원본 완성도'};
     function scoreBreakdownHtml(breakdown){
       if(!breakdown||!Object.keys(breakdown).length)return '<p class="muted">산출 과정 정보가 없습니다.</p>';
       return '<table><thead><tr><th>항목</th><th>점수</th><th>이유</th></tr></thead><tbody>'

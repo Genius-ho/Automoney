@@ -11,18 +11,19 @@
 // 직접 호출하므로 영향 없음 -- 후보 20~30개마다 AI 호출이 곱해지는 걸 피하기 위함).
 // db가 주어지면 중복위험 AI 판단용으로 최근 등록된 draft 제목들을 같이 넘긴다.
 //
-// 같은 이유(사람이 링크 몇 개만 보는 미리보기)로 네이버 경쟁 항목도 여기서는
-// 실시간 조회한다 -- checkNaverCompetitionLive (naver-research.mjs), draft가
-// 없어도 되는 저장 없는 검색. 원래 늘 "데이터 없음(중립값)"이었던 걸 실제
-// 신호로 채운다.
+// 같은 이유(사람이 링크 몇 개만 보는 미리보기)로 네이버 트렌드 항목도 여기서는
+// 실시간 조회한다 -- checkNaverTrendLive (naver-research.mjs), draft가 없어도
+// 되는 저장 없는 조회. NAVER API HUB 쇼핑 인사이트는 category(네이버쇼핑
+// cat_id)가 필수 파라미터인데, 이 코드베이스엔 아직 후보→cat_id 매핑이 없다
+// -- naverCategoryCode를 못 정하면(지금은 항상 못 정함) 그냥 건너뛰고 기존
+// 중립 프록시로 남긴다. 매핑이 생기면 caller가 넘겨주기만 하면 바로 활성화됨.
 import { evaluateCandidates } from './candidate-collector.mjs';
 import { computeCompetitivenessScore } from './competitiveness-score.mjs';
 import { computeAiScoringContext } from './ai-competitiveness-scoring.mjs';
-import { loadCodexConfig, loadNaverConfig } from './config.mjs';
+import { loadCodexConfig, loadNaverApiHubConfig } from './config.mjs';
 import { listProductDrafts } from './admin-store.mjs';
 import { insertLinkAnalysisHistory } from './link-analysis-history-store.mjs';
-import { checkNaverCompetitionLive } from './naver-research.mjs';
-import { NaverShoppingClient } from './naver-shopping-client.mjs';
+import { checkNaverTrendLive } from './naver-research.mjs';
 
 const EXISTING_TITLES_LIMIT = 200;
 
@@ -30,7 +31,11 @@ export async function analyzeProductLinks(domemeClient, productNos, pricingRules
   db = null,
   rootDir = process.cwd(),
   aiScoringEnabled = true,
-  naverResearchEnabled = true,
+  naverTrendEnabled = true,
+  // 네이버쇼핑 cat_id -- 없으면(기본값) 네이버 트렌드 조회를 건너뛴다. 후보별로
+  // 다른 카테고리를 쓰려면 resolveNaverCategoryCode(candidate)=>string|null 를
+  // 넘기면 된다 (기본은 항상 null, 즉 항상 건너뜀).
+  resolveNaverCategoryCode = () => null,
   // keyword: the GUI's "키워드 검색" input (or a Telegram keyword, if ever
   // wired) that led the human to these links, purely for history context --
   // null for a bare link paste with no preceding keyword search. source:
@@ -41,8 +46,8 @@ export async function analyzeProductLinks(domemeClient, productNos, pricingRules
   computeCompetitivenessScoreImpl = computeCompetitivenessScore,
   computeAiScoringContextImpl = computeAiScoringContext,
   loadCodexConfigImpl = loadCodexConfig,
-  loadNaverConfigImpl = loadNaverConfig,
-  checkNaverCompetitionLiveImpl = checkNaverCompetitionLive,
+  loadNaverApiHubConfigImpl = loadNaverApiHubConfig,
+  checkNaverTrendLiveImpl = checkNaverTrendLive,
   listProductDraftsImpl = listProductDrafts,
   insertLinkAnalysisHistoryImpl = insertLinkAnalysisHistory,
 } = {}) {
@@ -66,30 +71,31 @@ export async function analyzeProductLinks(domemeClient, productNos, pricingRules
     }
   }
 
-  // loadNaverConfig throws (not returns null) when NAVER_CLIENT_ID/SECRET
-  // are unset -- caught the same way every other optional credential here
-  // is, so an unconfigured Naver search just leaves this dimension on its
+  // loadNaverApiHubConfig throws (not returns null) when NAVER_API_HUB_CLIENT_ID/
+  // SECRET are unset -- caught the same way every other optional credential
+  // here is, so being unconfigured just leaves this dimension on its
   // existing neutral proxy instead of failing the whole analysis.
-  const naverClient = naverResearchEnabled
-    ? await loadNaverConfigImpl(rootDir).then((config) => new NaverShoppingClient(config)).catch(() => null)
+  const naverApiHubConfig = naverTrendEnabled
+    ? await loadNaverApiHubConfigImpl(rootDir).catch(() => null)
     : null;
 
   const results = await Promise.all(evaluated.map(async (candidate) => {
     if (candidate.error) {
       return { productNo: candidate.productNo, status: 'error', error: candidate.error.message };
     }
+    const naverCategoryCode = naverApiHubConfig ? resolveNaverCategoryCode(candidate) : null;
     // AI-scoring failures (CLI unavailable, timeout, etc.) never fail the
     // whole candidate -- computeAiScoringContext itself already degrades
     // each dimension independently to its formula proxy.
-    const [aiContext, naverResearch] = await Promise.all([
+    const [aiContext, naverTrend] = await Promise.all([
       codexConfig
         ? computeAiScoringContextImpl(candidate, existingDraftTitles, { codexConfig, rootDir }).catch(() => ({}))
         : Promise.resolve({}),
-      naverClient && candidate.normalized?.name
-        ? checkNaverCompetitionLiveImpl(naverClient, candidate.normalized.name, candidate.prices?.naverSalePrice).catch(() => null)
+      naverApiHubConfig && naverCategoryCode && candidate.normalized?.name
+        ? checkNaverTrendLiveImpl(naverApiHubConfig, candidate.normalized.name, naverCategoryCode).catch(() => null)
         : Promise.resolve(null),
     ]);
-    const { score, breakdown } = computeCompetitivenessScoreImpl(candidate, { ...aiContext, naverResearch });
+    const { score, breakdown } = computeCompetitivenessScoreImpl(candidate, { ...aiContext, naverTrend });
     return {
       productNo: candidate.productNo,
       status: 'analyzed',

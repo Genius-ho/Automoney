@@ -7,21 +7,27 @@
 // went to the 3 dimensions ai-competitiveness-scoring.mjs can now actually
 // judge (imageQuality/returnRisk/duplicateRisk, 링크 입력 흐름 한정), which
 // combined (25) deliberately outweigh profitMargin (15, "가격") per that
-// same request. The other 5 dimensions (naverCompetition/costShipping/
+// same request. The other 5 dimensions (naverTrend/costShipping/
 // optionComplexity/legalRisk/sourceCompleteness) have a real measured
 // signal and are unchanged.
+//
+// naverTrend (구 naverCompetition) 재정의: 개발자센터 쇼핑검색 API가
+// 2026-07-31에 대체재 없이 종료되어(공식 공지 확인) "경쟁상품수/가격격차"는
+// 더 이상 조회할 방법이 없다. NAVER API HUB 쇼핑 인사이트(카테고리/키워드
+// 클릭 트렌드)로 재정의 -- "꾸준히 높은 클릭 트렌드인지" + "최근 상승
+// 추세인지" (naver-research.mjs의 checkNaverTrendLive).
 //
 // `candidate` is one entry from src/candidate-collector.mjs's
 // evaluateCandidates() -- { normalized, filter, prices, productNo }.
 // `context` carries optional, batch-run-scoped signals that aren't part of
-// the candidate itself: { naverResearch, existingDraftTitles }.
+// the candidate itself: { naverTrend, existingDraftTitles }.
 
 export const WEIGHTS = {
   imageQuality: 10,
   returnRisk: 9,
   duplicateRisk: 6,
   profitMargin: 15,
-  naverCompetition: 15,
+  naverTrend: 15,
   legalRisk: 15,
   costShipping: 10,
   optionComplexity: 10,
@@ -44,7 +50,7 @@ export function computeCompetitivenessScore(candidate, context = {}) {
     returnRisk: context.aiReturnRisk || scoreReturnRisk(normalized, filter),
     duplicateRisk: context.aiDuplicateRisk || scoreDuplicateRisk(normalized, context.existingDraftTitles),
     profitMargin: scoreProfitMargin(prices),
-    naverCompetition: scoreNaverCompetition(context.naverResearch),
+    naverTrend: scoreNaverTrend(context.naverTrend),
     legalRisk: scoreLegalRisk(filter),
     costShipping: scoreCostShipping(normalized),
     optionComplexity: scoreOptionComplexity(normalized),
@@ -72,18 +78,17 @@ function scoreProfitMargin({ coupangExpectedProfit, coupangMarginRate, naverExpe
   return { points: profitPoints + marginPoints, reason: `예상순이익=${profit}, 마진율=${marginRate ?? '-'}` };
 }
 
-// Naver competitor research (market_research_results) only exists once a
-// draft has been created and researched -- a raw Domeggook candidate at
-// collection time never has it yet. Neutral (half credit) when absent so
-// this dimension doesn't silently zero out every Stage-1 candidate.
-function scoreNaverCompetition(naverResearch) {
-  if (!naverResearch) return { points: WEIGHTS.naverCompetition * 0.5, reason: '네이버 리서치 데이터 없음 (중립값)' };
-  const { competitorCount, priceGapRate } = naverResearch;
-  const competitionPoints = competitorCount == null ? WEIGHTS.naverCompetition * 0.25
-    : clamp(1 - competitorCount / 50, 0, 1) * (WEIGHTS.naverCompetition * 0.5);
-  const pricePoints = priceGapRate == null ? WEIGHTS.naverCompetition * 0.25
-    : clamp(1 - Math.abs(priceGapRate), 0, 1) * (WEIGHTS.naverCompetition * 0.5);
-  return { points: competitionPoints + pricePoints, reason: `경쟁상품수=${competitorCount ?? '-'}, 가격격차=${priceGapRate ?? '-'}` };
+// naverTrend: { avgRatio (0~100, 구간 내 상대적 클릭비율 평균 -- "꾸준히
+// 높은가"), growthRate (초반 대비 후반 성장률 -- "최근 상승 추세인가") }.
+// avgRatio에 60%, growthRate에 40% 가중 -- 사용자가 명시한 두 신호
+// ("꾸준히 높은 것"과 "지금보다 검색이 올라갈 것") 그대로 반영.
+// growthRate -50%~+50%를 0~1로 매핑 (그 밖은 클램프).
+function scoreNaverTrend(naverTrend) {
+  if (!naverTrend) return { points: WEIGHTS.naverTrend * 0.5, reason: '네이버 트렌드 데이터 없음 (중립값)' };
+  const { avgRatio, growthRate } = naverTrend;
+  const levelPoints = clamp(avgRatio / 100, 0, 1) * (WEIGHTS.naverTrend * 0.6);
+  const growthPoints = clamp((growthRate + 0.5) / 1, 0, 1) * (WEIGHTS.naverTrend * 0.4);
+  return { points: levelPoints + growthPoints, reason: `평균 클릭비율=${round1(avgRatio)}, 성장률=${round1(growthRate * 100)}%` };
 }
 
 function scoreCostShipping({ cost, shippingFee } = {}) {
