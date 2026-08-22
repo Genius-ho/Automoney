@@ -3,11 +3,11 @@ import test from 'node:test';
 
 import { analyzeProductLinks } from '../src/product-link-analysis.mjs';
 
-// Every test below stubs computeAiScoringContextImpl/loadClaudeCliConfigImpl
-// -- their real implementations spawn the actual `claude` CLI, which is slow
-// and non-deterministic in a unit test (confirmed: ~15s/candidate when left
-// unmocked, since the real subprocess spawn/failure path isn't instant).
-const noAiScoring = { loadClaudeCliConfigImpl: async () => ({ executable: 'claude' }), computeAiScoringContextImpl: async () => ({}) };
+// Every test below stubs computeAiScoringContextImpl/loadCodexConfigImpl --
+// their real implementations spawn the actual `codex` CLI, which is slow and
+// non-deterministic in a unit test (confirmed: 15-40s/candidate when left
+// unmocked, since the real subprocess round-trip isn't instant).
+const noAiScoring = { loadCodexConfigImpl: async () => ({ executable: 'codex' }), computeAiScoringContextImpl: async () => ({}) };
 
 test('analyzeProductLinks evaluates every product number and sorts by score, best first', async () => {
   const receivedCandidates = [];
@@ -51,7 +51,7 @@ test('analyzeProductLinks reports a per-link error without throwing or scoring i
 test('analyzeProductLinks passes the AI-judged context into computeCompetitivenessScore for each non-error candidate', async () => {
   const receivedContexts = [];
   await analyzeProductLinks({}, ['1'], {}, {
-    loadClaudeCliConfigImpl: async () => ({ executable: 'claude' }),
+    loadCodexConfigImpl: async () => ({ executable: 'codex' }),
     computeAiScoringContextImpl: async (candidate) => ({ aiImageQuality: { points: 10, reason: `[AI] for ${candidate.productNo}` } }),
     evaluateCandidatesImpl: async () => [{ productNo: '1', normalized: { name: 'A' }, filter: { filterStatus: 'pass' }, prices: {} }],
     computeCompetitivenessScoreImpl: (candidate, context) => { receivedContexts.push(context); return { score: 70, breakdown: {} }; },
@@ -60,11 +60,10 @@ test('analyzeProductLinks passes the AI-judged context into computeCompetitivene
   assert.deepEqual(receivedContexts, [{ aiImageQuality: { points: 10, reason: '[AI] for 1' } }]);
 });
 
-test('analyzeProductLinks skips AI scoring entirely (empty context) when aiScoringEnabled is false, without loading Claude CLI or Codex config', async () => {
+test('analyzeProductLinks skips AI scoring entirely (empty context) when aiScoringEnabled is false, without loading Codex config', async () => {
   const receivedContexts = [];
   await analyzeProductLinks({}, ['1'], {}, {
     aiScoringEnabled: false,
-    loadClaudeCliConfigImpl: async () => { throw new Error('must not be called'); },
     loadCodexConfigImpl: async () => { throw new Error('must not be called'); },
     computeAiScoringContextImpl: async () => { throw new Error('must not be called'); },
     evaluateCandidatesImpl: async () => [{ productNo: '1', normalized: { name: 'A' }, filter: { filterStatus: 'pass' }, prices: {} }],
@@ -74,26 +73,24 @@ test('analyzeProductLinks skips AI scoring entirely (empty context) when aiScori
   assert.deepEqual(receivedContexts, [{}]);
 });
 
-test('analyzeProductLinks loads both Claude and Codex config and passes them through as claudeConfig/codexConfig, plus rootDir', async () => {
+test('analyzeProductLinks loads Codex config and passes it through as codexConfig, plus rootDir', async () => {
   let receivedOpts = null;
   await analyzeProductLinks({}, ['1'], {}, {
     rootDir: '/custom/root',
-    loadClaudeCliConfigImpl: async () => ({ executable: 'claude' }),
     loadCodexConfigImpl: async () => ({ executable: 'codex' }),
     computeAiScoringContextImpl: async (candidate, titles, opts) => { receivedOpts = opts; return {}; },
     evaluateCandidatesImpl: async () => [{ productNo: '1', normalized: { name: 'A' }, filter: { filterStatus: 'pass' }, prices: {} }],
     computeCompetitivenessScoreImpl: () => ({ score: 70, breakdown: {} }),
   });
 
-  assert.equal(receivedOpts.claudeConfig.executable, 'claude');
   assert.equal(receivedOpts.codexConfig.executable, 'codex');
   assert.equal(receivedOpts.rootDir, '/custom/root');
 });
 
 test('analyzeProductLinks falls back to an empty (proxy-only) context, not a thrown error, when AI scoring itself rejects', async () => {
   const results = await analyzeProductLinks({}, ['1'], {}, {
-    loadClaudeCliConfigImpl: async () => ({ executable: 'claude' }),
-    computeAiScoringContextImpl: async () => { throw new Error('claude CLI not logged in'); },
+    loadCodexConfigImpl: async () => ({ executable: 'codex' }),
+    computeAiScoringContextImpl: async () => { throw new Error('codex not logged in'); },
     evaluateCandidatesImpl: async () => [{ productNo: '1', normalized: { name: 'A' }, filter: { filterStatus: 'pass' }, prices: {} }],
     computeCompetitivenessScoreImpl: () => ({ score: 42, breakdown: {} }),
   });
@@ -106,7 +103,7 @@ test('analyzeProductLinks fetches recent draft titles for the AI duplicate check
   const receivedListArgs = [];
   await analyzeProductLinks({}, ['1'], {}, {
     db: { name: 'db' },
-    loadClaudeCliConfigImpl: async () => ({ executable: 'claude' }),
+    loadCodexConfigImpl: async () => ({ executable: 'codex' }),
     listProductDraftsImpl: async (db, opts) => { receivedListArgs.push({ db, opts }); return [{ sellingTitle: '기존 상품 A' }, { sellingTitle: null }, { sellingTitle: '기존 상품 B' }]; },
     computeAiScoringContextImpl: async (candidate, existingDraftTitles) => ({ aiDuplicateRisk: { points: existingDraftTitles.length, reason: 'x' } }),
     evaluateCandidatesImpl: async () => [{ productNo: '1', normalized: { name: 'A' }, filter: { filterStatus: 'pass' }, prices: {} }],
@@ -120,7 +117,7 @@ test('analyzeProductLinks fetches recent draft titles for the AI duplicate check
 
 test('analyzeProductLinks does not query for existing draft titles when no db is given', async () => {
   await analyzeProductLinks({}, ['1'], {}, {
-    loadClaudeCliConfigImpl: async () => ({ executable: 'claude' }),
+    loadCodexConfigImpl: async () => ({ executable: 'codex' }),
     listProductDraftsImpl: async () => { throw new Error('must not be called without a db'); },
     computeAiScoringContextImpl: async () => ({}),
     evaluateCandidatesImpl: async () => [{ productNo: '1', normalized: { name: 'A' }, filter: { filterStatus: 'pass' }, prices: {} }],
@@ -134,7 +131,7 @@ test('analyzeProductLinks records analyzed (scored) results to history, with the
     db: { name: 'db' },
     keyword: '여성 벨트',
     source: 'link_input',
-    loadClaudeCliConfigImpl: async () => ({ executable: 'claude' }),
+    loadCodexConfigImpl: async () => ({ executable: 'codex' }),
     computeAiScoringContextImpl: async () => ({}),
     evaluateCandidatesImpl: async () => [
       { productNo: '1', normalized: { name: 'A' }, filter: { filterStatus: 'pass' }, prices: {} },

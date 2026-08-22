@@ -100,6 +100,11 @@ export async function runCodexAnalysis({ config, cwd, images = [], schemaPath, o
   await acquireSlot(limit);
   try {
     const args = ['exec', '--skip-git-repo-check', '-s', sandbox, '-C', cwd];
+    // config.model/reasoningEffort are optional overrides -- omitted (as
+    // every existing caller today does) means this CLI's own ~/.codex/
+    // config.toml default applies, so this is purely additive.
+    if (config?.model) args.push('-m', config.model);
+    if (config?.reasoningEffort) args.push('-c', `model_reasoning_effort=${config.reasoningEffort}`);
     for (const imagePath of images) args.push('-i', imagePath);
     args.push('--output-schema', schemaPath, '-o', outputPath, '-');
 

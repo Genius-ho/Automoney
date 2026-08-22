@@ -141,6 +141,51 @@ test('runCodexAnalysis writes the prompt to stdin, never as a spawn argument', a
   }
 });
 
+test('runCodexAnalysis passes -m/-c model_reasoning_effort= only when config.model/reasoningEffort are set (existing callers omit both and are unaffected)', async () => {
+  const dir = await mkdtemp(join(tmpdir(), 'codex-test-'));
+  const outputPath = join(dir, 'result.json');
+  let receivedArgs = null;
+  const spawnImpl = (executable, args) => {
+    receivedArgs = args;
+    const child = fakeChild();
+    queueMicrotask(async () => {
+      await writeFile(outputPath, JSON.stringify({ ok: true }));
+      child.emit('close', 0);
+    });
+    return child;
+  };
+  try {
+    await runCodexAnalysis({
+      config: { executable: 'codex', concurrency: 1, timeoutMs: 5000, model: 'gpt-5.6-luna', reasoningEffort: 'xhigh' },
+      cwd: dir,
+      images: [],
+      schemaPath: 'schema.json',
+      outputPath,
+      prompt: 'test',
+      spawnImpl,
+    });
+    assert.ok(receivedArgs.includes('-m'));
+    assert.equal(receivedArgs[receivedArgs.indexOf('-m') + 1], 'gpt-5.6-luna');
+    assert.ok(receivedArgs.includes('-c'));
+    assert.equal(receivedArgs[receivedArgs.indexOf('-c') + 1], 'model_reasoning_effort=xhigh');
+
+    receivedArgs = null;
+    await runCodexAnalysis({
+      config: { executable: 'codex', concurrency: 1, timeoutMs: 5000 },
+      cwd: dir,
+      images: [],
+      schemaPath: 'schema.json',
+      outputPath,
+      prompt: 'test',
+      spawnImpl,
+    });
+    assert.ok(!receivedArgs.includes('-m'));
+    assert.ok(!receivedArgs.includes('-c'));
+  } finally {
+    await rm(dir, { recursive: true, force: true });
+  }
+});
+
 test('runCodexAnalysis respects concurrency=1: a second call does not start until the first finishes', async () => {
   const dir = await mkdtemp(join(tmpdir(), 'codex-test-'));
   let active = 0;

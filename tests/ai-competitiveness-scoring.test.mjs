@@ -17,13 +17,13 @@ test('scoreImageQualityWithAi falls back to the proxy without calling Codex when
   assert.match(result.reason, /이미지 0장/);
 });
 
-test('scoreImageQualityWithAi downloads at most 3 images, runs Codex with them as cwd-local paths + the image-quality JSON schema, scales the score, and cleans up', async () => {
+test('scoreImageQualityWithAi downloads at most 3 images, runs Codex with the fixed model/reasoningEffort override + the image-quality JSON schema, scales the score, and cleans up', async () => {
   const images = ['https://a.test/1.jpg', 'https://a.test/2.jpg', 'https://a.test/3.jpg', 'https://a.test/4.jpg'];
   const downloadedUrls = [];
   const cleanedUp = [];
   let receivedArgs = null;
   const result = await scoreImageQualityWithAi(images, {
-    config: { executable: 'codex' },
+    config: { executable: 'codex', concurrency: 2 },
     rootDir: '/home/ho/automoney',
     loadRemoteImageForVisionImpl: async (url) => {
       downloadedUrls.push(url);
@@ -39,6 +39,12 @@ test('scoreImageQualityWithAi downloads at most 3 images, runs Codex with them a
   assert.equal(receivedArgs.images.length, 3);
   assert.match(receivedArgs.schemaPath, /schemas\/image-quality-score\.schema\.json$/);
   assert.ok(receivedArgs.outputPath);
+  // Fixed model/effort override, applied on top of whatever the caller's
+  // codexConfig otherwise carries (executable/concurrency preserved here).
+  assert.equal(receivedArgs.config.model, 'gpt-5.6-luna');
+  assert.equal(receivedArgs.config.reasoningEffort, 'xhigh');
+  assert.equal(receivedArgs.config.executable, 'codex');
+  assert.equal(receivedArgs.config.concurrency, 2);
   assert.equal(result.points, (80 / 100) * WEIGHTS.imageQuality);
   assert.match(result.reason, /^\[AI\] 선명하고 구도가 좋음$/);
   assert.deepEqual(cleanedUp, images.slice(0, 3));
@@ -57,39 +63,57 @@ test('scoreImageQualityWithAi propagates a Codex failure (the caller, computeAiS
   assert.deepEqual(cleanedUp, ['x']);
 });
 
-test('scoreTextJudgmentsWithAi asks for and scales returnRiskScore only when there are no existing draft titles to compare against, leaving duplicateRisk on the proxy', async () => {
-  let receivedPrompt = null;
+test('scoreTextJudgmentsWithAi asks Codex for returnRisk, tells it to answer duplicateScore/duplicateReason as null when there are no existing draft titles, and leaves duplicateRisk on the proxy when it does', async () => {
+  let receivedArgs = null;
   const result = await scoreTextJudgmentsWithAi({ name: '유리컵 세트', options: [{ name: '색상', value: '투명' }], sellUnitType: 'single' }, [], {
-    config: {},
-    runClaudeTextPromptImpl: async ({ prompt }) => { receivedPrompt = prompt; return { rawText: '{"returnRiskScore": 30, "returnRiskReason": "파손 위험 소재"}' }; },
+    config: { executable: 'codex' },
+    rootDir: '/home/ho/automoney',
+    runCodexAnalysisImpl: async (args) => {
+      receivedArgs = args;
+      return { success: true, analysis: { returnRiskScore: 30, returnRiskReason: '파손 위험 소재', duplicateScore: null, duplicateReason: null } };
+    },
   });
 
-  assert.match(receivedPrompt, /유리컵 세트/);
-  assert.doesNotMatch(receivedPrompt, /기존 등록 상품명 목록/);
+  assert.match(receivedArgs.prompt, /유리컵 세트/);
+  assert.match(receivedArgs.prompt, /duplicateScore와 duplicateReason은 null로 답해라/);
+  assert.match(receivedArgs.schemaPath, /schemas\/return-duplicate-risk-score\.schema\.json$/);
+  assert.equal(receivedArgs.config.model, 'gpt-5.6-luna');
+  assert.equal(receivedArgs.config.reasoningEffort, 'xhigh');
   assert.equal(result.returnRisk.points, (30 / 100) * WEIGHTS.returnRisk);
   assert.match(result.returnRisk.reason, /^\[AI\] 파손 위험 소재$/);
-  // No comparison titles -- duplicateRisk proxy's own default-max-points path.
+  // Codex answered null (as instructed) -- duplicateRisk proxy's own
+  // default-max-points path, not an AI-judged value.
   assert.equal(result.duplicateRisk.points, WEIGHTS.duplicateRisk);
 });
 
 test('scoreTextJudgmentsWithAi asks for and scales both scores when existing draft titles are given', async () => {
-  let receivedPrompt = null;
+  let receivedArgs = null;
   const result = await scoreTextJudgmentsWithAi({ name: '수납 정리함 대형' }, ['수납 정리함 소형', '벨트'], {
     config: {},
-    runClaudeTextPromptImpl: async ({ prompt }) => {
-      receivedPrompt = prompt;
-      return { rawText: '{"returnRiskScore": 90, "returnRiskReason": "단순 상품", "duplicateScore": 40, "duplicateReason": "기존 소형과 유사"}' };
+    runCodexAnalysisImpl: async (args) => {
+      receivedArgs = args;
+      return { success: true, analysis: { returnRiskScore: 90, returnRiskReason: '단순 상품', duplicateScore: 40, duplicateReason: '기존 소형과 유사' } };
     },
   });
 
-  assert.match(receivedPrompt, /수납 정리함 소형/);
-  assert.match(receivedPrompt, /duplicateScore/);
+  assert.match(receivedArgs.prompt, /수납 정리함 소형/);
+  assert.match(receivedArgs.prompt, /duplicateScore로 0~100점/);
   assert.equal(result.returnRisk.points, (90 / 100) * WEIGHTS.returnRisk);
   assert.equal(result.duplicateRisk.points, (40 / 100) * WEIGHTS.duplicateRisk);
   assert.match(result.duplicateRisk.reason, /^\[AI\] 기존 소형과 유사$/);
 });
 
-test('computeAiScoringContext runs the Codex image call and the Claude text call and returns a context fragment ready for computeCompetitivenessScore', async () => {
+test('scoreTextJudgmentsWithAi propagates a Codex failure', async () => {
+  await assert.rejects(
+    () => scoreTextJudgmentsWithAi({ name: 'A' }, [], {
+      config: {},
+      runCodexAnalysisImpl: async () => ({ success: false, log: 'codex timeout' }),
+    }),
+    (error) => error.code === 'CODEX_RISK_JUDGMENT_FAILED' && /codex timeout/.test(error.message),
+  );
+});
+
+test('computeAiScoringContext runs both Codex calls (image + text judgments) with the same codexConfig/rootDir and returns a context fragment ready for computeCompetitivenessScore', async () => {
   let receivedImageArgs = null;
   let receivedTextArgs = null;
   const context = await computeAiScoringContext(
@@ -97,7 +121,6 @@ test('computeAiScoringContext runs the Codex image call and the Claude text call
     ['기존 상품'],
     {
       codexConfig: { executable: 'codex' },
-      claudeConfig: { executable: 'claude' },
       rootDir: '/home/ho/automoney',
       scoreImageQualityWithAiImpl: async (images, opts) => { receivedImageArgs = { images, opts }; return { points: 8, reason: '[AI] good' }; },
       scoreTextJudgmentsWithAiImpl: async (normalized, titles, opts) => { receivedTextArgs = { normalized, titles, opts }; return { returnRisk: { points: 7, reason: '[AI] safe' }, duplicateRisk: { points: 5, reason: '[AI] unique' } }; },
@@ -111,7 +134,8 @@ test('computeAiScoringContext runs the Codex image call and the Claude text call
   });
   assert.equal(receivedImageArgs.opts.config.executable, 'codex');
   assert.equal(receivedImageArgs.opts.rootDir, '/home/ho/automoney');
-  assert.equal(receivedTextArgs.opts.config.executable, 'claude');
+  assert.equal(receivedTextArgs.opts.config.executable, 'codex');
+  assert.equal(receivedTextArgs.opts.rootDir, '/home/ho/automoney');
 });
 
 test('computeAiScoringContext falls back independently per dimension -- one AI call failing does not affect the other', async () => {
@@ -120,7 +144,6 @@ test('computeAiScoringContext falls back independently per dimension -- one AI c
     [],
     {
       codexConfig: {},
-      claudeConfig: {},
       scoreImageQualityWithAiImpl: async () => { throw new Error('codex not logged in'); },
       scoreTextJudgmentsWithAiImpl: async () => ({ returnRisk: { points: 7, reason: '[AI] safe' }, duplicateRisk: { points: 5, reason: '[AI] unique' } }),
     },
@@ -139,9 +162,8 @@ test('computeAiScoringContext falls back to both proxies when the text-judgments
     [],
     {
       codexConfig: {},
-      claudeConfig: {},
       scoreImageQualityWithAiImpl: async () => ({ points: 9, reason: '[AI] good' }),
-      scoreTextJudgmentsWithAiImpl: async () => { throw new Error('claude CLI timeout'); },
+      scoreTextJudgmentsWithAiImpl: async () => { throw new Error('codex timeout'); },
     },
   );
 

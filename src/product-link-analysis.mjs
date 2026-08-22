@@ -13,7 +13,7 @@
 import { evaluateCandidates } from './candidate-collector.mjs';
 import { computeCompetitivenessScore } from './competitiveness-score.mjs';
 import { computeAiScoringContext } from './ai-competitiveness-scoring.mjs';
-import { loadClaudeCliConfig, loadCodexConfig } from './config.mjs';
+import { loadCodexConfig } from './config.mjs';
 import { listProductDrafts } from './admin-store.mjs';
 import { insertLinkAnalysisHistory } from './link-analysis-history-store.mjs';
 
@@ -32,7 +32,6 @@ export async function analyzeProductLinks(domemeClient, productNos, pricingRules
   evaluateCandidatesImpl = evaluateCandidates,
   computeCompetitivenessScoreImpl = computeCompetitivenessScore,
   computeAiScoringContextImpl = computeAiScoringContext,
-  loadClaudeCliConfigImpl = loadClaudeCliConfig,
   loadCodexConfigImpl = loadCodexConfig,
   listProductDraftsImpl = listProductDrafts,
   insertLinkAnalysisHistoryImpl = insertLinkAnalysisHistory,
@@ -44,17 +43,12 @@ export async function analyzeProductLinks(domemeClient, productNos, pricingRules
     { includeNeedsReview: true, includeDomeggook: true },
   );
 
-  // imageQuality goes through Codex (loadCodexConfigImpl), returnRisk/
-  // duplicateRisk through Claude (loadClaudeCliConfigImpl) -- separate
-  // providers/usage, see ai-competitiveness-scoring.mjs's header comment.
-  let claudeCliConfig = null;
+  // All 3 AI dimensions go through Codex now (loadCodexConfigImpl) -- see
+  // ai-competitiveness-scoring.mjs's header comment.
   let codexConfig = null;
   let existingDraftTitles = [];
   if (aiScoringEnabled) {
-    [claudeCliConfig, codexConfig] = await Promise.all([
-      loadClaudeCliConfigImpl(rootDir).catch(() => null),
-      loadCodexConfigImpl(rootDir).catch(() => null),
-    ]);
+    codexConfig = await loadCodexConfigImpl(rootDir).catch(() => null);
     if (db) {
       existingDraftTitles = await listProductDraftsImpl(db, { limit: EXISTING_TITLES_LIMIT })
         .then((drafts) => (drafts || []).map((d) => d.sellingTitle).filter(Boolean))
@@ -69,8 +63,8 @@ export async function analyzeProductLinks(domemeClient, productNos, pricingRules
     // AI-scoring failures (CLI unavailable, timeout, etc.) never fail the
     // whole candidate -- computeAiScoringContext itself already degrades
     // each dimension independently to its formula proxy.
-    const aiContext = (claudeCliConfig || codexConfig)
-      ? await computeAiScoringContextImpl(candidate, existingDraftTitles, { claudeConfig: claudeCliConfig, codexConfig, rootDir }).catch(() => ({}))
+    const aiContext = codexConfig
+      ? await computeAiScoringContextImpl(candidate, existingDraftTitles, { codexConfig, rootDir }).catch(() => ({}))
       : {};
     const { score, breakdown } = computeCompetitivenessScoreImpl(candidate, aiContext);
     return {
