@@ -482,6 +482,25 @@ test("renderVrLineChart shows the empty message when there is no cycle history y
   const { sandbox } = loadApp();
   sandbox.renderVrLineChart([], null);
   assert.equal(sandbox.document.getElementById("vrLineEmpty").hidden, false);
+  assert.equal(sandbox.document.getElementById("vrLineEmpty").textContent, "표시할 사이클 이력이 아직 없습니다.");
+});
+
+test("renderVrLineChart shows a distinct empty message for a single cycle 1 point (not yet a trend)", () => {
+  // Regression: with exactly 1 point (still on cycle 1, no completed
+  // cycle), the old code tried to draw a path/band polygon anyway,
+  // producing a degenerate single-coordinate shape instead of a real chart.
+  const { sandbox } = loadApp();
+  const points = [
+    { cycle_id: "TQQQ-c1", V: "8956.08", lower_band: "7612.67", upper_band: "10299.49", E_at_close: null },
+  ];
+  sandbox.renderVrLineChart(points, 9000);
+  assert.equal(sandbox.document.getElementById("vrLineEmpty").hidden, false);
+  assert.equal(
+    sandbox.document.getElementById("vrLineEmpty").textContent,
+    "완료된 사이클이 아직 없어 추이 차트를 표시할 수 없습니다. 게이지 보기를 이용하세요.",
+  );
+  const svg = sandbox.document.getElementById("vrLineSvg");
+  assert.equal(svg._children.length, 0, "no degenerate path/polygon should be drawn for a single point");
 });
 
 test("renderVrLineChart plots one V line point per cycle plus the live-value series", () => {

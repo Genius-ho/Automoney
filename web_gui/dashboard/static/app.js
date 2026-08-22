@@ -86,7 +86,13 @@ function renderVrGauge(cycle,liveValue){const svg=$("vrGaugeSvg");svg.replaceChi
   svg.append(svgEl("text",{x:trackX+trackW,y:trackY-8,class:"vr-gauge-label","text-anchor":"end"},"MAX · 매도 "+money(max)));
   const vX=toX(v);svg.append(svgEl("line",{x1:vX,y1:trackY-4,x2:vX,y2:trackY+trackH+4,class:"vr-gauge-marker-v"}));svg.append(svgEl("text",{x:vX,y:trackY+trackH+18,class:"vr-gauge-label","text-anchor":"middle"},"V "+money(v)));
   if(liveValue!=null&&!Number.isNaN(liveValue)){const cx=toX(liveValue);svg.append(svgEl("polygon",{points:(cx-7)+","+(trackY-10)+" "+(cx+7)+","+(trackY-10)+" "+cx+","+trackY,class:"vr-gauge-marker-current"}));svg.append(svgEl("text",{x:cx,y:trackY-14,class:"vr-gauge-value","text-anchor":"middle"},"현재 "+money(liveValue)))}}
-function renderVrLineChart(points,liveValue){const svg=$("vrLineSvg");svg.replaceChildren();const empty=$("vrLineEmpty");if(!points||points.length===0){empty.hidden=false;return}empty.hidden=true;
+function renderVrLineChart(points,liveValue){const svg=$("vrLineSvg");svg.replaceChildren();const empty=$("vrLineEmpty");
+  // A trend line needs >=2 points to mean anything -- with exactly 1 (still
+  // on cycle 1, no completed cycle yet) every path/polygon below degenerates
+  // to a single coordinate (a stray dot/sliver, not a real chart), so show
+  // the empty state instead of that broken-looking render.
+  if(!points||points.length<2){empty.hidden=false;empty.textContent=(!points||points.length===0)?"표시할 사이클 이력이 아직 없습니다.":"완료된 사이클이 아직 없어 추이 차트를 표시할 수 없습니다. 게이지 보기를 이용하세요.";return}
+  empty.hidden=true;
   const values=[];points.forEach((p,i)=>{values.push(Number(p.V),Number(p.lower_band),Number(p.upper_band));const actual=(i===points.length-1&&p.E_at_close==null)?liveValue:Number(p.E_at_close);if(actual!=null&&!Number.isNaN(actual))values.push(actual)});
   const minY=Math.min(...values),maxY=Math.max(...values),pad=(maxY-minY)*0.1||1,yMin=minY-pad,yMax=maxY+pad;
   const chartX=50,chartW=520,chartY=20,chartH=160,n=points.length;
