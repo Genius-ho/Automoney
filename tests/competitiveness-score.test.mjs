@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
 
-import { computeCompetitivenessScore } from '../src/competitiveness-score.mjs';
+import { WEIGHTS, computeCompetitivenessScore } from '../src/competitiveness-score.mjs';
 
 function strongCandidate(overrides = {}) {
   return {
@@ -20,14 +20,30 @@ function strongCandidate(overrides = {}) {
   };
 }
 
-test('computeCompetitivenessScore returns 0-100 with a breakdown covering all 11 dimensions', () => {
+test('computeCompetitivenessScore returns 0-100 with a breakdown covering all 9 dimensions', () => {
   const { score, breakdown } = computeCompetitivenessScore(strongCandidate());
   assert.ok(score >= 0 && score <= 100);
-  assert.equal(Object.keys(breakdown).length, 11);
+  assert.equal(Object.keys(breakdown).length, 9);
   for (const part of Object.values(breakdown)) {
     assert.ok(part.points >= 0 && part.points <= part.max);
     assert.equal(typeof part.reason, 'string');
   }
+});
+
+test('supplyStability/keywordPopularity dimensions were removed entirely (no real signal exists for either, even for AI)', () => {
+  const { breakdown } = computeCompetitivenessScore(strongCandidate());
+  assert.equal(breakdown.supplyStability, undefined);
+  assert.equal(breakdown.keywordPopularity, undefined);
+});
+
+test('the 3 AI-judgeable dimensions (imageQuality/returnRisk/duplicateRisk) combined outweigh profitMargin ("가격")', () => {
+  const aiTotal = WEIGHTS.imageQuality + WEIGHTS.returnRisk + WEIGHTS.duplicateRisk;
+  assert.ok(aiTotal > WEIGHTS.profitMargin, `AI dimensions (${aiTotal}) must outweigh profitMargin (${WEIGHTS.profitMargin})`);
+});
+
+test('WEIGHTS still sum to exactly 100', () => {
+  const total = Object.values(WEIGHTS).reduce((sum, weight) => sum + weight, 0);
+  assert.equal(total, 100);
 });
 
 test('a strong candidate (good profit, simple options, no risk keywords, many images) scores well above a weak one', () => {
@@ -62,12 +78,6 @@ test('a risk-keyword hit zeroes out the legal-risk dimension entirely', () => {
 test('missing price data yields 0 profit-margin points instead of throwing', () => {
   const { breakdown } = computeCompetitivenessScore(strongCandidate({ prices: {} }));
   assert.equal(breakdown.profitMargin.points, 0);
-});
-
-test('dimensions with no real signal (supply stability, keyword popularity) contribute a fixed neutral half-credit when data is absent', () => {
-  const { breakdown } = computeCompetitivenessScore(strongCandidate());
-  assert.equal(breakdown.supplyStability.points, breakdown.supplyStability.max / 2);
-  assert.equal(breakdown.keywordPopularity.points, breakdown.keywordPopularity.max / 2);
 });
 
 test('duplicateRisk drops toward 0 when the candidate title strongly overlaps an existing draft title', () => {

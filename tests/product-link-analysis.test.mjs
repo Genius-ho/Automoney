@@ -3,9 +3,16 @@ import test from 'node:test';
 
 import { analyzeProductLinks } from '../src/product-link-analysis.mjs';
 
+// Every test below stubs computeAiScoringContextImpl/loadClaudeCliConfigImpl
+// -- their real implementations spawn the actual `claude` CLI, which is slow
+// and non-deterministic in a unit test (confirmed: ~15s/candidate when left
+// unmocked, since the real subprocess spawn/failure path isn't instant).
+const noAiScoring = { loadClaudeCliConfigImpl: async () => ({ executable: 'claude' }), computeAiScoringContextImpl: async () => ({}) };
+
 test('analyzeProductLinks evaluates every product number and sorts by score, best first', async () => {
   const receivedCandidates = [];
   const results = await analyzeProductLinks({}, ['1', '2'], { defaultMarginRate: 0.25 }, {
+    ...noAiScoring,
     evaluateCandidatesImpl: async (client, candidates) => {
       receivedCandidates.push(...candidates);
       return [
@@ -26,6 +33,7 @@ test('analyzeProductLinks evaluates every product number and sorts by score, bes
 
 test('analyzeProductLinks reports a per-link error without throwing or scoring it', async () => {
   const results = await analyzeProductLinks({}, ['1', '2'], {}, {
+    ...noAiScoring,
     evaluateCandidatesImpl: async () => [
       { productNo: '1', error: new Error('상품을 찾을 수 없습니다') },
       { productNo: '2', normalized: { name: 'B' }, filter: { filterStatus: 'pass' }, prices: {} },
@@ -38,4 +46,66 @@ test('analyzeProductLinks reports a per-link error without throwing or scoring i
   const okResult = results.find((r) => r.productNo === '2');
   assert.equal(okResult.status, 'analyzed');
   assert.equal(okResult.score, 60);
+});
+
+test('analyzeProductLinks passes the AI-judged context into computeCompetitivenessScore for each non-error candidate', async () => {
+  const receivedContexts = [];
+  await analyzeProductLinks({}, ['1'], {}, {
+    loadClaudeCliConfigImpl: async () => ({ executable: 'claude' }),
+    computeAiScoringContextImpl: async (candidate) => ({ aiImageQuality: { points: 10, reason: `[AI] for ${candidate.productNo}` } }),
+    evaluateCandidatesImpl: async () => [{ productNo: '1', normalized: { name: 'A' }, filter: { filterStatus: 'pass' }, prices: {} }],
+    computeCompetitivenessScoreImpl: (candidate, context) => { receivedContexts.push(context); return { score: 70, breakdown: {} }; },
+  });
+
+  assert.deepEqual(receivedContexts, [{ aiImageQuality: { points: 10, reason: '[AI] for 1' } }]);
+});
+
+test('analyzeProductLinks skips AI scoring entirely (empty context) when aiScoringEnabled is false, without loading Claude CLI config', async () => {
+  const receivedContexts = [];
+  await analyzeProductLinks({}, ['1'], {}, {
+    aiScoringEnabled: false,
+    loadClaudeCliConfigImpl: async () => { throw new Error('must not be called'); },
+    computeAiScoringContextImpl: async () => { throw new Error('must not be called'); },
+    evaluateCandidatesImpl: async () => [{ productNo: '1', normalized: { name: 'A' }, filter: { filterStatus: 'pass' }, prices: {} }],
+    computeCompetitivenessScoreImpl: (candidate, context) => { receivedContexts.push(context); return { score: 70, breakdown: {} }; },
+  });
+
+  assert.deepEqual(receivedContexts, [{}]);
+});
+
+test('analyzeProductLinks falls back to an empty (proxy-only) context, not a thrown error, when AI scoring itself rejects', async () => {
+  const results = await analyzeProductLinks({}, ['1'], {}, {
+    loadClaudeCliConfigImpl: async () => ({ executable: 'claude' }),
+    computeAiScoringContextImpl: async () => { throw new Error('claude CLI not logged in'); },
+    evaluateCandidatesImpl: async () => [{ productNo: '1', normalized: { name: 'A' }, filter: { filterStatus: 'pass' }, prices: {} }],
+    computeCompetitivenessScoreImpl: () => ({ score: 42, breakdown: {} }),
+  });
+
+  assert.equal(results[0].status, 'analyzed');
+  assert.equal(results[0].score, 42);
+});
+
+test('analyzeProductLinks fetches recent draft titles for the AI duplicate check only when db is provided', async () => {
+  const receivedListArgs = [];
+  await analyzeProductLinks({}, ['1'], {}, {
+    db: { name: 'db' },
+    loadClaudeCliConfigImpl: async () => ({ executable: 'claude' }),
+    listProductDraftsImpl: async (db, opts) => { receivedListArgs.push({ db, opts }); return [{ sellingTitle: '기존 상품 A' }, { sellingTitle: null }, { sellingTitle: '기존 상품 B' }]; },
+    computeAiScoringContextImpl: async (candidate, existingDraftTitles) => ({ aiDuplicateRisk: { points: existingDraftTitles.length, reason: 'x' } }),
+    evaluateCandidatesImpl: async () => [{ productNo: '1', normalized: { name: 'A' }, filter: { filterStatus: 'pass' }, prices: {} }],
+    computeCompetitivenessScoreImpl: (candidate, context) => ({ score: context.aiDuplicateRisk.points, breakdown: {} }),
+  });
+
+  assert.equal(receivedListArgs[0].db.name, 'db');
+  assert.equal(receivedListArgs[0].opts.limit, 200);
+});
+
+test('analyzeProductLinks does not query for existing draft titles when no db is given', async () => {
+  await analyzeProductLinks({}, ['1'], {}, {
+    loadClaudeCliConfigImpl: async () => ({ executable: 'claude' }),
+    listProductDraftsImpl: async () => { throw new Error('must not be called without a db'); },
+    computeAiScoringContextImpl: async () => ({}),
+    evaluateCandidatesImpl: async () => [{ productNo: '1', normalized: { name: 'A' }, filter: { filterStatus: 'pass' }, prices: {} }],
+    computeCompetitivenessScoreImpl: () => ({ score: 1, breakdown: {} }),
+  });
 });

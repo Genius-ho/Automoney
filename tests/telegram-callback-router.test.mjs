@@ -78,14 +78,14 @@ test('router routes a plain-text update to the keyword-message handler with the 
     },
     handlePurchaseOrderImpl: async () => { throw new Error('must not be called for a plain message'); },
     handleCoupangImpl: async () => { throw new Error('must not be called for a plain message'); },
-    handleCoupangKeywordMessageImpl: async (db, domemeSearchClient, pricingRules, config, message) => {
-      received.push({ domemeSearchClient, pricingRules, message });
+    handleCoupangKeywordMessageImpl: async (db, domemeSearchClient, pricingRules, config, message, deps) => {
+      received.push({ domemeSearchClient, pricingRules, message, deps });
       return { handled: true };
     },
   };
   const result = await router.pollOnce(
     {},
-    { domemeClient: { name: 'private' }, domemeSearchClient: { name: 'search' }, pricingRules: { defaultMarginRate: 0.25 } },
+    { domemeClient: { name: 'private' }, domemeSearchClient: { name: 'search' }, pricingRules: { defaultMarginRate: 0.25 }, rootDir: '/root' },
     { botToken: 't', chatId: '1' },
     impls,
   );
@@ -93,6 +93,7 @@ test('router routes a plain-text update to the keyword-message handler with the 
   assert.equal(received[0].domemeSearchClient.name, 'search');
   assert.deepEqual(received[0].pricingRules, { defaultMarginRate: 0.25 });
   assert.equal(received[0].message.text, '여성 벨트');
+  assert.equal(received[0].deps.rootDir, '/root');
 });
 
 test('router routes an import_link callback to the product-link-import handler with the search client/pricing rules/rootDir deps', async () => {

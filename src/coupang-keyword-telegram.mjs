@@ -124,6 +124,7 @@ export function productLinkImportKeyboard(results) {
 // keyword/link) is left unhandled so the caller's router can pass it along
 // to whatever else might want it.
 export async function handleCoupangKeywordMessage(db, domemeClient, pricingRules, telegramConfig, message, {
+  rootDir = process.cwd(),
   sourceCandidatesFromKeywordsImpl = sourceCandidatesFromKeywords,
   analyzeProductLinksImpl = analyzeProductLinks,
   sendTelegramMessageImpl = sendTelegramMessage,
@@ -133,7 +134,7 @@ export async function handleCoupangKeywordMessage(db, domemeClient, pricingRules
 
   const productNos = parseProductLinks(message.text);
   if (productNos) {
-    const results = await analyzeProductLinksImpl(domemeClient, productNos, pricingRules);
+    const results = await analyzeProductLinksImpl(domemeClient, productNos, pricingRules, { db, rootDir });
     await sendTelegramMessageImpl(telegramConfig, formatProductLinkAnalysisMessage(results), {
       replyMarkup: productLinkImportKeyboard(results),
     });

@@ -1,48 +1,54 @@
-// 0~100 auto-discovery-batch competitiveness score. Weights were agreed with
-// the user: 6 dimensions with a real existing data signal are weighted by
-// actual measured values; 5 dimensions with no signal anywhere in this
-// codebase today (supply stability, image quality, return risk, near-
-// duplicate detection, keyword popularity) use simple proxies or a fixed
-// neutral contribution, clearly labeled in the breakdown so the admin
-// preview can show *why* a candidate scored the way it did rather than
-// hiding the fact that a dimension has no real data behind it yet.
+// 0~100 auto-discovery-batch competitiveness score. 2026-08-22 사용자 결정:
+// supplyStability/keywordPopularity was previously scored on a fixed neutral
+// half-credit because this codebase has literally no signal for either one
+// (no seller rating/order-history data, no search-volume API) -- not even
+// AI can judge those without inventing data, so both dimensions were removed
+// entirely rather than keep faking a placeholder score. The freed weight
+// went to the 3 dimensions ai-competitiveness-scoring.mjs can now actually
+// judge (imageQuality/returnRisk/duplicateRisk, 링크 입력 흐름 한정), which
+// combined (25) deliberately outweigh profitMargin (15, "가격") per that
+// same request. The other 5 dimensions (naverCompetition/costShipping/
+// optionComplexity/legalRisk/sourceCompleteness) have a real measured
+// signal and are unchanged.
 //
 // `candidate` is one entry from src/candidate-collector.mjs's
 // evaluateCandidates() -- { normalized, filter, prices, productNo }.
 // `context` carries optional, batch-run-scoped signals that aren't part of
-// the candidate itself: { naverResearch, existingDraftTitles, keywordPopularity }.
+// the candidate itself: { naverResearch, existingDraftTitles }.
 
-const WEIGHTS = {
-  profitMargin: 20,
+export const WEIGHTS = {
+  imageQuality: 10,
+  returnRisk: 9,
+  duplicateRisk: 6,
+  profitMargin: 15,
   naverCompetition: 15,
+  legalRisk: 15,
   costShipping: 10,
   optionComplexity: 10,
-  legalRisk: 15,
   sourceCompleteness: 10,
-  supplyStability: 5,
-  imageQuality: 5,
-  returnRisk: 5,
-  duplicateRisk: 3,
-  keywordPopularity: 2,
 };
 
+// context.aiImageQuality/aiReturnRisk/aiDuplicateRisk let a caller substitute
+// an AI-judged {points, reason} for the corresponding proxy dimension below
+// -- see ai-competitiveness-scoring.mjs, used only by the manual "링크 입력"
+// flow (product-link-analysis.mjs), never by the bulk automated discovery/
+// keyword-sourcing flows (auto-discovery-batch.mjs calls this function
+// directly with plain context, so it's unaffected and stays proxy-only).
 export function computeCompetitivenessScore(candidate, context = {}) {
   const normalized = candidate.normalized || {};
   const filter = candidate.filter || {};
   const prices = candidate.prices || {};
 
   const parts = {
+    imageQuality: context.aiImageQuality || scoreImageQuality(normalized),
+    returnRisk: context.aiReturnRisk || scoreReturnRisk(normalized, filter),
+    duplicateRisk: context.aiDuplicateRisk || scoreDuplicateRisk(normalized, context.existingDraftTitles),
     profitMargin: scoreProfitMargin(prices),
     naverCompetition: scoreNaverCompetition(context.naverResearch),
+    legalRisk: scoreLegalRisk(filter),
     costShipping: scoreCostShipping(normalized),
     optionComplexity: scoreOptionComplexity(normalized),
-    legalRisk: scoreLegalRisk(filter),
     sourceCompleteness: scoreSourceCompleteness(normalized, filter),
-    supplyStability: scoreSupplyStabilityNeutral(),
-    imageQuality: scoreImageQuality(normalized),
-    returnRisk: scoreReturnRisk(normalized, filter),
-    duplicateRisk: scoreDuplicateRisk(normalized, context.existingDraftTitles),
-    keywordPopularity: scoreKeywordPopularity(context.keywordPopularity),
   };
 
   const score = Object.values(parts).reduce((sum, part) => sum + part.points, 0);
@@ -110,23 +116,16 @@ function scoreSourceCompleteness(normalized = {}, filter = {}) {
   return { points: (filled / 3) * WEIGHTS.sourceCompleteness, reason: `원본 완성도 항목 ${filled}/3 (이름/이미지/상세HTML)` };
 }
 
-// No supplier-stability signal exists anywhere in this codebase (no seller
-// rating, order-history, or stock-stability data). Fixed neutral half-credit
-// until that data source exists -- never silently invented.
-function scoreSupplyStabilityNeutral() {
-  return { points: WEIGHTS.supplyStability * 0.5, reason: '공급 안정성 데이터 없음 (중립값)' };
-}
-
 // Proxy: image count is the only signal available pre-registration (no
 // resolution/watermark check exists anywhere in src/).
-function scoreImageQuality({ images } = {}) {
+export function scoreImageQuality({ images } = {}) {
   const count = Array.isArray(images) ? images.length : 0;
   const points = clamp(count / 8, 0, 1) * WEIGHTS.imageQuality;
   return { points, reason: `이미지 ${count}장 기준 단순 지표` };
 }
 
 // Proxy: bundle-type sell units are harder to process exact returns for.
-function scoreReturnRisk(normalized = {}, filter = {}) {
+export function scoreReturnRisk(normalized = {}, filter = {}) {
   if (normalized.sellUnitType === 'bundle' || (filter.reviewReasons || []).includes('bundle_candidate')) {
     return { points: WEIGHTS.returnRisk * 0.4, reason: '묶음(번들) 판매 -- 반품 처리 복잡도 높음' };
   }
@@ -135,15 +134,10 @@ function scoreReturnRisk(normalized = {}, filter = {}) {
 
 // Proxy: word-overlap similarity against existing draft titles -- no
 // image-hash or embedding-based near-duplicate detection exists anywhere.
-function scoreDuplicateRisk(normalized = {}, existingDraftTitles = []) {
+export function scoreDuplicateRisk(normalized = {}, existingDraftTitles = []) {
   if (!normalized.name || !existingDraftTitles?.length) return { points: WEIGHTS.duplicateRisk, reason: '비교 대상 없음 (기본값)' };
   const maxSimilarity = Math.max(...existingDraftTitles.map((title) => titleSimilarity(normalized.name, title)));
   return { points: (1 - maxSimilarity) * WEIGHTS.duplicateRisk, reason: `기존 상품명과 최대 유사도=${round1(maxSimilarity)}` };
-}
-
-function scoreKeywordPopularity(keywordPopularity) {
-  if (keywordPopularity == null) return { points: WEIGHTS.keywordPopularity * 0.5, reason: '키워드 인기도 데이터 없음 (중립값)' };
-  return { points: clamp(keywordPopularity, 0, 1) * WEIGHTS.keywordPopularity, reason: `키워드 인기도=${keywordPopularity}` };
 }
 
 function titleSimilarity(a, b) {

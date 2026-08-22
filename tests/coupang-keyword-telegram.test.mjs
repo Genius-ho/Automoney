@@ -177,6 +177,40 @@ test('handleCoupangKeywordMessage routes an all-links message to link analysis i
   assert.deepEqual(result.productNos, ['49168396', '49168397']);
 });
 
+test('handleCoupangKeywordMessage passes db and rootDir through to analyzeProductLinks (so its AI scoring can load Claude CLI config and fetch existing draft titles)', async () => {
+  let analyzeOpts = null;
+  await handleCoupangKeywordMessage(
+    { name: 'db' },
+    { name: 'domeme' },
+    {},
+    { botToken: 't', chatId: '1' },
+    { text: '49168396', chat: { id: 1 } },
+    {
+      rootDir: '/custom/root',
+      analyzeProductLinksImpl: async (domemeClient, productNos, pricingRules, opts) => { analyzeOpts = opts; return []; },
+      sendTelegramMessageImpl: async () => {},
+    },
+  );
+  assert.equal(analyzeOpts.db.name, 'db');
+  assert.equal(analyzeOpts.rootDir, '/custom/root');
+});
+
+test('handleCoupangKeywordMessage defaults rootDir to process.cwd() when not supplied', async () => {
+  let analyzeOpts = null;
+  await handleCoupangKeywordMessage(
+    { name: 'db' },
+    { name: 'domeme' },
+    {},
+    { botToken: 't', chatId: '1' },
+    { text: '49168396', chat: { id: 1 } },
+    {
+      analyzeProductLinksImpl: async (domemeClient, productNos, pricingRules, opts) => { analyzeOpts = opts; return []; },
+      sendTelegramMessageImpl: async () => {},
+    },
+  );
+  assert.equal(analyzeOpts.rootDir, process.cwd());
+});
+
 test('productLinkImportKeyboard puts one row per analyzed result, skips error rows, and truncates long names', () => {
   const keyboard = productLinkImportKeyboard([
     { productNo: '1', status: 'analyzed', name: '아주아주아주아주아주아주아주아주아주아주 긴 상품명', score: 80 },

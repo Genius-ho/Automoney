@@ -37,7 +37,7 @@ async function loadImageForVision(rootDir, storedUrl) {
 // /public/... files, and not something the local CLI can read directly), so
 // this downloads it to a scratch temp file and hands back a cleanup so the
 // caller can remove it once the review call is done.
-async function loadRemoteImageForVision(url) {
+export async function loadRemoteImageForVision(url) {
   const response = await fetch(url);
   if (!response.ok) throw new Error(`Failed to fetch competitor thumbnail (HTTP ${response.status}): ${url}`);
   const buffer = Buffer.from(await response.arrayBuffer());

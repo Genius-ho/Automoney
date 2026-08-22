@@ -77,7 +77,7 @@ export function createTelegramCallbackRouter() {
           pricingRules,
           telegramConfig,
           update.message,
-          keywordHandlerDeps,
+          { rootDir, ...keywordHandlerDeps },
         );
         if (keywordResult?.handled) processed += 1;
       }

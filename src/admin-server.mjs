@@ -1159,7 +1159,7 @@ async function handleRequest({ request, response, db, aiSecrets, rootDir }) {
         loadPricingRules(join(rootDir, 'pricing-rules.json')),
       ]);
       const domemeClient = new DomemeClient({ apiKey: envConfig.domemeApiKey, endpoint: envConfig.domemeEndpoint });
-      const results = await analyzeProductLinks(domemeClient, productNos, pricingRules);
+      const results = await analyzeProductLinks(domemeClient, productNos, pricingRules, { db, rootDir });
       sendJson(response, 200, { results });
     } catch (error) {
       sendJson(response, 500, { error: error.message, code: error.code });
