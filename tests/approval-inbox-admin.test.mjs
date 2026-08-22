@@ -125,6 +125,14 @@ test('admin HTML includes a 히스토리 tab wired to the link-analysis-history 
   assert.match(html, /api\('\/api\/product-drafts\/link-analysis-history\?limit=100'\)/);
 });
 
+test('admin HTML\'s 히스토리 tab makes the product name a link to the original supplier product page', () => {
+  const html = adminHtml();
+
+  assert.match(html, /function supplierProductUrl\(productNo,sourceMarket\)\{/);
+  assert.match(html, /if\(sourceMarket==='domeme'\)return 'https:\/\/domeggook\.com\/main\/item\/itemView\.php\?no='\+no\+'&market=dome'/);
+  assert.match(html, /<a href="'\+attr\(supplierProductUrl\(h\.supplierProductNo,h\.sourceMarket\)\)\+'" target="_blank">'\+escapeHtml\(h\.name\|\|h\.supplierProductNo\)\+'<\/a>/);
+});
+
 test('admin HTML puts a 산출 과정 toggle on the 점수 table that renders the AI-judged (🤖) vs proxy breakdown rows', () => {
   const html = adminHtml();
 

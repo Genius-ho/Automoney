@@ -2,7 +2,7 @@ import assert from 'node:assert/strict';
 import test from 'node:test';
 
 import { NaverShoppingClient, summarizeShoppingSearch } from '../src/naver-shopping-client.mjs';
-import { calculateNaverWinnerScore } from '../src/naver-research.mjs';
+import { calculateNaverWinnerScore, checkNaverCompetitionLive } from '../src/naver-research.mjs';
 
 test('NaverShoppingClient calls shopping search API with required headers and params', async () => {
   const calls = [];
@@ -77,4 +77,26 @@ test('calculateNaverWinnerScore handles candidate and reject scoring', () => {
   assert.equal(good.winnerScore, 110);
   assert.equal(bad.winnerStatus, 'reject');
   assert.equal(bad.winnerScore, -25);
+});
+
+// 2026-08-22 added so the "링크 입력" quick preview's naverCompetition
+// dimension (previously always "데이터 없음") can be filled from a real,
+// unsaved search -- researchNaverDraft can't be reused here because
+// market_research_results.product_draft_id is a not-null FK and this runs
+// before any draft exists. No persistence happens; it's just
+// searchShop + summarizeShoppingSearch, returned directly.
+test('checkNaverCompetitionLive searches by keyword and returns competitorCount/priceGapRate from the live summary, without persisting anything', async () => {
+  let receivedQuery = null;
+  const client = { searchShop: async ({ query }) => { receivedQuery = query; return { total: 42, items: [{ lprice: '9500', title: 'A', mallName: 'M', link: 'l' }] }; } };
+  const result = await checkNaverCompetitionLive(client, '여성 벨트', 10000);
+
+  assert.equal(receivedQuery, '여성 벨트');
+  assert.equal(result.competitorCount, 42);
+  assert.equal(result.lowestPrice, 9500);
+  assert.ok(result.priceGapRate > 0 && result.priceGapRate < 0.1);
+});
+
+test('checkNaverCompetitionLive propagates a search failure (callers like product-link-analysis.mjs are responsible for catching and falling back)', async () => {
+  const client = { searchShop: async () => { throw new Error('Naver Shopping API failed: HTTP 404'); } };
+  await assert.rejects(() => checkNaverCompetitionLive(client, '여성 벨트', 10000), /HTTP 404/);
 });

@@ -51,6 +51,25 @@ export function calculateNaverWinnerScore({ mySalePrice, lowestPrice, competitor
   return { priceGapRate, winnerScore: score, winnerStatus: toNaverWinnerStatus(score), reasons };
 }
 
+// 2026-08-22 사용자 요청: "링크 입력" 점수의 네이버 경쟁 항목이 항상 "데이터
+// 없음(중립값)"이었다 -- researchNaverDraft는 market_research_results가
+// product_draft_id를 not null FK로 요구해서 draft가 아직 없는 이 단계에서는
+// 쓸 수 없었다. 저장 없이 검색+요약만 해서 실시간으로 채운다 (draft 생성
+// 이후엔 여전히 researchNaverDraft가 실제 리서치 저장을 담당, 이 함수는
+// 링크 분석 미리보기 전용).
+export async function checkNaverCompetitionLive(client, keyword, mySalePrice, {
+  summarizeShoppingSearchImpl = summarizeShoppingSearch,
+} = {}) {
+  const raw = await client.searchShop({ query: keyword });
+  const search = summarizeShoppingSearchImpl(raw, mySalePrice);
+  return {
+    competitorCount: search.competitorCount,
+    priceGapRate: search.priceGapRate,
+    lowestPrice: search.lowestPrice,
+    topPriceAvg: search.topPriceAvg,
+  };
+}
+
 export async function researchNaverDraft(db, client, draft, { keyword } = {}) {
   const searchKeyword = keyword || draft.selling_title || draft.cleaned_name || draft.raw_name;
   const raw = await client.searchShop({ query: searchKeyword });

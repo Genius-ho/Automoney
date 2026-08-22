@@ -10,12 +10,19 @@
 // collectAndScoreCandidatesForCategory가 이 모듈을 거치지 않고 computeCompetitivenessScore를
 // 직접 호출하므로 영향 없음 -- 후보 20~30개마다 AI 호출이 곱해지는 걸 피하기 위함).
 // db가 주어지면 중복위험 AI 판단용으로 최근 등록된 draft 제목들을 같이 넘긴다.
+//
+// 같은 이유(사람이 링크 몇 개만 보는 미리보기)로 네이버 경쟁 항목도 여기서는
+// 실시간 조회한다 -- checkNaverCompetitionLive (naver-research.mjs), draft가
+// 없어도 되는 저장 없는 검색. 원래 늘 "데이터 없음(중립값)"이었던 걸 실제
+// 신호로 채운다.
 import { evaluateCandidates } from './candidate-collector.mjs';
 import { computeCompetitivenessScore } from './competitiveness-score.mjs';
 import { computeAiScoringContext } from './ai-competitiveness-scoring.mjs';
-import { loadCodexConfig } from './config.mjs';
+import { loadCodexConfig, loadNaverConfig } from './config.mjs';
 import { listProductDrafts } from './admin-store.mjs';
 import { insertLinkAnalysisHistory } from './link-analysis-history-store.mjs';
+import { checkNaverCompetitionLive } from './naver-research.mjs';
+import { NaverShoppingClient } from './naver-shopping-client.mjs';
 
 const EXISTING_TITLES_LIMIT = 200;
 
@@ -23,6 +30,7 @@ export async function analyzeProductLinks(domemeClient, productNos, pricingRules
   db = null,
   rootDir = process.cwd(),
   aiScoringEnabled = true,
+  naverResearchEnabled = true,
   // keyword: the GUI's "키워드 검색" input (or a Telegram keyword, if ever
   // wired) that led the human to these links, purely for history context --
   // null for a bare link paste with no preceding keyword search. source:
@@ -33,6 +41,8 @@ export async function analyzeProductLinks(domemeClient, productNos, pricingRules
   computeCompetitivenessScoreImpl = computeCompetitivenessScore,
   computeAiScoringContextImpl = computeAiScoringContext,
   loadCodexConfigImpl = loadCodexConfig,
+  loadNaverConfigImpl = loadNaverConfig,
+  checkNaverCompetitionLiveImpl = checkNaverCompetitionLive,
   listProductDraftsImpl = listProductDrafts,
   insertLinkAnalysisHistoryImpl = insertLinkAnalysisHistory,
 } = {}) {
@@ -56,6 +66,14 @@ export async function analyzeProductLinks(domemeClient, productNos, pricingRules
     }
   }
 
+  // loadNaverConfig throws (not returns null) when NAVER_CLIENT_ID/SECRET
+  // are unset -- caught the same way every other optional credential here
+  // is, so an unconfigured Naver search just leaves this dimension on its
+  // existing neutral proxy instead of failing the whole analysis.
+  const naverClient = naverResearchEnabled
+    ? await loadNaverConfigImpl(rootDir).then((config) => new NaverShoppingClient(config)).catch(() => null)
+    : null;
+
   const results = await Promise.all(evaluated.map(async (candidate) => {
     if (candidate.error) {
       return { productNo: candidate.productNo, status: 'error', error: candidate.error.message };
@@ -63,10 +81,15 @@ export async function analyzeProductLinks(domemeClient, productNos, pricingRules
     // AI-scoring failures (CLI unavailable, timeout, etc.) never fail the
     // whole candidate -- computeAiScoringContext itself already degrades
     // each dimension independently to its formula proxy.
-    const aiContext = codexConfig
-      ? await computeAiScoringContextImpl(candidate, existingDraftTitles, { codexConfig, rootDir }).catch(() => ({}))
-      : {};
-    const { score, breakdown } = computeCompetitivenessScoreImpl(candidate, aiContext);
+    const [aiContext, naverResearch] = await Promise.all([
+      codexConfig
+        ? computeAiScoringContextImpl(candidate, existingDraftTitles, { codexConfig, rootDir }).catch(() => ({}))
+        : Promise.resolve({}),
+      naverClient && candidate.normalized?.name
+        ? checkNaverCompetitionLiveImpl(naverClient, candidate.normalized.name, candidate.prices?.naverSalePrice).catch(() => null)
+        : Promise.resolve(null),
+    ]);
+    const { score, breakdown } = computeCompetitivenessScoreImpl(candidate, { ...aiContext, naverResearch });
     return {
       productNo: candidate.productNo,
       status: 'analyzed',

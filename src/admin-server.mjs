@@ -1954,15 +1954,24 @@ export function adminHtml() {
     // 2026-08-22 사용자 요청: "링크 입력" 점수가 새로고침하면 사라지는 게 아니라
     // link_analysis_history(DB)에 계속 쌓여서, 과거에 어떤 키워드/링크를 보고
     // 어떤 점수가 나왔는지 나중에도 볼 수 있어야 한다.
+    // admin-store.mjs의 buildSupplierProductUrl과 동일한 규칙 -- 히스토리는
+    // productNo/sourceMarket만 저장하고 별도 URL 컬럼을 안 두므로, 표시할 때
+    // 클라이언트에서 그대로 재구성한다 (2026-08-22 사용자 요청: 히스토리에서
+    // 상품명을 누르면 그 링크로 가야 함).
+    function supplierProductUrl(productNo,sourceMarket){
+      const no=encodeURIComponent(String(productNo||''));
+      if(sourceMarket==='domeme')return 'https://domeggook.com/main/item/itemView.php?no='+no+'&market=dome';
+      return 'https://domeggook.com/main/item/itemView.php?no='+no;
+    }
     function loadHistoryView(){
       const el=document.getElementById('specialView');
       el.innerHTML='<div style="padding:12px"><p class="muted">불러오는 중...</p></div>';
       api('/api/product-drafts/link-analysis-history?limit=100').then(data=>{
         const history=data.history||[];
         el.innerHTML='<div style="padding:12px"><div class="section"><h3>히스토리 (최근 분석 순)</h3>'
-          +'<p class="muted">"링크 입력"/텔레그램 링크 분석으로 나온 점수 기록입니다. 저장은 안 하고 점수만 매긴 것도 여기 쌓입니다 (등록 여부와 무관).</p>'
+          +'<p class="muted">"링크 입력"/텔레그램 링크 분석으로 나온 점수 기록입니다. 저장은 안 하고 점수만 매긴 것도 여기 쌓입니다 (등록 여부와 무관). 상품명을 누르면 원본 링크로 이동합니다.</p>'
           +(history.length?'<table><thead><tr><th>분석일시</th><th>키워드</th><th>출처</th><th>점수</th><th>상품명</th><th>마켓</th><th>필터상태</th><th>상품번호</th></tr></thead><tbody>'
-            +history.map(h=>'<tr><td>'+escapeHtml((h.analyzedAt||'').replace('T',' ').slice(0,19))+'</td><td>'+escapeHtml(h.keyword||'-')+'</td><td>'+escapeHtml(h.source==='telegram'?'텔레그램':'GUI')+'</td><td>'+(h.score??'-')+'</td><td>'+escapeHtml(h.name||'-')+'</td><td>'+escapeHtml(h.sourceMarket||'-')+'</td><td>'+escapeHtml(h.filterStatus||'-')+'</td><td>'+escapeHtml(h.supplierProductNo)+'</td></tr>').join('')
+            +history.map(h=>'<tr><td>'+escapeHtml((h.analyzedAt||'').replace('T',' ').slice(0,19))+'</td><td>'+escapeHtml(h.keyword||'-')+'</td><td>'+escapeHtml(h.source==='telegram'?'텔레그램':'GUI')+'</td><td>'+(h.score??'-')+'</td><td><a href="'+attr(supplierProductUrl(h.supplierProductNo,h.sourceMarket))+'" target="_blank">'+escapeHtml(h.name||h.supplierProductNo)+'</a></td><td>'+escapeHtml(h.sourceMarket||'-')+'</td><td>'+escapeHtml(h.filterStatus||'-')+'</td><td>'+escapeHtml(h.supplierProductNo)+'</td></tr>').join('')
             +'</tbody></table>':'<p class="muted">아직 기록된 히스토리가 없습니다.</p>')
           +'</div></div>';
       }).catch(error=>{el.innerHTML='<div style="padding:12px"><p class="muted">불러오기 실패: '+escapeHtml(error.message)+'</p></div>';});
