@@ -16,6 +16,15 @@ export function parseSupplierProductNo(input) {
     const url = new URL(text);
     const no = url.searchParams.get('no');
     if (no && /^\d+$/.test(no)) return no;
+    // Short product-link form (e.g. https://domeme.domeggook.com/s/67439979)
+    // -- what pasting a product from a domemedb.domeggook.com keyword-search
+    // results page actually produces, confirmed live 2026-08-22. Different
+    // from the ?no= query-param form above (domeggook.com/main/item/
+    // itemView.php?no=...), which is what a public catalog item page uses.
+    if (url.hostname.endsWith('domeggook.com')) {
+      const shortMatch = url.pathname.match(/^\/s\/(\d+)$/);
+      if (shortMatch) return shortMatch[1];
+    }
   } catch {
     return null;
   }

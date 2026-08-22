@@ -13,6 +13,15 @@ test('parseSupplierProductNo extracts no= from a domeggook item view URL', () =>
   assert.equal(parseSupplierProductNo('https://domeggook.com/main/item/itemView.php?no=49168396'), '49168396');
 });
 
+test('parseSupplierProductNo extracts the product number from the short /s/<no> link form (e.g. from a keyword-search results page)', () => {
+  assert.equal(parseSupplierProductNo('https://domeme.domeggook.com/s/67439979'), '67439979');
+  assert.equal(parseSupplierProductNo('https://domemedb.domeggook.com/s/67439979'), '67439979');
+});
+
+test('parseSupplierProductNo rejects a /s/<no>-shaped path on a non-domeggook host', () => {
+  assert.equal(parseSupplierProductNo('https://evil.example.com/s/67439979'), null);
+});
+
 test('parseSupplierProductNo returns null for unrecognizable input', () => {
   assert.equal(parseSupplierProductNo(''), null);
   assert.equal(parseSupplierProductNo(undefined), null);
