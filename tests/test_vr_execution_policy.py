@@ -116,6 +116,49 @@ class SelectBuyLadderLengthEdgeCaseTests(unittest.TestCase):
         self.assertEqual(cumulative, Decimal("40"))
 
 
+class PoolUsageLimitPctGoldenTests(unittest.TestCase):
+    """Same Q0/L/Pool, three book target-spend fractions (75%/50%/25%):
+    target_spend must scale exactly, and the selected logical rung count
+    must strictly decrease as the fraction shrinks (Phase G golden)."""
+
+    _PRICES = buy_ladder_prices(Decimal("4695.91"), 110, 60)
+    _POOL = Decimal("2000")
+
+    def test_75_pct_target_and_selection(self):
+        n, cumulative = select_buy_ladder_length(self._PRICES, self._POOL, Decimal("0.75"))
+        self.assertEqual(self._POOL * Decimal("0.75"), Decimal("1500.00"))
+        self.assertEqual(n, 41)
+        self.assertEqual(cumulative, Decimal("1493.49"))
+        self.assertLessEqual(cumulative, Decimal("1500.00"))
+
+    def test_50_pct_target_and_selection(self):
+        n, cumulative = select_buy_ladder_length(self._PRICES, self._POOL, Decimal("0.50"))
+        self.assertEqual(self._POOL * Decimal("0.50"), Decimal("1000.00"))
+        self.assertEqual(n, 26)
+        self.assertEqual(cumulative, Decimal("1000.46"))
+
+    def test_25_pct_target_and_selection(self):
+        n, cumulative = select_buy_ladder_length(self._PRICES, self._POOL, Decimal("0.25"))
+        self.assertEqual(self._POOL * Decimal("0.25"), Decimal("500.00"))
+        self.assertEqual(n, 12)
+        self.assertEqual(cumulative, Decimal("488.33"))
+
+    def test_rung_count_strictly_decreases_as_fraction_shrinks(self):
+        n75, _ = select_buy_ladder_length(self._PRICES, self._POOL, Decimal("0.75"))
+        n50, _ = select_buy_ladder_length(self._PRICES, self._POOL, Decimal("0.50"))
+        n25, _ = select_buy_ladder_length(self._PRICES, self._POOL, Decimal("0.25"))
+        self.assertGreaterEqual(n75, n50)
+        self.assertGreaterEqual(n50, n25)
+
+    def test_never_exceeds_its_own_target(self):
+        # Never exceeding cycle_start_pool is already covered elsewhere;
+        # here every fraction's cumulative spend must also never exceed
+        # cycle_start_pool itself (the hard cap), independent of fraction.
+        for pct in (Decimal("0.75"), Decimal("0.50"), Decimal("0.25")):
+            _, cumulative = select_buy_ladder_length(self._PRICES, self._POOL, pct)
+            self.assertLessEqual(cumulative, self._POOL)
+
+
 class GroupSizesTests(unittest.TestCase):
     """Remainder placement: SMALL groups first (closer to V/current price,
     highest execution resolution where price is most likely to matter),
@@ -127,38 +170,43 @@ class GroupSizesTests(unittest.TestCase):
     def test_n_1(self):
         self.assertEqual(group_sizes(1), [1])
 
-    def test_n_19_no_compression(self):
-        self.assertEqual(group_sizes(19), [1] * 19)
+    def test_n_99_no_compression(self):
+        self.assertEqual(group_sizes(99), [1] * 99)
 
-    def test_n_20_no_compression(self):
-        self.assertEqual(group_sizes(20), [1] * 20)
+    def test_n_100_no_compression(self):
+        self.assertEqual(group_sizes(100), [1] * 100)
 
-    def test_n_21_one_group_of_two_at_the_end(self):
-        sizes = group_sizes(21)
-        self.assertEqual(len(sizes), 20)
-        self.assertEqual(sizes, [1] * 19 + [2])
-        self.assertEqual(sum(sizes), 21)
+    def test_n_101_one_group_of_two_at_the_end(self):
+        sizes = group_sizes(101)
+        self.assertEqual(len(sizes), 100)
+        self.assertEqual(sizes, [1] * 99 + [2])
+        self.assertEqual(sum(sizes), 101)
 
-    def test_n_39(self):
-        sizes = group_sizes(39)
-        self.assertEqual(len(sizes), 20)
-        self.assertEqual(sizes, [1] * 1 + [2] * 19)
-        self.assertEqual(sum(sizes), 39)
+    def test_n_199(self):
+        sizes = group_sizes(199)
+        self.assertEqual(len(sizes), 100)
+        self.assertEqual(sizes, [1] * 1 + [2] * 99)
+        self.assertEqual(sum(sizes), 199)
 
-    def test_n_40_even_split(self):
-        self.assertEqual(group_sizes(40), [2] * 20)
+    def test_n_200_even_split(self):
+        self.assertEqual(group_sizes(200), [2] * 100)
 
-    def test_n_43(self):
-        sizes = group_sizes(43)
-        self.assertEqual(sizes, [2] * 17 + [3] * 3)
-        self.assertEqual(sum(sizes), 43)
+    def test_n_203(self):
+        sizes = group_sizes(203)
+        self.assertEqual(sizes, [2] * 97 + [3] * 3)
+        self.assertEqual(sum(sizes), 203)
 
-    def test_n_60_even_split(self):
-        self.assertEqual(group_sizes(60), [3] * 20)
+    def test_n_300_even_split(self):
+        self.assertEqual(group_sizes(300), [3] * 100)
 
-    def test_n_126(self):
+    def test_n_126_still_below_the_new_threshold_but_above_the_old_one(self):
+        # 126 was the compression golden example under the old
+        # MAX_BROKER_ORDERS_PER_SIDE=20; still exceeds the new 100, so it
+        # still compresses -- just far less aggressively (mostly quantity-1
+        # rungs with only a small remainder tail at quantity-2).
         sizes = group_sizes(126)
-        self.assertEqual(sizes, [6] * 14 + [7] * 6)
+        self.assertEqual(len(sizes), 100)
+        self.assertEqual(sizes, [1] * 74 + [2] * 26)
         self.assertEqual(sum(sizes), 126)
 
     def test_small_groups_always_come_before_large_groups(self):
@@ -208,36 +256,38 @@ class CompressLadderTests(unittest.TestCase):
         self.assertEqual(legs[0].quantity, 3)
 
     def test_golden_buy_43_rungs(self):
-        # L=4249.58, Q0=110, corrected small-first grouping.
+        # L=4249.58, Q0=110. Under MAX_BROKER_ORDERS_PER_SIDE=100 (raised
+        # 2026-08-22 per the live capacity smoke test -- see
+        # vr_execution_policy.VERIFIED_CAPACITY's docstring), 43 logical
+        # rungs no longer needs compression at all: one real broker order
+        # per rung, full price resolution. (Was the compression golden
+        # example under the old cap of 20; kept as a regression test for
+        # the new "stays uncompressed" behavior instead.)
         prices = buy_ladder_prices(Decimal("4249.58"), 110, 43)
         legs = compress_ladder("buy", prices)
-        self.assertEqual(len(legs), 20)
-        self.assertEqual([leg.quantity for leg in legs], [2] * 17 + [3] * 3)
-        self.assertEqual(legs[0].trigger_price, Decimal("38.46"))
-        self.assertEqual(legs[0].logical_start_rung, 1)
-        self.assertEqual(legs[0].logical_end_rung, 2)
-        self.assertEqual(legs[-1].trigger_price, Decimal("28.14"))
-        self.assertEqual(legs[-1].logical_start_rung, 41)
-        self.assertEqual(legs[-1].logical_end_rung, 43)
-        logical_spend = sum(prices)
-        compressed_spend = sum(leg.trigger_price * leg.quantity for leg in legs)
-        self.assertEqual(compressed_spend - logical_spend, Decimal("0.10"))
-        # Bound from the analysis: worst case is 0.005 * total logical qty.
-        self.assertLessEqual(abs(compressed_spend - logical_spend), Decimal("0.005") * 43)
+        self.assertEqual(len(legs), 43)
+        for i, leg in enumerate(legs, start=1):
+            self.assertEqual(leg.quantity, 1)
+            self.assertEqual(leg.logical_start_rung, i)
+            self.assertEqual(leg.logical_end_rung, i)
+        self.assertEqual(legs[0].trigger_price, Decimal("38.63"))
+        self.assertEqual(legs[-1].trigger_price, Decimal("27.96"))
 
     def test_golden_sell_126_rungs(self):
-        # U=10299.49, Q0=126 (TQQQ's real current SELL band), corrected
-        # small-first grouping.
+        # U=10299.49, Q0=126 (TQQQ's real current SELL band). 126 still
+        # exceeds the new MAX_BROKER_ORDERS_PER_SIDE=100, so it still
+        # compresses -- just far less aggressively than under the old cap
+        # of 20 (mostly quantity-1 rungs, only a 26-rung tail at quantity-2).
         prices = sell_ladder_prices(Decimal("10299.49"), 126, 126)
         legs = compress_ladder("sell", prices)
-        self.assertEqual(len(legs), 20)
-        self.assertEqual([leg.quantity for leg in legs], [6] * 14 + [7] * 6)
+        self.assertEqual(len(legs), 100)
+        self.assertEqual([leg.quantity for leg in legs], [1] * 74 + [2] * 26)
         self.assertEqual(sum(leg.quantity for leg in legs), 126)
-        self.assertEqual(legs[0].trigger_price, Decimal("83.41"))
+        self.assertEqual(legs[0].trigger_price, Decimal("81.74"))
         self.assertEqual(legs[0].logical_start_rung, 1)
-        self.assertEqual(legs[0].logical_end_rung, 6)
-        self.assertEqual(legs[-1].trigger_price, Decimal("3815.02"))
-        self.assertEqual(legs[-1].logical_start_rung, 120)
+        self.assertEqual(legs[0].logical_end_rung, 1)
+        self.assertEqual(legs[-1].trigger_price, Decimal("7724.62"))
+        self.assertEqual(legs[-1].logical_start_rung, 125)
         self.assertEqual(legs[-1].logical_end_rung, 126)
 
 

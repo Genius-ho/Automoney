@@ -51,6 +51,13 @@ from vr_state_store import VRConditionalOrder, VRCycle
 
 DEFAULT_POOL_USAGE_LIMIT_PCT = Decimal("0.75")
 
+# The book documents exactly three target-spend fractions by investment mode
+# (적립식/accumulation=0.75, 거치식/lump-sum=0.50, 인출식/withdrawal=0.25) --
+# same formula throughout, only this target differs. The engine layer
+# (vr_engine.initialize_cycle/schedule_config) fails closed on anything
+# outside this set rather than accepting an arbitrary user-typed fraction.
+ALLOWED_POOL_USAGE_LIMIT_PCTS = (Decimal("0.75"), Decimal("0.50"), Decimal("0.25"))
+
 CAPACITY_SCOPE_ACCOUNT = "ACCOUNT"
 CAPACITY_SCOPE_SYMBOL = "SYMBOL"
 CAPACITY_SCOPE_UNKNOWN = "UNKNOWN"
@@ -76,12 +83,30 @@ class ConditionalOrderCapacity:
     notes: str | None = None
 
 
-# Not yet confirmed by any authoritative source -- see the Phase 15 report
-# (checked the full official OpenAPI spec; no documented count ceiling
-# exists for open conditional orders, only named, unnumbered rate-limit
-# groups). Update in place, all fields together, once a real answer exists
-# -- never set verified_max alone without the rest of the provenance.
-VERIFIED_CAPACITY = ConditionalOrderCapacity()
+# Empirically verified live (2026-08-22, TQQQ, real account): 140 BUY-only
+# conditional orders simultaneously OPEN with no failures, then (separately)
+# 100 BUY + 100 SELL = 200 combined simultaneously OPEN with no failures --
+# all WATCHING, no triggeredOrderId, cleanly cancellable. See
+# smoke_capacity_test.py and smoke_artifacts/TQQQ-capacity-*.json for the
+# raw (redacted) exchange. This is a conservative *supported* count, not a
+# claimed true maximum (201+ was never attempted) -- see notes. Tested on
+# TQQQ only, one symbol at a time; cross-symbol account-wide interaction
+# (e.g. TQQQ+SOXL+KORU armed simultaneously) was NOT tested, which matters
+# if the real limit turns out to be account-wide rather than per-symbol.
+VERIFIED_CAPACITY = ConditionalOrderCapacity(
+    verified_max=200,
+    scope=CAPACITY_SCOPE_UNKNOWN,
+    verified_at="2026-08-22",
+    source="Live capacity smoke test (smoke_capacity_test.py), TQQQ, real account",
+    notes=(
+        "200 = a verified-supported count, not a confirmed true ceiling (untested past 200). "
+        "Scope left UNKNOWN, not SYMBOL: only ever tested one symbol (TQQQ) at a time, so "
+        "whether this budget is shared account-wide across TQQQ/SOXL/KORU running VR "
+        "simultaneously is unconfirmed -- arm_cycle_orders currently checks each symbol's own "
+        "total_broker_legs against this value independently, which could understate real "
+        "account-wide usage if the true limit is in fact account-scoped."
+    ),
+)
 
 SELL_RESERVATION_UNKNOWN = "UNKNOWN"
 SELL_RESERVATION_RESERVES_QUANTITY = "RESERVES_QUANTITY"
@@ -165,7 +190,15 @@ class SellReservationUnknownError(RuntimeError):
         self.sell_count = sell_count
 
 
-MAX_BROKER_ORDERS_PER_SIDE = 20
+# Half of VERIFIED_CAPACITY.verified_max (200), split symmetrically between
+# BUY and SELL so the worst case (both sides maxed) never exceeds the
+# verified total. Below this per-side count, the logical ladder is placed
+# uncompressed (one real broker order per rung, full price resolution);
+# only a side whose logical rung count exceeds this is compressed down to
+# fit. Update alongside VERIFIED_CAPACITY.verified_max if that number ever
+# changes -- the two are meant to move together (see that constant's
+# docstring for the empirical basis).
+MAX_BROKER_ORDERS_PER_SIDE = 100
 
 
 @dataclass(frozen=True)

@@ -272,6 +272,42 @@ test("renderVrRunningCard shows a dash for Projected Pool when not yet armed (ol
   assert.equal(sandbox.document.getElementById("vrProjectedPool").textContent, "-");
 });
 
+test("renderVrRunningCard shows Pool Buy Usage in the metrics row and current-config summary", () => {
+  const { sandbox } = loadApp();
+  const data = {
+    status: "ACTIVE", blocked_reason: null,
+    current_cycle: {
+      cycle_id: "TQQQ-c1", start_session: "2026-08-21", end_session: "2026-09-04",
+      V: "8956.08", G: "10", band_pct: "15", pool_start: "1000", pool_current: "1000",
+      pool_usage_limit_pct: "0.50",
+      pool_to_v_pct: "11.17", planned_buy_spend: "370.93", projected_pool: "629.07",
+      lower_band: "7612.67", upper_band: "10299.49",
+    },
+    pending_config: {},
+  };
+  sandbox.renderVrRunningCard("TQQQ", data, null);
+  assert.equal(sandbox.document.getElementById("vrPoolUsage").textContent, "50%");
+  assert.equal(sandbox.document.getElementById("vrCurrentConfig").textContent, "G 10 · Band ±15% · Pool Buy Usage 50%");
+});
+
+test("renderVrRunningCard shows pending Pool Buy Usage in the pending-config summary", () => {
+  const { sandbox } = loadApp();
+  const data = {
+    status: "ACTIVE", blocked_reason: null,
+    current_cycle: {
+      cycle_id: "TQQQ-c1", start_session: "2026-08-21", end_session: "2026-09-04",
+      V: "8956.08", G: "10", band_pct: "15", pool_start: "1000", pool_current: "1000",
+      pool_usage_limit_pct: "0.75",
+      pool_to_v_pct: "11.17", planned_buy_spend: "370.93", projected_pool: "629.07",
+      lower_band: "7612.67", upper_band: "10299.49",
+    },
+    pending_config: { pool_usage_limit_pct: "0.25" },
+  };
+  sandbox.renderVrRunningCard("TQQQ", data, null);
+  assert.equal(sandbox.document.getElementById("vrPendingConfig").textContent, "Pool Buy Usage 25%");
+  assert.equal(sandbox.document.getElementById("vrCancelPendingBtn").hidden, false);
+});
+
 test("renderVrRunningCard shows the capacity blocker box with logical counts when present", () => {
   const { sandbox } = loadApp();
   const data = {
@@ -316,6 +352,38 @@ test("VR pending config renders G/Band/Pool text, or 없음 when unset", () => {
 
   sandbox.renderVrOrderPlan("TQQQ", { status: "ACTIVE", current_cycle: cycle, conditional_orders: [], pending_config: {} });
   assert.equal(sandbox.document.getElementById("vrPlanPendingText").textContent, "없음");
+});
+
+test("VR order plan summary shows current/next Pool Buy Usage and target/planned BUY spend", () => {
+  const { sandbox } = loadApp();
+  const cycle = {
+    cycle_id: "c1", start_session: "s", end_session: "e", V: "1", G: "10", band_pct: "15",
+    pool_current: "2000", pool_usage_limit_pct: "0.75", target_buy_spend: "1500.00",
+    planned_buy_spend: "1493.49", lower_band: "1", upper_band: "1",
+  };
+  sandbox.renderVrOrderPlan("TQQQ", {
+    status: "ACTIVE", current_cycle: cycle, conditional_orders: [],
+    pending_config: { pool_usage_limit_pct: "0.50" }, ladder_counts: {},
+  });
+  assert.equal(sandbox.document.getElementById("vrPlanPoolUsage").textContent, "75%");
+  assert.equal(sandbox.document.getElementById("vrPlanPoolUsageNext").textContent, "50%");
+  assert.equal(sandbox.document.getElementById("vrPlanTargetBuySpend").textContent, "$1,500.00");
+  assert.equal(sandbox.document.getElementById("vrPlanPlannedBuySpend").textContent, "$1,493.49");
+  assert.equal(sandbox.document.getElementById("vrPlanPendingText").textContent, "Pool Buy Usage 50%");
+});
+
+test("VR order plan summary shows a dash for next Pool Buy Usage when nothing pending", () => {
+  const { sandbox } = loadApp();
+  const cycle = {
+    cycle_id: "c1", start_session: "s", end_session: "e", V: "1", G: "10", band_pct: "15",
+    pool_current: "2000", pool_usage_limit_pct: "0.75", target_buy_spend: "1500.00",
+    planned_buy_spend: null, lower_band: "1", upper_band: "1",
+  };
+  sandbox.renderVrOrderPlan("TQQQ", {
+    status: "ACTIVE", current_cycle: cycle, conditional_orders: [], pending_config: {}, ladder_counts: {},
+  });
+  assert.equal(sandbox.document.getElementById("vrPlanPoolUsageNext").textContent, "-");
+  assert.equal(sandbox.document.getElementById("vrPlanPlannedBuySpend").textContent, "-");
 });
 
 // --- 7: not-yet-generated states show clear messages, not an empty table -

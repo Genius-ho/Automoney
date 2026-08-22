@@ -116,6 +116,49 @@ class VRDispatchTests(unittest.TestCase):
             )
             self.assertIsNone(cancelled["pending_config"]["G"])
 
+    def test_vr_initialize_accepts_pool_usage_limit_pct_via_dispatch(self):
+        with tempfile.TemporaryDirectory() as temp:
+            broker = VRFakeBroker()
+            engine = ApplicationEngine(Path(temp), broker_factory=lambda: broker)
+            engine.execute(
+                "vr.initialize",
+                {"symbol": "TQQQ", "initial_pool": "1000", "G": "10", "band_pct": "15", "pool_usage_limit_pct": "0.50"},
+                source="TEST", actor="tester",
+            )
+            snapshot = engine.execute("vr.snapshot", {"symbol": "TQQQ"}, source="TEST", actor="tester")
+            self.assertEqual(snapshot["current_cycle"]["pool_usage_limit_pct"], "0.50")
+
+    def test_vr_initialize_rejects_invalid_pool_usage_limit_pct_via_dispatch(self):
+        with tempfile.TemporaryDirectory() as temp:
+            broker = VRFakeBroker()
+            engine = ApplicationEngine(Path(temp), broker_factory=lambda: broker)
+            with self.assertRaises(ValueError):
+                engine.execute(
+                    "vr.initialize",
+                    {"symbol": "TQQQ", "initial_pool": "1000", "G": "10", "band_pct": "15", "pool_usage_limit_pct": "0.40"},
+                    source="TEST", actor="tester",
+                )
+
+    def test_vr_schedule_config_pool_usage_limit_pct_via_dispatch(self):
+        with tempfile.TemporaryDirectory() as temp:
+            broker = VRFakeBroker()
+            engine = ApplicationEngine(Path(temp), broker_factory=lambda: broker)
+            engine.execute(
+                "vr.initialize",
+                {"symbol": "TQQQ", "initial_pool": "1000", "G": "10", "band_pct": "15"},
+                source="TEST", actor="tester",
+            )
+            result = engine.execute(
+                "vr.schedule_config", {"symbol": "TQQQ", "pool_usage_limit_pct": "0.25"},
+                source="TEST", actor="tester",
+            )
+            self.assertEqual(result["pending_config"]["pool_usage_limit_pct"], "0.25")
+            cancelled = engine.execute(
+                "vr.cancel_pending_config", {"symbol": "TQQQ", "pool_usage_limit_pct": True},
+                source="TEST", actor="tester",
+            )
+            self.assertIsNone(cancelled["pending_config"]["pool_usage_limit_pct"])
+
     def test_vr_initialize_blocked_in_live_without_web_live_actions_ack(self):
         with tempfile.TemporaryDirectory() as temp:
             broker = VRFakeBroker(mode="LIVE")

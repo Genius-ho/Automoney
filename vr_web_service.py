@@ -22,7 +22,7 @@ from decimal import Decimal
 from typing import Any
 
 from market_quote import fetch_unadjusted_daily_candles
-from mumae_core import StrategyState
+from mumae_core import StrategyState, money
 from runtime_store import STRATEGY_MUMAE, get_strategy_type, set_strategy_type
 from vr_conditional_orders import (
     UnknownConditionalOrderStatusError,
@@ -44,6 +44,7 @@ from vr_engine import (
     scheduled_cycle_end_friday,
     transition_cycle,
 )
+import vr_execution_policy
 from vr_execution_policy import (
     BrokerCapacityBlockedError,
     BrokerCapacityExceededError,
@@ -376,6 +377,7 @@ class VRWebServiceMixin:
     def vr_initialize(
         self, symbol: str, initial_pool: Decimal, G: Decimal, band_pct: Decimal,
         now: datetime | None = None,
+        pool_usage_limit_pct: Decimal = vr_execution_policy.DEFAULT_POOL_USAGE_LIMIT_PCT,
     ) -> dict[str, Any]:
         symbol = symbol.upper()
         existing = self.vr_store.load(symbol)
@@ -399,6 +401,7 @@ class VRWebServiceMixin:
             initial_pool=initial_pool, G=G, band_pct=band_pct,
             cycle_id=f"{symbol}-c1", start_session=today.isoformat(),
             end_session=end_session.isoformat(), anchor_friday=anchor.isoformat(),
+            pool_usage_limit_pct=pool_usage_limit_pct,
         )
         _, _, buying_power = self._vr_fetch_account(symbol)
         available = self._vr_available_buying_power(symbol, initial_pool, buying_power)
@@ -479,22 +482,29 @@ class VRWebServiceMixin:
     def vr_schedule_config(
         self, symbol: str, G: Decimal | None = None,
         band_pct: Decimal | None = None, pool_adjustment: Decimal | None = None,
+        pool_usage_limit_pct: Decimal | None = None,
     ) -> dict[str, Any]:
         symbol = symbol.upper()
         state = self.vr_store.load(symbol)
         if state.current_cycle is None:
             raise ValueError(f"{symbol}: VR이 초기화되지 않았습니다.")
-        state = schedule_config(state, G=G, band_pct=band_pct, pool_adjustment=pool_adjustment)
+        state = schedule_config(
+            state, G=G, band_pct=band_pct, pool_adjustment=pool_adjustment,
+            pool_usage_limit_pct=pool_usage_limit_pct,
+        )
         self.vr_store.save(state)
         return {"symbol": symbol, "pending_config": asdict(state.pending_config)}
 
     def vr_cancel_pending_config(
         self, symbol: str, *, G: bool = False, band_pct: bool = False,
-        pool_adjustment: bool = False, all: bool = False,
+        pool_adjustment: bool = False, pool_usage_limit_pct: bool = False, all: bool = False,
     ) -> dict[str, Any]:
         symbol = symbol.upper()
         state = self.vr_store.load(symbol)
-        state = cancel_pending_config(state, G=G, band_pct=band_pct, pool_adjustment=pool_adjustment, all=all)
+        state = cancel_pending_config(
+            state, G=G, band_pct=band_pct, pool_adjustment=pool_adjustment,
+            pool_usage_limit_pct=pool_usage_limit_pct, all=all,
+        )
         self.vr_store.save(state)
         return {"symbol": symbol, "pending_config": asdict(state.pending_config)}
 
@@ -534,6 +544,7 @@ class VRWebServiceMixin:
                 "G": None if state.pending_config.G is None else str(state.pending_config.G),
                 "band_pct": None if state.pending_config.band_pct is None else str(state.pending_config.band_pct),
                 "pool_adjustment": None if state.pending_config.pool_adjustment is None else str(state.pending_config.pool_adjustment),
+                "pool_usage_limit_pct": None if state.pending_config.pool_usage_limit_pct is None else str(state.pending_config.pool_usage_limit_pct),
             },
             "conditional_orders": [
                 {**asdict(order), "trigger_price": str(order.trigger_price), "order_price": str(order.order_price)}
@@ -580,6 +591,13 @@ class VRWebServiceMixin:
                 "band_pct": str(cycle.band_pct),
                 "pool_start": str(cycle.pool_start),
                 "pool_current": str(cycle.pool_current),
+                "pool_usage_limit_pct": str(cycle.pool_usage_limit_pct),
+                # cycle_start_pool * pool_usage_limit_pct -- the BUY ladder's
+                # target (select_buy_ladder_length picks the logical rung
+                # count whose cumulative spend lands closest to this, never
+                # exceeding pool_start). Distinct from planned_buy_spend,
+                # which is the actually-selected cumulative spend.
+                "target_buy_spend": str(money(cycle.pool_start * cycle.pool_usage_limit_pct)),
                 "pool_to_v_pct": str(pool_to_v_pct.quantize(Decimal("0.01"))),
                 # Planned/projected: what the book's order table assumes if
                 # every armed BUY rung eventually fills, fixed at arm time.

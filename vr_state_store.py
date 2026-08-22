@@ -48,6 +48,12 @@ class VRCycle:
     # table shows is pool_start - planned_buy_spend. None for cycles armed
     # before this field existed.
     planned_buy_spend: Decimal | None = None
+    # Fraction of cycle_start_pool the BUY ladder targets spending (book:
+    # 적립식/accumulation=0.75, 거치식/lump-sum=0.50, 인출식/withdrawal=0.25 --
+    # same formula throughout, only this target differs). Defaults to 0.75
+    # for backward compatibility with cycles persisted before this field
+    # existed (matches the previously-hardcoded DEFAULT_POOL_USAGE_LIMIT_PCT).
+    pool_usage_limit_pct: Decimal = field(default_factory=lambda: Decimal("0.75"))
 
 
 @dataclass
@@ -55,6 +61,7 @@ class VRPendingConfig:
     G: Decimal | None = None
     band_pct: Decimal | None = None
     pool_adjustment: Decimal | None = None
+    pool_usage_limit_pct: Decimal | None = None
 
 
 @dataclass
@@ -155,8 +162,9 @@ class VRStateStore:
                 cycle[key] = str(cycle[key])
             cycle["E_at_close"] = None if cycle["E_at_close"] is None else str(cycle["E_at_close"])
             cycle["planned_buy_spend"] = None if cycle["planned_buy_spend"] is None else str(cycle["planned_buy_spend"])
+            cycle["pool_usage_limit_pct"] = str(cycle["pool_usage_limit_pct"])
         pending = asdict(state.pending_config)
-        for key in ("G", "band_pct", "pool_adjustment"):
+        for key in ("G", "band_pct", "pool_adjustment", "pool_usage_limit_pct"):
             pending[key] = None if pending[key] is None else str(pending[key])
         orders = []
         for order in state.conditional_orders:
@@ -194,6 +202,10 @@ class VRStateStore:
                 cycle_raw[key] = _dec(cycle_raw.get(key))
             cycle_raw["E_at_close"] = _opt_dec(cycle_raw.get("E_at_close"))
             cycle_raw["planned_buy_spend"] = _opt_dec(cycle_raw.get("planned_buy_spend"))
+            # Legacy cycles (persisted before this field existed) never had
+            # pool_usage_limit_pct -- default to the old hardcoded 0.75 so
+            # they keep behaving exactly as before.
+            cycle_raw["pool_usage_limit_pct"] = _dec(cycle_raw.get("pool_usage_limit_pct"), default="0.75")
             cycle = VRCycle(**cycle_raw)
 
         pending_raw = dict(raw.get("pending_config") or {})
@@ -201,6 +213,7 @@ class VRStateStore:
             G=_opt_dec(pending_raw.get("G")),
             band_pct=_opt_dec(pending_raw.get("band_pct")),
             pool_adjustment=_opt_dec(pending_raw.get("pool_adjustment")),
+            pool_usage_limit_pct=_opt_dec(pending_raw.get("pool_usage_limit_pct")),
         )
 
         orders = []

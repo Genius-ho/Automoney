@@ -69,7 +69,8 @@
         <label>Initial Pool ($)<input id="vrInitPool" type="number" min="0" step="0.01" required></label>
         <label>G<select id="vrInitG"><option value="5">5 · 매우 공격적</option><option value="10" selected>10 · 책의 대표 기준값</option><option value="20">20</option><option value="30">30</option><option value="40">40</option><option value="50">50</option><option value="100">100</option><option value="custom">직접입력</option></select><input id="vrInitGCustom" type="number" min="1" step="1" hidden></label>
         <label>Band<select id="vrInitBand"><option value="5">±5%</option><option value="10">±10%</option><option value="15" selected>±15%</option><option value="20">±20%</option><option value="custom">직접입력</option></select><input id="vrInitBandCustom" type="number" min="1" step="0.1" hidden></label>
-        <p class="order-help">G는 작을수록 공격적(주식 비중↑), 클수록 상대적으로 보수적(현금 비중↑)입니다. Band는 V를 중심으로 한 주문 범위이며, 책에서는 ±15%·±20%를 대표적으로 설명합니다. 두 값 모두 절대적인 위험등급이나 수익을 보장하지 않습니다.</p>
+        <label>Pool Buy Usage<select id="vrInitPoolUsage"><option value="0.75" selected>75% · 적립식 기준값</option><option value="0.50">50% · 거치식</option><option value="0.25">25% · 인출식</option></select></label>
+        <p class="order-help">G는 작을수록 공격적(주식 비중↑), 클수록 상대적으로 보수적(현금 비중↑)입니다. Band는 V를 중심으로 한 주문 범위이며, 책에서는 ±15%·±20%를 대표적으로 설명합니다. Pool Buy Usage는 BUY 사다리가 목표로 하는 Pool 사용 비율입니다(책 기준 적립식 75%·거치식 50%·인출식 25%). 세 값 모두 절대적인 위험등급이나 수익을 보장하지 않습니다.</p>
         <button type="submit" class="primary">VR 시작</button>
       </form>
     </article>
@@ -93,6 +94,7 @@
         <div><dt>Projected Pool (BUY ladder 전량 체결 가정)</dt><dd id="vrProjectedPool">-</dd></div>
         <div><dt>G</dt><dd id="vrG">-</dd></div>
         <div><dt>Band</dt><dd id="vrBand">-</dd></div>
+        <div><dt>Pool Buy Usage</dt><dd id="vrPoolUsage">-</dd></div>
         <div><dt>Lower Value</dt><dd id="vrLowerBand">-</dd></div>
         <div><dt>Upper Value</dt><dd id="vrUpperBand">-</dd></div>
         <div><dt>조건주문</dt><dd id="vrOrderCounts">-</dd></div>
@@ -141,6 +143,7 @@
           <label>G<select id="vrPendingG"><option value="">(변경 안 함)</option><option value="5">5</option><option value="10">10</option><option value="20">20</option><option value="30">30</option><option value="40">40</option><option value="50">50</option><option value="100">100</option><option value="custom">직접입력</option></select><input id="vrPendingGCustom" type="number" min="1" step="1" hidden></label>
           <label>Band<select id="vrPendingBand"><option value="">(변경 안 함)</option><option value="5">±5%</option><option value="10">±10%</option><option value="15">±15%</option><option value="20">±20%</option><option value="custom">직접입력</option></select><input id="vrPendingBandCustom" type="number" min="1" step="0.1" hidden></label>
           <label>Pool 조정 ($, +입금/-인출)<input id="vrPendingPoolAdjustment" type="number" step="0.01"></label>
+          <label>Pool Buy Usage<select id="vrPendingPoolUsage"><option value="">(변경 안 함)</option><option value="0.75">75%</option><option value="0.50">50%</option><option value="0.25">25%</option></select></label>
           <button type="submit" class="primary">다음 사이클 예약 저장</button>
         </form>
       </details>
@@ -172,10 +175,14 @@
             <div><dt>G</dt><dd id="vrPlanG">-</dd></div>
             <div><dt>Band</dt><dd id="vrPlanBand">-</dd></div>
             <div><dt>Pool</dt><dd id="vrPlanPool">-</dd></div>
+            <div><dt>Pool Buy Usage (현재)</dt><dd id="vrPlanPoolUsage">-</dd></div>
+            <div><dt>Pool Buy Usage (다음 사이클)</dt><dd id="vrPlanPoolUsageNext">-</dd></div>
+            <div><dt>Target BUY Spend</dt><dd id="vrPlanTargetBuySpend">-</dd></div>
             <div><dt>Lower Value</dt><dd id="vrPlanLowerValue">-</dd></div>
             <div><dt>Upper Value</dt><dd id="vrPlanUpperValue">-</dd></div>
             <div><dt>Logical BUY rungs</dt><dd id="vrPlanLogicalBuyCount">-</dd></div>
             <div><dt>Broker BUY orders</dt><dd id="vrPlanBrokerBuyCount">-</dd></div>
+            <div><dt>Compressed Planned BUY Spend</dt><dd id="vrPlanPlannedBuySpend">-</dd></div>
             <div><dt>Logical SELL rungs</dt><dd id="vrPlanLogicalSellCount">-</dd></div>
             <div><dt>Broker SELL orders</dt><dd id="vrPlanBrokerSellCount">-</dd></div>
             <div><dt>Broker conditional orders (total)</dt><dd id="vrPlanBrokerTotalCount">-</dd></div>

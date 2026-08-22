@@ -260,7 +260,7 @@ class VRInitializeAndArmTests(unittest.TestCase):
             self.assertEqual(big_cycle.lower_band, big_cycle.V * Decimal("0.85"))
             big_broker_orders = len(big_service.vr_store.load("TQQQ").conditional_orders)
             small_broker_orders = len(small_service.vr_store.load("TQQQ").conditional_orders)
-            self.assertLessEqual(big_broker_orders, 40)
+            self.assertLessEqual(big_broker_orders, 200)
             self.assertLess(small_broker_orders, big_broker_orders)
         finally:
             small_tempdir.cleanup()
@@ -286,6 +286,97 @@ class VRInitializeAndArmTests(unittest.TestCase):
             self.assertEqual(state.current_cycle.end_session, "2026-08-28")
             for order in state.conditional_orders:
                 self.assertEqual(order.expire_date, "2026-08-28")
+        finally:
+            tempdir.cleanup()
+
+
+class VRPoolUsageLimitPctWebServiceTests(unittest.TestCase):
+    def test_vr_initialize_defaults_pool_usage_limit_pct_to_75_pct(self):
+        broker = IntegratedFakeBroker()
+        service, tempdir = _make_service(broker)
+        try:
+            broker.holdings["TQQQ"] = ("100", "105")
+            broker.prices["TQQQ"] = "110"
+            service.vr_initialize("TQQQ", Decimal("1000"), Decimal("10"), Decimal("15"))
+            state = service.vr_store.load("TQQQ")
+            self.assertEqual(state.current_cycle.pool_usage_limit_pct, Decimal("0.75"))
+        finally:
+            tempdir.cleanup()
+
+    def test_vr_initialize_accepts_an_explicit_pool_usage_limit_pct(self):
+        broker = IntegratedFakeBroker()
+        service, tempdir = _make_service(broker)
+        try:
+            broker.holdings["TQQQ"] = ("100", "105")
+            broker.prices["TQQQ"] = "110"
+            service.vr_initialize(
+                "TQQQ", Decimal("1000"), Decimal("10"), Decimal("15"),
+                pool_usage_limit_pct=Decimal("0.25"),
+            )
+            state = service.vr_store.load("TQQQ")
+            self.assertEqual(state.current_cycle.pool_usage_limit_pct, Decimal("0.25"))
+        finally:
+            tempdir.cleanup()
+
+    def test_vr_initialize_rejects_a_value_outside_the_allowed_set(self):
+        broker = IntegratedFakeBroker()
+        service, tempdir = _make_service(broker)
+        try:
+            broker.holdings["TQQQ"] = ("100", "105")
+            broker.prices["TQQQ"] = "110"
+            with self.assertRaises(ValueError):
+                service.vr_initialize(
+                    "TQQQ", Decimal("1000"), Decimal("10"), Decimal("15"),
+                    pool_usage_limit_pct=Decimal("0.40"),
+                )
+        finally:
+            tempdir.cleanup()
+
+    def test_vr_schedule_config_sets_pending_pool_usage_limit_pct(self):
+        broker = IntegratedFakeBroker()
+        service, tempdir = _make_service(broker)
+        try:
+            broker.holdings["TQQQ"] = ("100", "105")
+            broker.prices["TQQQ"] = "110"
+            service.vr_initialize("TQQQ", Decimal("1000"), Decimal("10"), Decimal("15"))
+            result = service.vr_schedule_config("TQQQ", pool_usage_limit_pct=Decimal("0.50"))
+            self.assertEqual(result["pending_config"]["pool_usage_limit_pct"], Decimal("0.50"))
+            state = service.vr_store.load("TQQQ")
+            self.assertEqual(state.pending_config.pool_usage_limit_pct, Decimal("0.50"))
+            self.assertEqual(state.current_cycle.pool_usage_limit_pct, Decimal("0.75"))
+        finally:
+            tempdir.cleanup()
+
+    def test_vr_cancel_pending_config_clears_pool_usage_limit_pct_only(self):
+        broker = IntegratedFakeBroker()
+        service, tempdir = _make_service(broker)
+        try:
+            broker.holdings["TQQQ"] = ("100", "105")
+            broker.prices["TQQQ"] = "110"
+            service.vr_initialize("TQQQ", Decimal("1000"), Decimal("10"), Decimal("15"))
+            service.vr_schedule_config("TQQQ", G=Decimal("20"), pool_usage_limit_pct=Decimal("0.50"))
+            service.vr_cancel_pending_config("TQQQ", pool_usage_limit_pct=True)
+            state = service.vr_store.load("TQQQ")
+            self.assertIsNone(state.pending_config.pool_usage_limit_pct)
+            self.assertEqual(state.pending_config.G, Decimal("20"))
+        finally:
+            tempdir.cleanup()
+
+    def test_vr_snapshot_reports_current_pending_and_target_buy_spend(self):
+        broker = IntegratedFakeBroker()
+        service, tempdir = _make_service(broker)
+        try:
+            broker.holdings["TQQQ"] = ("100", "105")
+            broker.prices["TQQQ"] = "110"
+            service.vr_initialize(
+                "TQQQ", Decimal("2000"), Decimal("10"), Decimal("15"),
+                pool_usage_limit_pct=Decimal("0.75"),
+            )
+            service.vr_schedule_config("TQQQ", pool_usage_limit_pct=Decimal("0.50"))
+            snapshot = service.vr_snapshot("TQQQ")
+            self.assertEqual(snapshot["current_cycle"]["pool_usage_limit_pct"], "0.75")
+            self.assertEqual(snapshot["current_cycle"]["target_buy_spend"], "1500.00")
+            self.assertEqual(snapshot["pending_config"]["pool_usage_limit_pct"], "0.50")
         finally:
             tempdir.cleanup()
 
@@ -386,12 +477,12 @@ class CompressedLegFillBookkeepingTests(unittest.TestCase):
 
     def _init_with_compressed_sell_ladder(self, broker):
         service, tempdir = _make_service(broker)
-        broker.holdings["TQQQ"] = ("200", "105")  # forces > 20 logical SELL rungs
+        broker.holdings["TQQQ"] = ("250", "105")  # forces > 100 logical SELL rungs
         broker.prices["TQQQ"] = "110"
         service.vr_initialize("TQQQ", Decimal("2000"), Decimal("10"), Decimal("15"))
         state = service.vr_store.load("TQQQ")
         sell_orders = [o for o in state.conditional_orders if o.side == "sell"]
-        self.assertEqual(len(sell_orders), 20, "fixture expects the sell ladder to be compressed to 20")
+        self.assertEqual(len(sell_orders), 100, "fixture expects the sell ladder to be compressed to 100")
         compressed_leg = next(o for o in sell_orders if o.quantity > 1)
         return service, tempdir, compressed_leg
 
@@ -1266,8 +1357,8 @@ class BrokerCapacityGateTests(unittest.TestCase):
         # Regression: before compression, a large position (e.g. 500
         # shares -> ~500 logical SELL rungs) needed verified_max >= ~500.
         # After compression, arming ANY position size never needs more than
-        # 2 * MAX_BROKER_ORDERS_PER_SIDE = 40 broker orders.
-        with unittest.mock.patch.object(vr_execution_policy, "VERIFIED_CAPACITY", _capacity(40)):
+        # 2 * MAX_BROKER_ORDERS_PER_SIDE = 200 broker orders.
+        with unittest.mock.patch.object(vr_execution_policy, "VERIFIED_CAPACITY", _capacity(200)):
             broker = IntegratedFakeBroker(mode="LIVE")
             service, tempdir = _make_service(broker)
             try:
@@ -1277,9 +1368,9 @@ class BrokerCapacityGateTests(unittest.TestCase):
                 self.assertEqual(result["status"], "ACTIVE")
                 state = service.vr_store.load("TQQQ")
                 broker_count = len(state.conditional_orders)
-                self.assertLessEqual(broker_count, 40)
+                self.assertLessEqual(broker_count, 200)
                 logical_sell_count = max(o.logical_end_rung for o in state.conditional_orders if o.side == "sell")
-                self.assertGreater(logical_sell_count, 40, "sanity: the logical ladder really was larger than capacity")
+                self.assertGreater(logical_sell_count, 200, "sanity: the logical ladder really was larger than capacity")
             finally:
                 tempdir.cleanup()
 

@@ -168,6 +168,74 @@ class TransitionCycleHappyPathTests(unittest.TestCase):
         self.assertIsNone(new_state.pending_config.G)
         self.assertIsNone(new_state.pending_config.band_pct)
 
+    def test_pending_pool_usage_limit_pct_is_promoted_and_then_cleared(self):
+        broker = FakeConditionalOrderBroker()
+        state = _active_state(pool="2000")
+        self.assertEqual(state.current_cycle.pool_usage_limit_pct, Decimal("0.75"))
+        state = schedule_config(state, pool_usage_limit_pct=Decimal("0.50"))
+        new_state, _ = transition_cycle(
+            broker=broker, state=state, symbol="TQQQ",
+            final_qty=100, close_price=Decimal("163.80"),
+            next_cycle_id="c2", next_start_session=date(2026, 8, 10),
+            next_end_session=date(2026, 8, 21),
+            available_buying_power=Decimal("10000"), available_sell_qty=100,
+        )
+        self.assertEqual(new_state.current_cycle.pool_usage_limit_pct, Decimal("0.50"))
+        self.assertIsNone(new_state.pending_config.pool_usage_limit_pct)
+
+    def test_pool_usage_limit_pct_carries_forward_unchanged_when_nothing_pending(self):
+        broker = FakeConditionalOrderBroker()
+        state = _active_state(pool="2000")
+        new_state, _ = transition_cycle(
+            broker=broker, state=state, symbol="TQQQ",
+            final_qty=100, close_price=Decimal("163.80"),
+            next_cycle_id="c2", next_start_session=date(2026, 8, 10),
+            next_end_session=date(2026, 8, 21),
+            available_buying_power=Decimal("10000"), available_sell_qty=100,
+        )
+        self.assertEqual(new_state.current_cycle.pool_usage_limit_pct, Decimal("0.75"))
+
+    def test_pool_usage_limit_pct_cycles_through_75_50_25_75_across_transitions(self):
+        broker = FakeConditionalOrderBroker()
+        state = _active_state(pool="2000", cycle_id="c1")
+        sequence = [
+            (Decimal("0.50"), "c2", Decimal("0.50")),
+            (Decimal("0.25"), "c3", Decimal("0.25")),
+            (Decimal("0.75"), "c4", Decimal("0.75")),
+        ]
+        for pending_value, next_cycle_id, expected_current in sequence:
+            state = schedule_config(state, pool_usage_limit_pct=pending_value)
+            state, _ = transition_cycle(
+                broker=broker, state=state, symbol="TQQQ",
+                final_qty=100, close_price=Decimal("163.80"),
+                next_cycle_id=next_cycle_id, next_start_session=date(2026, 8, 10),
+                next_end_session=date(2026, 8, 21),
+                available_buying_power=Decimal("10000"), available_sell_qty=100,
+            )
+            self.assertEqual(state.current_cycle.pool_usage_limit_pct, expected_current)
+            self.assertIsNone(state.pending_config.pool_usage_limit_pct)
+
+    def test_lower_pool_usage_limit_pct_yields_smaller_planned_buy_spend(self):
+        broker_75 = FakeConditionalOrderBroker()
+        state_75 = _active_state(V="18500", pool="2000")
+        new_state_75, _ = transition_cycle(
+            broker=broker_75, state=state_75, symbol="TQQQ",
+            final_qty=100, close_price=Decimal("163.80"),
+            next_cycle_id="c2", next_start_session=date(2026, 8, 10),
+            next_end_session=date(2026, 8, 21),
+            available_buying_power=Decimal("10000"), available_sell_qty=100,
+        )
+        broker_25 = FakeConditionalOrderBroker()
+        state_25 = schedule_config(_active_state(V="18500", pool="2000"), pool_usage_limit_pct=Decimal("0.25"))
+        new_state_25, _ = transition_cycle(
+            broker=broker_25, state=state_25, symbol="TQQQ",
+            final_qty=100, close_price=Decimal("163.80"),
+            next_cycle_id="c2", next_start_session=date(2026, 8, 10),
+            next_end_session=date(2026, 8, 21),
+            available_buying_power=Decimal("10000"), available_sell_qty=100,
+        )
+        self.assertLess(new_state_25.current_cycle.planned_buy_spend, new_state_75.current_cycle.planned_buy_spend)
+
     def test_pending_pool_adjustment_is_applied_once_at_transition(self):
         broker = FakeConditionalOrderBroker()
         state = schedule_config(_active_state(pool="1231.51"), pool_adjustment=Decimal("300"))

@@ -310,7 +310,9 @@ class ApplicationEngine(TradingWebService):
         initial_pool = Decimal(str(payload.get("initial_pool", "0")))
         G = Decimal(str(payload.get("G", "10")))
         band_pct = Decimal(str(payload.get("band_pct", "15")))
-        return self.vr_initialize(symbol, initial_pool, G, band_pct)
+        pool_usage_limit_pct = self._optional_decimal(payload, "pool_usage_limit_pct")
+        kwargs = {} if pool_usage_limit_pct is None else {"pool_usage_limit_pct": pool_usage_limit_pct}
+        return self.vr_initialize(symbol, initial_pool, G, band_pct, **kwargs)
 
     def _vr_schedule_config(self, payload: dict[str, Any]) -> dict[str, Any]:
         self._require_settings_gate("vr.schedule_config")
@@ -320,6 +322,7 @@ class ApplicationEngine(TradingWebService):
             G=self._optional_decimal(payload, "G"),
             band_pct=self._optional_decimal(payload, "band_pct"),
             pool_adjustment=self._optional_decimal(payload, "pool_adjustment"),
+            pool_usage_limit_pct=self._optional_decimal(payload, "pool_usage_limit_pct"),
         )
 
     def _vr_cancel_pending_config(self, payload: dict[str, Any]) -> dict[str, Any]:
@@ -330,6 +333,7 @@ class ApplicationEngine(TradingWebService):
             G=bool(payload.get("G", False)),
             band_pct=bool(payload.get("band_pct", False)),
             pool_adjustment=bool(payload.get("pool_adjustment", False)),
+            pool_usage_limit_pct=bool(payload.get("pool_usage_limit_pct", False)),
             all=bool(payload.get("all", False)),
         )
 
