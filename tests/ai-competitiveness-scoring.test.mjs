@@ -8,61 +8,53 @@ import {
 } from '../src/ai-competitiveness-scoring.mjs';
 import { WEIGHTS } from '../src/competitiveness-score.mjs';
 
-test('scoreImageQualityWithAi falls back to the proxy without calling Claude when there are no images', async () => {
+test('scoreImageQualityWithAi falls back to the proxy without calling Codex when there are no images', async () => {
   const result = await scoreImageQualityWithAi([], {
     config: {},
-    runClaudeVisionReviewImpl: async () => { throw new Error('must not be called'); },
+    runCodexAnalysisImpl: async () => { throw new Error('must not be called'); },
   });
   assert.equal(result.points, 0);
   assert.match(result.reason, /이미지 0장/);
 });
 
-test('scoreImageQualityWithAi downloads at most 3 images, reviews them, scales the AI score to WEIGHTS.imageQuality, and cleans up', async () => {
+test('scoreImageQualityWithAi downloads at most 3 images, runs Codex with them as cwd-local paths + the image-quality JSON schema, scales the score, and cleans up', async () => {
   const images = ['https://a.test/1.jpg', 'https://a.test/2.jpg', 'https://a.test/3.jpg', 'https://a.test/4.jpg'];
   const downloadedUrls = [];
   const cleanedUp = [];
-  let receivedFilePaths = null;
+  let receivedArgs = null;
   const result = await scoreImageQualityWithAi(images, {
-    config: { model: 'sonnet' },
+    config: { executable: 'codex' },
+    rootDir: '/home/ho/automoney',
     loadRemoteImageForVisionImpl: async (url) => {
       downloadedUrls.push(url);
       return { filePath: `/tmp/${url.split('/').pop()}`, cleanup: async () => cleanedUp.push(url) };
     },
-    runClaudeVisionReviewImpl: async ({ images: filePaths }) => {
-      receivedFilePaths = filePaths;
-      return { rawText: '{"score": 80, "reason": "선명하고 구도가 좋음"}' };
+    runCodexAnalysisImpl: async (args) => {
+      receivedArgs = args;
+      return { success: true, analysis: { score: 80, reason: '선명하고 구도가 좋음' } };
     },
   });
 
   assert.deepEqual(downloadedUrls, images.slice(0, 3));
-  assert.equal(receivedFilePaths.length, 3);
+  assert.equal(receivedArgs.images.length, 3);
+  assert.match(receivedArgs.schemaPath, /schemas\/image-quality-score\.schema\.json$/);
+  assert.ok(receivedArgs.outputPath);
   assert.equal(result.points, (80 / 100) * WEIGHTS.imageQuality);
   assert.match(result.reason, /^\[AI\] 선명하고 구도가 좋음$/);
   assert.deepEqual(cleanedUp, images.slice(0, 3));
 });
 
-test('scoreImageQualityWithAi propagates a Claude CLI failure (the caller, computeAiScoringContext, is what falls back to the proxy) but still cleans up the downloaded temp files', async () => {
+test('scoreImageQualityWithAi propagates a Codex failure (the caller, computeAiScoringContext, is what falls back to the proxy) but still cleans up the downloaded temp files', async () => {
   const cleanedUp = [];
   await assert.rejects(
     () => scoreImageQualityWithAi(['https://a.test/1.jpg'], {
       config: {},
       loadRemoteImageForVisionImpl: async () => ({ filePath: '/tmp/x.jpg', cleanup: async () => cleanedUp.push('x') }),
-      runClaudeVisionReviewImpl: async () => { throw new Error('claude CLI not logged in'); },
+      runCodexAnalysisImpl: async () => ({ success: false, log: 'codex not logged in' }),
     }),
-    /claude CLI not logged in/,
+    (error) => error.code === 'CODEX_IMAGE_QUALITY_FAILED' && /codex not logged in/.test(error.message),
   );
   assert.deepEqual(cleanedUp, ['x']);
-});
-
-test('scoreImageQualityWithAi rejects when the CLI response has no parseable JSON score', async () => {
-  await assert.rejects(
-    () => scoreImageQualityWithAi(['https://a.test/1.jpg'], {
-      config: {},
-      loadRemoteImageForVisionImpl: async () => ({ filePath: '/tmp/x.jpg', cleanup: async () => {} }),
-      runClaudeVisionReviewImpl: async () => ({ rawText: 'sorry, I cannot help with that' }),
-    }),
-    (error) => error.code === 'UNPARSEABLE_AI_SCORE',
-  );
 });
 
 test('scoreTextJudgmentsWithAi asks for and scales returnRiskScore only when there are no existing draft titles to compare against, leaving duplicateRisk on the proxy', async () => {
@@ -97,14 +89,18 @@ test('scoreTextJudgmentsWithAi asks for and scales both scores when existing dra
   assert.match(result.duplicateRisk.reason, /^\[AI\] 기존 소형과 유사$/);
 });
 
-test('computeAiScoringContext runs both AI calls and returns a context fragment ready for computeCompetitivenessScore', async () => {
+test('computeAiScoringContext runs the Codex image call and the Claude text call and returns a context fragment ready for computeCompetitivenessScore', async () => {
+  let receivedImageArgs = null;
+  let receivedTextArgs = null;
   const context = await computeAiScoringContext(
     { normalized: { name: 'A', images: ['https://a.test/1.jpg'] }, filter: {} },
     ['기존 상품'],
     {
-      config: {},
-      scoreImageQualityWithAiImpl: async () => ({ points: 8, reason: '[AI] good' }),
-      scoreTextJudgmentsWithAiImpl: async () => ({ returnRisk: { points: 7, reason: '[AI] safe' }, duplicateRisk: { points: 5, reason: '[AI] unique' } }),
+      codexConfig: { executable: 'codex' },
+      claudeConfig: { executable: 'claude' },
+      rootDir: '/home/ho/automoney',
+      scoreImageQualityWithAiImpl: async (images, opts) => { receivedImageArgs = { images, opts }; return { points: 8, reason: '[AI] good' }; },
+      scoreTextJudgmentsWithAiImpl: async (normalized, titles, opts) => { receivedTextArgs = { normalized, titles, opts }; return { returnRisk: { points: 7, reason: '[AI] safe' }, duplicateRisk: { points: 5, reason: '[AI] unique' } }; },
     },
   );
 
@@ -113,6 +109,9 @@ test('computeAiScoringContext runs both AI calls and returns a context fragment 
     aiReturnRisk: { points: 7, reason: '[AI] safe' },
     aiDuplicateRisk: { points: 5, reason: '[AI] unique' },
   });
+  assert.equal(receivedImageArgs.opts.config.executable, 'codex');
+  assert.equal(receivedImageArgs.opts.rootDir, '/home/ho/automoney');
+  assert.equal(receivedTextArgs.opts.config.executable, 'claude');
 });
 
 test('computeAiScoringContext falls back independently per dimension -- one AI call failing does not affect the other', async () => {
@@ -120,8 +119,9 @@ test('computeAiScoringContext falls back independently per dimension -- one AI c
     { normalized: { name: 'A', images: [] }, filter: {} },
     [],
     {
-      config: {},
-      scoreImageQualityWithAiImpl: async () => { throw new Error('vision failed'); },
+      codexConfig: {},
+      claudeConfig: {},
+      scoreImageQualityWithAiImpl: async () => { throw new Error('codex not logged in'); },
       scoreTextJudgmentsWithAiImpl: async () => ({ returnRisk: { points: 7, reason: '[AI] safe' }, duplicateRisk: { points: 5, reason: '[AI] unique' } }),
     },
   );
@@ -138,7 +138,8 @@ test('computeAiScoringContext falls back to both proxies when the text-judgments
     { normalized: { name: 'A', images: [], sellUnitType: 'single' }, filter: {} },
     [],
     {
-      config: {},
+      codexConfig: {},
+      claudeConfig: {},
       scoreImageQualityWithAiImpl: async () => ({ points: 9, reason: '[AI] good' }),
       scoreTextJudgmentsWithAiImpl: async () => { throw new Error('claude CLI timeout'); },
     },

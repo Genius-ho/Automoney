@@ -60,17 +60,34 @@ test('analyzeProductLinks passes the AI-judged context into computeCompetitivene
   assert.deepEqual(receivedContexts, [{ aiImageQuality: { points: 10, reason: '[AI] for 1' } }]);
 });
 
-test('analyzeProductLinks skips AI scoring entirely (empty context) when aiScoringEnabled is false, without loading Claude CLI config', async () => {
+test('analyzeProductLinks skips AI scoring entirely (empty context) when aiScoringEnabled is false, without loading Claude CLI or Codex config', async () => {
   const receivedContexts = [];
   await analyzeProductLinks({}, ['1'], {}, {
     aiScoringEnabled: false,
     loadClaudeCliConfigImpl: async () => { throw new Error('must not be called'); },
+    loadCodexConfigImpl: async () => { throw new Error('must not be called'); },
     computeAiScoringContextImpl: async () => { throw new Error('must not be called'); },
     evaluateCandidatesImpl: async () => [{ productNo: '1', normalized: { name: 'A' }, filter: { filterStatus: 'pass' }, prices: {} }],
     computeCompetitivenessScoreImpl: (candidate, context) => { receivedContexts.push(context); return { score: 70, breakdown: {} }; },
   });
 
   assert.deepEqual(receivedContexts, [{}]);
+});
+
+test('analyzeProductLinks loads both Claude and Codex config and passes them through as claudeConfig/codexConfig, plus rootDir', async () => {
+  let receivedOpts = null;
+  await analyzeProductLinks({}, ['1'], {}, {
+    rootDir: '/custom/root',
+    loadClaudeCliConfigImpl: async () => ({ executable: 'claude' }),
+    loadCodexConfigImpl: async () => ({ executable: 'codex' }),
+    computeAiScoringContextImpl: async (candidate, titles, opts) => { receivedOpts = opts; return {}; },
+    evaluateCandidatesImpl: async () => [{ productNo: '1', normalized: { name: 'A' }, filter: { filterStatus: 'pass' }, prices: {} }],
+    computeCompetitivenessScoreImpl: () => ({ score: 70, breakdown: {} }),
+  });
+
+  assert.equal(receivedOpts.claudeConfig.executable, 'claude');
+  assert.equal(receivedOpts.codexConfig.executable, 'codex');
+  assert.equal(receivedOpts.rootDir, '/custom/root');
 });
 
 test('analyzeProductLinks falls back to an empty (proxy-only) context, not a thrown error, when AI scoring itself rejects', async () => {
