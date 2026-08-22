@@ -85,6 +85,27 @@ class WebServiceTests(unittest.TestCase):
             self.assertEqual(result["state"]["t_value"], "1")
             self.assertFalse(result["live_order_enabled"])
 
+    def test_refresh_account_defaults_strategy_type_to_mumae(self):
+        with tempfile.TemporaryDirectory() as temp:
+            service = WebService(Path(temp), broker_factory=FakeBroker)
+            with patch("web_gui.web_service.time.sleep"):
+                result = service.refresh_account("TQQQ")
+
+            self.assertEqual(result["holdings"][0]["strategy_type"], "MUMAE")
+
+    def test_refresh_account_reports_vr_skill_strategy_type_when_set(self):
+        from runtime_store import set_strategy_type
+
+        with tempfile.TemporaryDirectory() as temp:
+            service = WebService(Path(temp), broker_factory=FakeBroker)
+            set_strategy_type(service.runtime, "TQQQ", "VR_SKILL")
+            service.runtime_store.save(service.runtime)
+
+            with patch("web_gui.web_service.time.sleep"):
+                result = service.refresh_account("TQQQ")
+
+            self.assertEqual(result["holdings"][0]["strategy_type"], "VR_SKILL")
+
     def test_refresh_filters_non_strategy_account_holdings(self):
         with tempfile.TemporaryDirectory() as temp:
             service = WebService(Path(temp), broker_factory=FakeMixedBroker)

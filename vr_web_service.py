@@ -492,6 +492,25 @@ class VRWebServiceMixin:
             self.vr_store.save(state)
         return {"symbol": symbol, "status": state.status}
 
+    def vr_reset(self, symbol: str) -> dict[str, Any]:
+        """Discards this symbol's entire VR state (current cycle, history,
+        pending config, blockers) back to UNINITIALIZED, so vr_initialize
+        can be run fresh -- e.g. after an exploratory/test cycle, to start
+        a real one with an accurate V1 computed at the actual moment of
+        initialization. strategy_type itself (MUMAE vs VR_SKILL) is left
+        untouched; only VR's own cycle bookkeeping is cleared.
+
+        Refuses (does not touch state) while any conditional order is still
+        OPEN -- same protection as can_switch_strategy, since resetting
+        local state would orphan a real broker order the app could no
+        longer track or cancel."""
+        symbol = symbol.upper()
+        state = self.vr_store.load(symbol)
+        if any(order.status == "OPEN" for order in state.conditional_orders):
+            raise ValueError(f"{symbol}: 처리되지 않은 VR 조건주문이 있어 리셋할 수 없습니다. 먼저 정리하세요.")
+        self.vr_store.save(VRState(symbol=symbol))
+        return {"symbol": symbol, "status": "UNINITIALIZED"}
+
     def vr_schedule_config(
         self, symbol: str, G: Decimal | None = None,
         band_pct: Decimal | None = None, pool_adjustment: Decimal | None = None,

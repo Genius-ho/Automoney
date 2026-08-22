@@ -11,7 +11,7 @@ from typing import Any, Callable
 from etf_info import ETF_INFO
 from market_quote import fetch_unadjusted_daily_candles, resolve_day_quote
 from mumae_core import ETF_UNIVERSE, Mode, OrderIntent, StrategyState, attempt_amount, build_big_number_plan, build_plan, normalize_down_ladder_levels, star_price, symbol_profile
-from runtime_store import RuntimeStore, prune_order_tracking
+from runtime_store import RuntimeStore, get_strategy_type, prune_order_tracking
 from state_store import StateStore
 from toss_api import TossBroker
 
@@ -309,6 +309,7 @@ class WebService:
                 "pnl": pnl,
                 "pnl_pct": rate,
                 "t_value": ticker_state.t_value,
+                "strategy_type": get_strategy_type(self.runtime, ticker),
             }))
             if ticker == symbol:
                 selected.position_qty = int(quantity)

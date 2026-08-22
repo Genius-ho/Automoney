@@ -6,6 +6,7 @@ from datetime import date
 from pathlib import Path
 from unittest.mock import patch
 
+import vr_execution_policy
 from application_engine import ApplicationEngine, LiveActionsRequiredError
 from runtime_store import get_strategy_type
 
@@ -97,6 +98,49 @@ class VRDispatchTests(unittest.TestCase):
             self.assertEqual(stopped["status"], "STOPPED")
             started = engine.execute("vr.start", {"symbol": "TQQQ"}, source="TEST", actor="tester")
             self.assertEqual(started["status"], "ACTIVE")
+
+    def test_vr_reset_via_dispatch_after_orders_are_cleared(self):
+        with tempfile.TemporaryDirectory() as temp:
+            # LIVE mode + the ack so create_conditional_order actually calls
+            # broker._request (DRY_RUN never does, so conditional_order_id
+            # would stay None and sync could never resolve it either way).
+            broker = VRFakeBroker(mode="LIVE")
+            engine = ApplicationEngine(Path(temp), broker_factory=lambda: broker)
+            with patch.dict(os.environ, {"MUMAE_WEB_LIVE_ACTIONS": "I_UNDERSTAND_WEB_LIVE_TRADING"}), \
+                 patch.object(
+                     vr_execution_policy, "VERIFIED_CAPACITY",
+                     vr_execution_policy.ConditionalOrderCapacity(verified_max=1000, scope=vr_execution_policy.CAPACITY_SCOPE_ACCOUNT, verified_at="2026-08-21", source="test"),
+                 ), \
+                 patch.object(vr_execution_policy, "CONDITIONAL_SELL_RESERVATION_BEHAVIOR", vr_execution_policy.SELL_RESERVATION_RESERVES_QUANTITY):
+                engine.execute(
+                    "vr.initialize",
+                    {"symbol": "TQQQ", "initial_pool": "1000", "G": "10", "band_pct": "15"},
+                    source="TEST", actor="tester",
+                )
+                # VRFakeBroker's conditional-orders GET always returns an
+                # empty list, so a sync immediately confirms every
+                # locally-OPEN order as cancelled (nothing to be found in
+                # either list).
+                engine.execute("vr.sync", {"symbol": "TQQQ"}, source="TEST", actor="tester")
+
+                result = engine.execute("vr.reset", {"symbol": "TQQQ"}, source="TEST", actor="tester")
+                self.assertEqual(result["status"], "UNINITIALIZED")
+
+                snapshot = engine.execute("vr.snapshot", {"symbol": "TQQQ"}, source="TEST", actor="tester")
+                self.assertEqual(snapshot["status"], "UNINITIALIZED")
+                self.assertIsNone(snapshot["current_cycle"])
+
+    def test_vr_reset_blocked_while_orders_still_open_via_dispatch(self):
+        with tempfile.TemporaryDirectory() as temp:
+            broker = VRFakeBroker()
+            engine = ApplicationEngine(Path(temp), broker_factory=lambda: broker)
+            engine.execute(
+                "vr.initialize",
+                {"symbol": "TQQQ", "initial_pool": "1000", "G": "10", "band_pct": "15"},
+                source="TEST", actor="tester",
+            )
+            with self.assertRaises(ValueError):
+                engine.execute("vr.reset", {"symbol": "TQQQ"}, source="TEST", actor="tester")
 
     def test_vr_schedule_config_and_cancel_via_dispatch(self):
         with tempfile.TemporaryDirectory() as temp:

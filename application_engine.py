@@ -319,6 +319,11 @@ class ApplicationEngine(TradingWebService):
             kwargs["recurring_contribution"] = recurring_contribution
         return self.vr_initialize(symbol, initial_pool, G, band_pct, **kwargs)
 
+    def _vr_reset(self, payload: dict[str, Any]) -> dict[str, Any]:
+        self._require_settings_gate("vr.reset")
+        symbol = str(payload.get("symbol", "")).upper()
+        return self.vr_reset(symbol)
+
     def _vr_schedule_config(self, payload: dict[str, Any]) -> dict[str, Any]:
         self._require_settings_gate("vr.schedule_config")
         symbol = str(payload.get("symbol", "")).upper()
@@ -430,6 +435,8 @@ class ApplicationEngine(TradingWebService):
             return self.vr_start(symbol)
         if command == "vr.stop":
             return self.vr_stop(symbol)
+        if command == "vr.reset":
+            return self._vr_reset(payload)
         if command == "vr.schedule_config":
             return self._vr_schedule_config(payload)
         if command == "vr.cancel_pending_config":

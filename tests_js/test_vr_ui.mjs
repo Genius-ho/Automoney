@@ -172,6 +172,25 @@ test("MUMAE order plan area stays populated by renderOrderPlan (existing behavio
   assert.equal(sandbox.document.getElementById("orderPlanBody")._children.length, 1);
 });
 
+test("render() shows a 전략 column in the holdings table: 무한매수 for MUMAE, VR for VR_SKILL", () => {
+  const { sandbox } = loadApp();
+  sandbox.render({
+    settings: {}, state: { symbol: "TQQQ" }, quote: {}, metrics: {}, runtime: {},
+    holdings: [
+      { symbol: "TQQQ", quantity: "100", average_price: "70", current_price: "71", day_change_pct: "1.5", total_value: "7100", pnl: "100", pnl_pct: "1.5", t_value: "9.5", strategy_type: "VR_SKILL" },
+      { symbol: "SOXL", quantity: "50", average_price: "20", current_price: "21", day_change_pct: "-0.5", total_value: "1050", pnl: "50", pnl_pct: "5", t_value: "3", strategy_type: "MUMAE" },
+    ],
+  });
+  const rows = sandbox.document.getElementById("holdings")._children;
+  assert.equal(rows.length, 2);
+  const tqqqStrategyCell = rows[0]._children[rows[0]._children.length - 1];
+  const soxlStrategyCell = rows[1]._children[rows[1]._children.length - 1];
+  assert.equal(tqqqStrategyCell.textContent, "VR");
+  assert.equal(tqqqStrategyCell.className, "strategy-badge vr");
+  assert.equal(soxlStrategyCell.textContent, "무한매수");
+  assert.equal(soxlStrategyCell.className, "strategy-badge mumae");
+});
+
 test("VR order plan: renderVrOrderPlan does not touch MUMAE orderPlanBody rows", () => {
   const { sandbox } = loadApp();
   const mumaeBody = sandbox.document.getElementById("orderPlanBody");

@@ -215,6 +215,65 @@ def _make_service(broker: IntegratedFakeBroker) -> tuple[TradingWebService, temp
     return service, tempdir
 
 
+class VRResetTests(unittest.TestCase):
+    def _init_and_clear_orders(self, broker, service):
+        broker.holdings["TQQQ"] = ("100", "105")
+        broker.prices["TQQQ"] = "110"
+        service.vr_initialize("TQQQ", Decimal("1000"), Decimal("10"), Decimal("15"))
+        state_before = service.vr_store.load("TQQQ")
+        self.assertGreater(len(state_before.conditional_orders), 0)
+        for order in state_before.conditional_orders:
+            broker.conditional_orders.pop(order.conditional_order_id, None)
+        service.vr_sync_orders("TQQQ")
+
+    def test_reset_clears_state_back_to_uninitialized(self):
+        broker = IntegratedFakeBroker(mode="LIVE")
+        service, tempdir = _make_service(broker)
+        try:
+            self._init_and_clear_orders(broker, service)
+
+            result = service.vr_reset("TQQQ")
+
+            self.assertEqual(result["status"], "UNINITIALIZED")
+            state_after = service.vr_store.load("TQQQ")
+            self.assertEqual(state_after.status, "UNINITIALIZED")
+            self.assertIsNone(state_after.current_cycle)
+            self.assertEqual(state_after.conditional_orders, [])
+            self.assertEqual(state_after.history, [])
+        finally:
+            tempdir.cleanup()
+
+    def test_reset_refuses_while_any_order_is_still_open(self):
+        broker = IntegratedFakeBroker(mode="LIVE")
+        service, tempdir = _make_service(broker)
+        try:
+            broker.holdings["TQQQ"] = ("100", "105")
+            broker.prices["TQQQ"] = "110"
+            service.vr_initialize("TQQQ", Decimal("1000"), Decimal("10"), Decimal("15"))
+
+            with self.assertRaises(ValueError):
+                service.vr_reset("TQQQ")
+
+            state = service.vr_store.load("TQQQ")
+            self.assertEqual(state.status, "ACTIVE")
+            self.assertIsNotNone(state.current_cycle)
+        finally:
+            tempdir.cleanup()
+
+    def test_reset_leaves_strategy_type_untouched(self):
+        broker = IntegratedFakeBroker(mode="LIVE")
+        service, tempdir = _make_service(broker)
+        try:
+            set_strategy_type(service.runtime, "TQQQ", "VR_SKILL")
+            self._init_and_clear_orders(broker, service)
+
+            service.vr_reset("TQQQ")
+
+            self.assertEqual(get_strategy_type(service.runtime, "TQQQ"), "VR_SKILL")
+        finally:
+            tempdir.cleanup()
+
+
 class VRInitializeAndArmTests(unittest.TestCase):
     def test_initialize_computes_v1_and_arms_initial_orders(self):
         broker = IntegratedFakeBroker()

@@ -9,7 +9,7 @@
     <article class="card holdings-card top-holdings collapsible-card">
       <div class="section-title"><div><p class="eyebrow">TOSS ACCOUNT</p><h2>전체 계좌 보유종목</h2></div><div class="section-title-actions"><span id="holdingCount">0종목</span><button type="button" id="holdingsToggle" class="toggle-btn" aria-expanded="false" aria-controls="holdingsSection">펼치기</button></div></div>
       <div class="card-body" id="holdingsSection" hidden>
-        <div class="table-wrap"><table><thead><tr><th>종목</th><th>수량</th><th>평균단가</th><th>현재가</th><th>등락률</th><th>평가액</th><th>손익</th><th>수익률</th><th>T</th></tr></thead><tbody id="holdings"></tbody></table></div>
+        <div class="table-wrap"><table><thead><tr><th>종목</th><th>수량</th><th>평균단가</th><th>현재가</th><th>등락률</th><th>평가액</th><th>손익</th><th>수익률</th><th>T</th><th>전략</th></tr></thead><tbody id="holdings"></tbody></table></div>
         <p id="emptyHoldings" class="empty">새로고침을 누르면 실제 토스 계좌를 조회합니다.</p>
       </div>
     </article>
@@ -104,6 +104,7 @@
       <div class="vr-actions">
         <button type="button" id="vrStartBtn">시작</button>
         <button type="button" id="vrStopBtn">중지</button>
+        <button type="button" id="vrResetBtn" class="danger">VR 리셋</button>
       </div>
 
       <details class="vr-chart" open>
