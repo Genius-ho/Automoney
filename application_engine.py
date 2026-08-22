@@ -311,7 +311,12 @@ class ApplicationEngine(TradingWebService):
         G = Decimal(str(payload.get("G", "10")))
         band_pct = Decimal(str(payload.get("band_pct", "15")))
         pool_usage_limit_pct = self._optional_decimal(payload, "pool_usage_limit_pct")
-        kwargs = {} if pool_usage_limit_pct is None else {"pool_usage_limit_pct": pool_usage_limit_pct}
+        recurring_contribution = self._optional_decimal(payload, "recurring_contribution")
+        kwargs = {}
+        if pool_usage_limit_pct is not None:
+            kwargs["pool_usage_limit_pct"] = pool_usage_limit_pct
+        if recurring_contribution is not None:
+            kwargs["recurring_contribution"] = recurring_contribution
         return self.vr_initialize(symbol, initial_pool, G, band_pct, **kwargs)
 
     def _vr_schedule_config(self, payload: dict[str, Any]) -> dict[str, Any]:
@@ -323,6 +328,7 @@ class ApplicationEngine(TradingWebService):
             band_pct=self._optional_decimal(payload, "band_pct"),
             pool_adjustment=self._optional_decimal(payload, "pool_adjustment"),
             pool_usage_limit_pct=self._optional_decimal(payload, "pool_usage_limit_pct"),
+            recurring_contribution=self._optional_decimal(payload, "recurring_contribution"),
         )
 
     def _vr_cancel_pending_config(self, payload: dict[str, Any]) -> dict[str, Any]:
@@ -334,6 +340,7 @@ class ApplicationEngine(TradingWebService):
             band_pct=bool(payload.get("band_pct", False)),
             pool_adjustment=bool(payload.get("pool_adjustment", False)),
             pool_usage_limit_pct=bool(payload.get("pool_usage_limit_pct", False)),
+            recurring_contribution=bool(payload.get("recurring_contribution", False)),
             all=bool(payload.get("all", False)),
         )
 

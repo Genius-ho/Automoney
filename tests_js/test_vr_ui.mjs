@@ -279,7 +279,7 @@ test("renderVrRunningCard shows Pool Buy Usage in the metrics row and current-co
     current_cycle: {
       cycle_id: "TQQQ-c1", start_session: "2026-08-21", end_session: "2026-09-04",
       V: "8956.08", G: "10", band_pct: "15", pool_start: "1000", pool_current: "1000",
-      pool_usage_limit_pct: "0.50",
+      pool_usage_limit_pct: "0.50", recurring_contribution: "0",
       pool_to_v_pct: "11.17", planned_buy_spend: "370.93", projected_pool: "629.07",
       lower_band: "7612.67", upper_band: "10299.49",
     },
@@ -287,7 +287,7 @@ test("renderVrRunningCard shows Pool Buy Usage in the metrics row and current-co
   };
   sandbox.renderVrRunningCard("TQQQ", data, null);
   assert.equal(sandbox.document.getElementById("vrPoolUsage").textContent, "50%");
-  assert.equal(sandbox.document.getElementById("vrCurrentConfig").textContent, "G 10 · Band ±15% · Pool Buy Usage 50%");
+  assert.equal(sandbox.document.getElementById("vrCurrentConfig").textContent, "G 10 · Band ±15% · Pool Buy Usage 50% · 정기 기여금 $0.00");
 });
 
 test("renderVrRunningCard shows pending Pool Buy Usage in the pending-config summary", () => {
@@ -297,7 +297,7 @@ test("renderVrRunningCard shows pending Pool Buy Usage in the pending-config sum
     current_cycle: {
       cycle_id: "TQQQ-c1", start_session: "2026-08-21", end_session: "2026-09-04",
       V: "8956.08", G: "10", band_pct: "15", pool_start: "1000", pool_current: "1000",
-      pool_usage_limit_pct: "0.75",
+      pool_usage_limit_pct: "0.75", recurring_contribution: "0",
       pool_to_v_pct: "11.17", planned_buy_spend: "370.93", projected_pool: "629.07",
       lower_band: "7612.67", upper_band: "10299.49",
     },
@@ -306,6 +306,42 @@ test("renderVrRunningCard shows pending Pool Buy Usage in the pending-config sum
   sandbox.renderVrRunningCard("TQQQ", data, null);
   assert.equal(sandbox.document.getElementById("vrPendingConfig").textContent, "Pool Buy Usage 25%");
   assert.equal(sandbox.document.getElementById("vrCancelPendingBtn").hidden, false);
+});
+
+test("renderVrRunningCard shows recurring contribution in the metrics row (positive/적립식)", () => {
+  const { sandbox } = loadApp();
+  const data = {
+    status: "ACTIVE", blocked_reason: null,
+    current_cycle: {
+      cycle_id: "TQQQ-c1", start_session: "2026-08-21", end_session: "2026-09-04",
+      V: "8956.08", G: "10", band_pct: "15", pool_start: "1000", pool_current: "1000",
+      pool_usage_limit_pct: "0.75", recurring_contribution: "500",
+      pool_to_v_pct: "11.17", planned_buy_spend: "370.93", projected_pool: "629.07",
+      lower_band: "7612.67", upper_band: "10299.49",
+    },
+    pending_config: {},
+  };
+  sandbox.renderVrRunningCard("TQQQ", data, null);
+  assert.equal(sandbox.document.getElementById("vrRecurringContribution").textContent, "+$500.00");
+  assert.equal(sandbox.document.getElementById("vrCurrentConfig").textContent, "G 10 · Band ±15% · Pool Buy Usage 75% · 정기 기여금 +$500.00");
+});
+
+test("renderVrRunningCard shows recurring contribution as negative (인출식) and in pending summary", () => {
+  const { sandbox } = loadApp();
+  const data = {
+    status: "ACTIVE", blocked_reason: null,
+    current_cycle: {
+      cycle_id: "TQQQ-c1", start_session: "2026-08-21", end_session: "2026-09-04",
+      V: "8956.08", G: "10", band_pct: "15", pool_start: "1000", pool_current: "1000",
+      pool_usage_limit_pct: "0.75", recurring_contribution: "-200",
+      pool_to_v_pct: "11.17", planned_buy_spend: "370.93", projected_pool: "629.07",
+      lower_band: "7612.67", upper_band: "10299.49",
+    },
+    pending_config: { recurring_contribution: "0" },
+  };
+  sandbox.renderVrRunningCard("TQQQ", data, null);
+  assert.equal(sandbox.document.getElementById("vrRecurringContribution").textContent, "-$200.00");
+  assert.equal(sandbox.document.getElementById("vrPendingConfig").textContent, "정기 기여금 $0.00");
 });
 
 test("renderVrRunningCard shows the capacity blocker box with logical counts when present", () => {
@@ -370,6 +406,22 @@ test("VR order plan summary shows current/next Pool Buy Usage and target/planned
   assert.equal(sandbox.document.getElementById("vrPlanTargetBuySpend").textContent, "$1,500.00");
   assert.equal(sandbox.document.getElementById("vrPlanPlannedBuySpend").textContent, "$1,493.49");
   assert.equal(sandbox.document.getElementById("vrPlanPendingText").textContent, "Pool Buy Usage 50%");
+});
+
+test("VR order plan summary shows current/next recurring contribution", () => {
+  const { sandbox } = loadApp();
+  const cycle = {
+    cycle_id: "c1", start_session: "s", end_session: "e", V: "1", G: "10", band_pct: "15",
+    pool_current: "2000", pool_usage_limit_pct: "0.75", recurring_contribution: "500",
+    target_buy_spend: "1500.00", planned_buy_spend: "1493.49", lower_band: "1", upper_band: "1",
+  };
+  sandbox.renderVrOrderPlan("TQQQ", {
+    status: "ACTIVE", current_cycle: cycle, conditional_orders: [],
+    pending_config: { recurring_contribution: "-100" }, ladder_counts: {},
+  });
+  assert.equal(sandbox.document.getElementById("vrPlanRecurringContribution").textContent, "+$500.00");
+  assert.equal(sandbox.document.getElementById("vrPlanRecurringContributionNext").textContent, "-$100.00");
+  assert.equal(sandbox.document.getElementById("vrPlanPendingText").textContent, "정기 기여금 -$100.00");
 });
 
 test("VR order plan summary shows a dash for next Pool Buy Usage when nothing pending", () => {

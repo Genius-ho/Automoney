@@ -173,6 +173,39 @@ class VRStateStoreRoundTripTests(unittest.TestCase):
             self.assertIsNone(loaded.pending_config.band_pct)
             self.assertIsNone(loaded.pending_config.pool_adjustment)
 
+    def test_recurring_contribution_round_trips_when_set(self):
+        with tempfile.TemporaryDirectory() as directory:
+            store = VRStateStore(Path(directory) / "vr_state.json")
+            state = store.load("TQQQ")
+            cycle = self._sample_cycle()
+            cycle.recurring_contribution = Decimal("500")
+            state.current_cycle = cycle
+            store.save(state)
+
+            loaded = store.load("TQQQ")
+            self.assertEqual(loaded.current_cycle.recurring_contribution, Decimal("500"))
+            self.assertIsInstance(loaded.current_cycle.recurring_contribution, Decimal)
+
+    def test_recurring_contribution_defaults_to_zero(self):
+        with tempfile.TemporaryDirectory() as directory:
+            store = VRStateStore(Path(directory) / "vr_state.json")
+            state = store.load("TQQQ")
+            state.current_cycle = self._sample_cycle()
+            store.save(state)
+
+            loaded = store.load("TQQQ")
+            self.assertEqual(loaded.current_cycle.recurring_contribution, Decimal("0"))
+
+    def test_pending_recurring_contribution_round_trips_when_set(self):
+        with tempfile.TemporaryDirectory() as directory:
+            store = VRStateStore(Path(directory) / "vr_state.json")
+            state = store.load("TQQQ")
+            state.pending_config = VRPendingConfig(recurring_contribution=Decimal("-200"))
+            store.save(state)
+
+            loaded = store.load("TQQQ")
+            self.assertEqual(loaded.pending_config.recurring_contribution, Decimal("-200"))
+
     def test_conditional_orders_round_trip(self):
         with tempfile.TemporaryDirectory() as directory:
             store = VRStateStore(Path(directory) / "vr_state.json")

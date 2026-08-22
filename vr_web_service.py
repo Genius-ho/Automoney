@@ -378,6 +378,7 @@ class VRWebServiceMixin:
         self, symbol: str, initial_pool: Decimal, G: Decimal, band_pct: Decimal,
         now: datetime | None = None,
         pool_usage_limit_pct: Decimal = vr_execution_policy.DEFAULT_POOL_USAGE_LIMIT_PCT,
+        recurring_contribution: Decimal = Decimal("0"),
     ) -> dict[str, Any]:
         symbol = symbol.upper()
         existing = self.vr_store.load(symbol)
@@ -402,6 +403,7 @@ class VRWebServiceMixin:
             cycle_id=f"{symbol}-c1", start_session=today.isoformat(),
             end_session=end_session.isoformat(), anchor_friday=anchor.isoformat(),
             pool_usage_limit_pct=pool_usage_limit_pct,
+            recurring_contribution=recurring_contribution,
         )
         _, _, buying_power = self._vr_fetch_account(symbol)
         available = self._vr_available_buying_power(symbol, initial_pool, buying_power)
@@ -483,6 +485,7 @@ class VRWebServiceMixin:
         self, symbol: str, G: Decimal | None = None,
         band_pct: Decimal | None = None, pool_adjustment: Decimal | None = None,
         pool_usage_limit_pct: Decimal | None = None,
+        recurring_contribution: Decimal | None = None,
     ) -> dict[str, Any]:
         symbol = symbol.upper()
         state = self.vr_store.load(symbol)
@@ -491,19 +494,21 @@ class VRWebServiceMixin:
         state = schedule_config(
             state, G=G, band_pct=band_pct, pool_adjustment=pool_adjustment,
             pool_usage_limit_pct=pool_usage_limit_pct,
+            recurring_contribution=recurring_contribution,
         )
         self.vr_store.save(state)
         return {"symbol": symbol, "pending_config": asdict(state.pending_config)}
 
     def vr_cancel_pending_config(
         self, symbol: str, *, G: bool = False, band_pct: bool = False,
-        pool_adjustment: bool = False, pool_usage_limit_pct: bool = False, all: bool = False,
+        pool_adjustment: bool = False, pool_usage_limit_pct: bool = False,
+        recurring_contribution: bool = False, all: bool = False,
     ) -> dict[str, Any]:
         symbol = symbol.upper()
         state = self.vr_store.load(symbol)
         state = cancel_pending_config(
             state, G=G, band_pct=band_pct, pool_adjustment=pool_adjustment,
-            pool_usage_limit_pct=pool_usage_limit_pct, all=all,
+            pool_usage_limit_pct=pool_usage_limit_pct, recurring_contribution=recurring_contribution, all=all,
         )
         self.vr_store.save(state)
         return {"symbol": symbol, "pending_config": asdict(state.pending_config)}
@@ -545,6 +550,7 @@ class VRWebServiceMixin:
                 "band_pct": None if state.pending_config.band_pct is None else str(state.pending_config.band_pct),
                 "pool_adjustment": None if state.pending_config.pool_adjustment is None else str(state.pending_config.pool_adjustment),
                 "pool_usage_limit_pct": None if state.pending_config.pool_usage_limit_pct is None else str(state.pending_config.pool_usage_limit_pct),
+                "recurring_contribution": None if state.pending_config.recurring_contribution is None else str(state.pending_config.recurring_contribution),
             },
             "conditional_orders": [
                 {**asdict(order), "trigger_price": str(order.trigger_price), "order_price": str(order.order_price)}
@@ -592,6 +598,7 @@ class VRWebServiceMixin:
                 "pool_start": str(cycle.pool_start),
                 "pool_current": str(cycle.pool_current),
                 "pool_usage_limit_pct": str(cycle.pool_usage_limit_pct),
+                "recurring_contribution": str(cycle.recurring_contribution),
                 # cycle_start_pool * pool_usage_limit_pct -- the BUY ladder's
                 # target (select_buy_ladder_length picks the logical rung
                 # count whose cumulative spend lands closest to this, never

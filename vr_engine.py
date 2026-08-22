@@ -53,6 +53,7 @@ def initialize_cycle(
     now: datetime | None = None,
     anchor_friday: str | None = None,
     pool_usage_limit_pct: Decimal = vr_execution_policy.DEFAULT_POOL_USAGE_LIMIT_PCT,
+    recurring_contribution: Decimal = Decimal("0"),
 ) -> VRState:
     """Build the VRState for a symbol's first VR_SKILL cycle.
 
@@ -63,6 +64,10 @@ def initialize_cycle(
     anchor_friday_on_or_after(start_date) result. pool_usage_limit_pct
     defaults to the book's accumulation-mode (적립식) 75% target; callers
     pass 0.50/0.25 for 거치식/인출식 or any other user-chosen fraction.
+    recurring_contribution is a fixed $ amount automatically added to Pool
+    at every FUTURE cycle transition (positive for 적립식, 0 for 거치식,
+    negative for 인출식) -- it never affects this first cycle's own pool,
+    only cycle 2 onward (see transition_cycle).
     """
     if initial_pool < 0:
         raise ValueError("Initial pool cannot be negative.")
@@ -87,6 +92,7 @@ def initialize_cycle(
         upper_band=upper,
         E_at_close=None,
         pool_usage_limit_pct=pool_usage_limit_pct,
+        recurring_contribution=recurring_contribution,
     )
     return VRState(
         symbol=symbol,
@@ -128,15 +134,16 @@ def schedule_config(
     band_pct: Decimal | None = None,
     pool_adjustment: Decimal | None = None,
     pool_usage_limit_pct: Decimal | None = None,
+    recurring_contribution: Decimal | None = None,
 ) -> VRState:
-    """Schedule G/Band/Pool/pool_usage_limit_pct changes for the NEXT cycle only.
+    """Schedule G/Band/Pool/pool_usage_limit_pct/recurring_contribution
+    changes for the NEXT cycle only.
 
     Never touches state.current_cycle -- the running cycle's orders, V, and
     Band are completely unaffected. Only fields explicitly passed here are
     written into pending_config; omitted fields keep whatever was already
-    pending (so G, Band, Pool, and pool_usage_limit_pct can each be
-    scheduled independently, at different times, without clobbering each
-    other).
+    pending (so each field can be scheduled independently, at different
+    times, without clobbering the others).
     """
     if G is not None and G <= 0:
         raise ValueError("G must be positive.")
@@ -158,12 +165,20 @@ def schedule_config(
             resolved_pool_usage_limit_pct = None
         else:
             resolved_pool_usage_limit_pct = pool_usage_limit_pct
+    resolved_recurring_contribution = state.pending_config.recurring_contribution
+    if recurring_contribution is not None:
+        current_cycle = state.current_cycle
+        if current_cycle is not None and recurring_contribution == current_cycle.recurring_contribution:
+            resolved_recurring_contribution = None
+        else:
+            resolved_recurring_contribution = recurring_contribution
     pending = replace(
         state.pending_config,
         G=G if G is not None else state.pending_config.G,
         band_pct=band_pct if band_pct is not None else state.pending_config.band_pct,
         pool_adjustment=pool_adjustment if pool_adjustment is not None else state.pending_config.pool_adjustment,
         pool_usage_limit_pct=resolved_pool_usage_limit_pct,
+        recurring_contribution=resolved_recurring_contribution,
     )
     return replace(state, pending_config=pending)
 
@@ -175,6 +190,7 @@ def cancel_pending_config(
     band_pct: bool = False,
     pool_adjustment: bool = False,
     pool_usage_limit_pct: bool = False,
+    recurring_contribution: bool = False,
     all: bool = False,
 ) -> VRState:
     """Cancel some or all pending config fields, reverting to 'no change
@@ -189,20 +205,22 @@ def cancel_pending_config(
         band_pct=None if band_pct else pending.band_pct,
         pool_adjustment=None if pool_adjustment else pending.pool_adjustment,
         pool_usage_limit_pct=None if pool_usage_limit_pct else pending.pool_usage_limit_pct,
+        recurring_contribution=None if recurring_contribution else pending.recurring_contribution,
     ))
 
 
-def promote_pending_config(state: VRState) -> tuple[Decimal, Decimal, Decimal, Decimal]:
-    """Resolve the G/band_pct/pool_adjustment/pool_usage_limit_pct to use
-    for the NEXT cycle.
+def promote_pending_config(state: VRState) -> tuple[Decimal, Decimal, Decimal, Decimal, Decimal]:
+    """Resolve the G/band_pct/pool_adjustment/pool_usage_limit_pct/
+    recurring_contribution to use for the NEXT cycle.
 
     Pending values win when set; otherwise the current cycle's values carry
-    forward unchanged (so G/Band/pool_usage_limit_pct stay identical cycle
-    after cycle until the user explicitly changes them). pool_adjustment is
-    0 when nothing is pending. This only *computes* the resolved values --
-    it does not mutate state or clear pending_config; the cycle-transition
-    state machine (later phase) is responsible for creating the new cycle
-    and clearing pending_config only once that succeeds.
+    forward unchanged (so G/Band/pool_usage_limit_pct/recurring_contribution
+    stay identical cycle after cycle until the user explicitly changes
+    them). pool_adjustment is 0 when nothing is pending (it's one-shot, not
+    carried forward like the others). This only *computes* the resolved
+    values -- it does not mutate state or clear pending_config; the
+    cycle-transition state machine is responsible for creating the new
+    cycle and clearing pending_config only once that succeeds.
     """
     current = state.current_cycle
     pending = state.pending_config
@@ -212,7 +230,10 @@ def promote_pending_config(state: VRState) -> tuple[Decimal, Decimal, Decimal, D
     new_pool_usage_limit_pct = (
         pending.pool_usage_limit_pct if pending.pool_usage_limit_pct is not None else current.pool_usage_limit_pct
     )
-    return new_g, new_band_pct, pool_adjustment, new_pool_usage_limit_pct
+    new_recurring_contribution = (
+        pending.recurring_contribution if pending.recurring_contribution is not None else current.recurring_contribution
+    )
+    return new_g, new_band_pct, pool_adjustment, new_pool_usage_limit_pct, new_recurring_contribution
 
 
 def apply_pool_adjustment(pool_current: Decimal, adjustment: Decimal) -> Decimal:
@@ -448,10 +469,13 @@ def transition_cycle(
     E = money(Decimal(final_qty) * close_price)
 
     # Steps 10-13: promote pending config (computed, not yet applied).
-    new_g, new_band_pct, pool_adjustment, new_pool_usage_limit_pct = promote_pending_config(state)
+    new_g, new_band_pct, pool_adjustment, new_pool_usage_limit_pct, new_recurring_contribution = promote_pending_config(state)
 
-    # Step 7/13: reconcile + apply the pending pool adjustment, if any.
-    reconciled_pool = apply_pool_adjustment(current.pool_current, pool_adjustment)
+    # Step 7/13: reconcile + apply the pending one-shot pool_adjustment
+    # together with the standing recurring_contribution (책의 적립식/거치식/
+    # 인출식 구분: +매 사이클 적립, 0, -매 사이클 인출) -- both feed the same
+    # Pool ledger before it's used in the V(next) formula below.
+    reconciled_pool = apply_pool_adjustment(current.pool_current, pool_adjustment + new_recurring_contribution)
 
     # Step 14: V_next via the skill formula -- the new G takes effect here.
     breakdown = next_v(current.V, E, reconciled_pool, new_g)
@@ -484,6 +508,7 @@ def transition_cycle(
         pool_start=reconciled_pool, pool_current=reconciled_pool,
         lower_band=lower, upper_band=upper, E_at_close=None,
         pool_usage_limit_pct=new_pool_usage_limit_pct,
+        recurring_contribution=new_recurring_contribution,
     )
 
     # Steps 18-21: plan, validate, and register the new cycle's full BUY/

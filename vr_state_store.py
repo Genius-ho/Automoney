@@ -54,6 +54,16 @@ class VRCycle:
     # for backward compatibility with cycles persisted before this field
     # existed (matches the previously-hardcoded DEFAULT_POOL_USAGE_LIMIT_PCT).
     pool_usage_limit_pct: Decimal = field(default_factory=lambda: Decimal("0.75"))
+    # Fixed $ amount automatically added to Pool at EVERY cycle transition
+    # (not one-shot like pool_adjustment below) -- the book's investment-mode
+    # distinction: 적립식/accumulation is positive (regular contribution),
+    # 거치식/lump-sum is 0 (default, no change), 인출식/withdrawal is negative
+    # (regular withdrawal). Carries forward unchanged cycle after cycle,
+    # same promotion pattern as G/band_pct/pool_usage_limit_pct, until the
+    # user explicitly reschedules it. Combined with pool_adjustment (the
+    # one-shot deposit/withdrawal) at transition time, not a substitute
+    # for it.
+    recurring_contribution: Decimal = field(default_factory=lambda: Decimal("0"))
 
 
 @dataclass
@@ -62,6 +72,7 @@ class VRPendingConfig:
     band_pct: Decimal | None = None
     pool_adjustment: Decimal | None = None
     pool_usage_limit_pct: Decimal | None = None
+    recurring_contribution: Decimal | None = None
 
 
 @dataclass
@@ -163,8 +174,9 @@ class VRStateStore:
             cycle["E_at_close"] = None if cycle["E_at_close"] is None else str(cycle["E_at_close"])
             cycle["planned_buy_spend"] = None if cycle["planned_buy_spend"] is None else str(cycle["planned_buy_spend"])
             cycle["pool_usage_limit_pct"] = str(cycle["pool_usage_limit_pct"])
+            cycle["recurring_contribution"] = str(cycle["recurring_contribution"])
         pending = asdict(state.pending_config)
-        for key in ("G", "band_pct", "pool_adjustment", "pool_usage_limit_pct"):
+        for key in ("G", "band_pct", "pool_adjustment", "pool_usage_limit_pct", "recurring_contribution"):
             pending[key] = None if pending[key] is None else str(pending[key])
         orders = []
         for order in state.conditional_orders:
@@ -206,6 +218,9 @@ class VRStateStore:
             # pool_usage_limit_pct -- default to the old hardcoded 0.75 so
             # they keep behaving exactly as before.
             cycle_raw["pool_usage_limit_pct"] = _dec(cycle_raw.get("pool_usage_limit_pct"), default="0.75")
+            # Legacy cycles never had recurring_contribution -- default to 0
+            # (거치식/no recurring change), matching prior behavior exactly.
+            cycle_raw["recurring_contribution"] = _dec(cycle_raw.get("recurring_contribution"), default="0")
             cycle = VRCycle(**cycle_raw)
 
         pending_raw = dict(raw.get("pending_config") or {})
@@ -214,6 +229,7 @@ class VRStateStore:
             band_pct=_opt_dec(pending_raw.get("band_pct")),
             pool_adjustment=_opt_dec(pending_raw.get("pool_adjustment")),
             pool_usage_limit_pct=_opt_dec(pending_raw.get("pool_usage_limit_pct")),
+            recurring_contribution=_opt_dec(pending_raw.get("recurring_contribution")),
         )
 
         orders = []

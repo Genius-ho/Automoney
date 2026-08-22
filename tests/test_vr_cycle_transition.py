@@ -249,6 +249,61 @@ class TransitionCycleHappyPathTests(unittest.TestCase):
         self.assertEqual(new_state.current_cycle.pool_start, Decimal("1531.51"))
         self.assertIsNone(new_state.pending_config.pool_adjustment)
 
+    def test_recurring_contribution_is_applied_every_transition_not_just_once(self):
+        # Unlike pool_adjustment (one-shot), recurring_contribution must
+        # keep applying at every future transition once scheduled, without
+        # being rescheduled each time.
+        broker = FakeConditionalOrderBroker()
+        state = schedule_config(_active_state(pool="1000"), recurring_contribution=Decimal("200"))
+        state, _ = transition_cycle(
+            broker=broker, state=state, symbol="TQQQ",
+            final_qty=100, close_price=Decimal("163.80"),
+            next_cycle_id="c2", next_start_session=date(2026, 8, 10),
+            next_end_session=date(2026, 8, 21),
+            available_buying_power=Decimal("10000"), available_sell_qty=100,
+        )
+        self.assertEqual(state.current_cycle.pool_start, Decimal("1200"))
+        self.assertEqual(state.current_cycle.recurring_contribution, Decimal("200"))
+        self.assertIsNone(state.pending_config.recurring_contribution)
+
+        broker2 = FakeConditionalOrderBroker()
+        state, _ = transition_cycle(
+            broker=broker2, state=state, symbol="TQQQ",
+            final_qty=100, close_price=Decimal("163.80"),
+            next_cycle_id="c3", next_start_session=date(2026, 8, 24),
+            next_end_session=date(2026, 9, 7),
+            available_buying_power=Decimal("10000"), available_sell_qty=100,
+        )
+        self.assertEqual(state.current_cycle.pool_start, Decimal("1400"))
+        self.assertEqual(state.current_cycle.recurring_contribution, Decimal("200"))
+
+    def test_recurring_contribution_and_one_shot_pool_adjustment_combine_at_the_same_transition(self):
+        broker = FakeConditionalOrderBroker()
+        state = _active_state(pool="1000")
+        state = schedule_config(state, recurring_contribution=Decimal("200"))
+        state = schedule_config(state, pool_adjustment=Decimal("50"))
+        new_state, _ = transition_cycle(
+            broker=broker, state=state, symbol="TQQQ",
+            final_qty=100, close_price=Decimal("163.80"),
+            next_cycle_id="c2", next_start_session=date(2026, 8, 10),
+            next_end_session=date(2026, 8, 21),
+            available_buying_power=Decimal("10000"), available_sell_qty=100,
+        )
+        self.assertEqual(new_state.current_cycle.pool_start, Decimal("1250"))
+        self.assertIsNone(new_state.pending_config.pool_adjustment)
+
+    def test_negative_recurring_contribution_withdraws_from_pool_at_transition(self):
+        broker = FakeConditionalOrderBroker()
+        state = schedule_config(_active_state(pool="1000"), recurring_contribution=Decimal("-200"))
+        new_state, _ = transition_cycle(
+            broker=broker, state=state, symbol="TQQQ",
+            final_qty=100, close_price=Decimal("163.80"),
+            next_cycle_id="c2", next_start_session=date(2026, 8, 10),
+            next_end_session=date(2026, 8, 21),
+            available_buying_power=Decimal("10000"), available_sell_qty=100,
+        )
+        self.assertEqual(new_state.current_cycle.pool_start, Decimal("800"))
+
     def test_new_conditional_orders_are_registered_with_next_cycle_expiry(self):
         broker = FakeConditionalOrderBroker()
         state = _active_state(V="18500", pool="1231.51")

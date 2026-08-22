@@ -53,6 +53,44 @@ class InitializeCyclePoolUsageLimitPctTests(unittest.TestCase):
             )
 
 
+class InitializeCycleRecurringContributionTests(unittest.TestCase):
+    def test_defaults_to_zero(self):
+        state = _active_state()
+        self.assertEqual(state.current_cycle.recurring_contribution, Decimal("0"))
+
+    def test_accepts_a_positive_recurring_contribution(self):
+        state = initialize_cycle(
+            symbol="TQQQ", position_qty=10, current_price=Decimal("110"),
+            initial_pool=Decimal("500"), G=Decimal("10"), band_pct=Decimal("15"),
+            cycle_id="c1", start_session="2026-08-07", end_session="2026-08-21",
+            recurring_contribution=Decimal("500"),
+        )
+        self.assertEqual(state.current_cycle.recurring_contribution, Decimal("500"))
+
+    def test_accepts_a_negative_recurring_contribution(self):
+        state = initialize_cycle(
+            symbol="TQQQ", position_qty=10, current_price=Decimal("110"),
+            initial_pool=Decimal("500"), G=Decimal("10"), band_pct=Decimal("15"),
+            cycle_id="c1", start_session="2026-08-07", end_session="2026-08-21",
+            recurring_contribution=Decimal("-200"),
+        )
+        self.assertEqual(state.current_cycle.recurring_contribution, Decimal("-200"))
+
+    def test_does_not_affect_pool_start_of_the_first_cycle(self):
+        # recurring_contribution only ever takes effect at a FUTURE
+        # transition (see transition_cycle) -- cycle 1's own pool_start is
+        # exactly initial_pool, regardless of what recurring_contribution
+        # is set to.
+        state = initialize_cycle(
+            symbol="TQQQ", position_qty=10, current_price=Decimal("110"),
+            initial_pool=Decimal("500"), G=Decimal("10"), band_pct=Decimal("15"),
+            cycle_id="c1", start_session="2026-08-07", end_session="2026-08-21",
+            recurring_contribution=Decimal("500"),
+        )
+        self.assertEqual(state.current_cycle.pool_start, Decimal("500"))
+        self.assertEqual(state.current_cycle.pool_current, Decimal("500"))
+
+
 class ScheduleConfigTests(unittest.TestCase):
     def test_scheduling_g_change_leaves_current_cycle_g_untouched(self):
         state = schedule_config(_active_state(), G=Decimal("20"))
@@ -111,6 +149,26 @@ class ScheduleConfigTests(unittest.TestCase):
         state = schedule_config(_active_state(), pool_usage_limit_pct=Decimal("0.25"))
         self.assertEqual(state.pending_config.pool_usage_limit_pct, Decimal("0.25"))
 
+    def test_scheduling_recurring_contribution_leaves_current_cycle_untouched(self):
+        state = schedule_config(_active_state(), recurring_contribution=Decimal("500"))
+        self.assertEqual(state.current_cycle.recurring_contribution, Decimal("0"))
+        self.assertEqual(state.pending_config.recurring_contribution, Decimal("500"))
+
+    def test_scheduling_a_negative_recurring_contribution(self):
+        state = schedule_config(_active_state(), recurring_contribution=Decimal("-200"))
+        self.assertEqual(state.pending_config.recurring_contribution, Decimal("-200"))
+
+    def test_reselecting_the_current_cycles_recurring_contribution_clears_any_stale_pending(self):
+        # Same "no redundant pending" behavior as pool_usage_limit_pct: the
+        # default active value is 0, so scheduling 500 then re-selecting 0
+        # (back to what's already active) clears pending instead of storing
+        # a no-op "pending 0".
+        state = _active_state()
+        state = schedule_config(state, recurring_contribution=Decimal("500"))
+        self.assertEqual(state.pending_config.recurring_contribution, Decimal("500"))
+        state = schedule_config(state, recurring_contribution=Decimal("0"))
+        self.assertIsNone(state.pending_config.recurring_contribution)
+
 
 class CancelPendingConfigTests(unittest.TestCase):
     def test_cancel_single_field(self):
@@ -124,10 +182,16 @@ class CancelPendingConfigTests(unittest.TestCase):
         state = cancel_pending_config(state, pool_usage_limit_pct=True)
         self.assertIsNone(state.pending_config.pool_usage_limit_pct)
 
+    def test_cancel_recurring_contribution(self):
+        state = schedule_config(_active_state(), recurring_contribution=Decimal("500"))
+        state = cancel_pending_config(state, recurring_contribution=True)
+        self.assertIsNone(state.pending_config.recurring_contribution)
+
     def test_cancel_all_fields(self):
         state = schedule_config(
             _active_state(), G=Decimal("20"), band_pct=Decimal("10"),
             pool_adjustment=Decimal("300"), pool_usage_limit_pct=Decimal("0.50"),
+            recurring_contribution=Decimal("500"),
         )
         state = cancel_pending_config(state, all=True)
         self.assertEqual(state.pending_config, VRPendingConfig())
@@ -136,45 +200,62 @@ class CancelPendingConfigTests(unittest.TestCase):
 class PromotePendingConfigTests(unittest.TestCase):
     def test_promote_uses_pending_g_when_set(self):
         state = schedule_config(_active_state(), G=Decimal("20"))
-        new_g, new_band, pool_adj, new_pool_usage = promote_pending_config(state)
+        new_g, new_band, pool_adj, new_pool_usage, new_recurring = promote_pending_config(state)
         self.assertEqual(new_g, Decimal("20"))
 
     def test_promote_falls_back_to_current_g_when_nothing_pending(self):
         state = _active_state(G="10")
-        new_g, new_band, pool_adj, new_pool_usage = promote_pending_config(state)
+        new_g, new_band, pool_adj, new_pool_usage, new_recurring = promote_pending_config(state)
         self.assertEqual(new_g, Decimal("10"))
 
     def test_g_stays_the_same_across_many_cycles_unless_changed(self):
         state = _active_state(G="10")
         for _ in range(5):
-            new_g, _, _, _ = promote_pending_config(state)
+            new_g, _, _, _, _ = promote_pending_config(state)
             self.assertEqual(new_g, Decimal("10"))
 
     def test_promote_falls_back_to_current_band_when_nothing_pending(self):
         state = _active_state(band_pct="15")
-        _, new_band, _, _ = promote_pending_config(state)
+        _, new_band, _, _, _ = promote_pending_config(state)
         self.assertEqual(new_band, Decimal("15"))
 
     def test_promote_pool_adjustment_defaults_to_zero_when_unset(self):
         state = _active_state()
-        _, _, pool_adj, _ = promote_pending_config(state)
+        _, _, pool_adj, _, _ = promote_pending_config(state)
         self.assertEqual(pool_adj, Decimal("0"))
 
     def test_promote_returns_pending_pool_adjustment_when_set(self):
         state = schedule_config(_active_state(), pool_adjustment=Decimal("300"))
-        _, _, pool_adj, _ = promote_pending_config(state)
+        _, _, pool_adj, _, _ = promote_pending_config(state)
         self.assertEqual(pool_adj, Decimal("300"))
 
     def test_promote_falls_back_to_current_pool_usage_limit_pct_when_nothing_pending(self):
         state = _active_state()
         self.assertEqual(state.current_cycle.pool_usage_limit_pct, Decimal("0.75"))
-        _, _, _, new_pool_usage = promote_pending_config(state)
+        _, _, _, new_pool_usage, _ = promote_pending_config(state)
         self.assertEqual(new_pool_usage, Decimal("0.75"))
 
     def test_promote_uses_pending_pool_usage_limit_pct_when_set(self):
         state = schedule_config(_active_state(), pool_usage_limit_pct=Decimal("0.50"))
-        _, _, _, new_pool_usage = promote_pending_config(state)
+        _, _, _, new_pool_usage, _ = promote_pending_config(state)
         self.assertEqual(new_pool_usage, Decimal("0.50"))
+
+    def test_promote_falls_back_to_current_recurring_contribution_when_nothing_pending(self):
+        state = _active_state()
+        self.assertEqual(state.current_cycle.recurring_contribution, Decimal("0"))
+        _, _, _, _, new_recurring = promote_pending_config(state)
+        self.assertEqual(new_recurring, Decimal("0"))
+
+    def test_promote_uses_pending_recurring_contribution_when_set(self):
+        state = schedule_config(_active_state(), recurring_contribution=Decimal("500"))
+        _, _, _, _, new_recurring = promote_pending_config(state)
+        self.assertEqual(new_recurring, Decimal("500"))
+
+    def test_recurring_contribution_stays_the_same_across_many_cycles_unless_changed(self):
+        state = schedule_config(_active_state(), recurring_contribution=Decimal("500"))
+        for _ in range(5):
+            _, _, _, _, new_recurring = promote_pending_config(state)
+            self.assertEqual(new_recurring, Decimal("500"))
 
 
 class ApplyPoolAdjustmentTests(unittest.TestCase):

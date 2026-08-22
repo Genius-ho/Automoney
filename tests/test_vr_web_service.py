@@ -381,6 +381,82 @@ class VRPoolUsageLimitPctWebServiceTests(unittest.TestCase):
             tempdir.cleanup()
 
 
+class VRRecurringContributionWebServiceTests(unittest.TestCase):
+    def test_vr_initialize_defaults_recurring_contribution_to_zero(self):
+        broker = IntegratedFakeBroker()
+        service, tempdir = _make_service(broker)
+        try:
+            broker.holdings["TQQQ"] = ("100", "105")
+            broker.prices["TQQQ"] = "110"
+            service.vr_initialize("TQQQ", Decimal("1000"), Decimal("10"), Decimal("15"))
+            state = service.vr_store.load("TQQQ")
+            self.assertEqual(state.current_cycle.recurring_contribution, Decimal("0"))
+        finally:
+            tempdir.cleanup()
+
+    def test_vr_initialize_accepts_an_explicit_recurring_contribution(self):
+        broker = IntegratedFakeBroker()
+        service, tempdir = _make_service(broker)
+        try:
+            broker.holdings["TQQQ"] = ("100", "105")
+            broker.prices["TQQQ"] = "110"
+            service.vr_initialize(
+                "TQQQ", Decimal("1000"), Decimal("10"), Decimal("15"),
+                recurring_contribution=Decimal("500"),
+            )
+            state = service.vr_store.load("TQQQ")
+            self.assertEqual(state.current_cycle.recurring_contribution, Decimal("500"))
+        finally:
+            tempdir.cleanup()
+
+    def test_vr_schedule_config_sets_pending_recurring_contribution(self):
+        broker = IntegratedFakeBroker()
+        service, tempdir = _make_service(broker)
+        try:
+            broker.holdings["TQQQ"] = ("100", "105")
+            broker.prices["TQQQ"] = "110"
+            service.vr_initialize("TQQQ", Decimal("1000"), Decimal("10"), Decimal("15"))
+            result = service.vr_schedule_config("TQQQ", recurring_contribution=Decimal("500"))
+            self.assertEqual(result["pending_config"]["recurring_contribution"], Decimal("500"))
+            state = service.vr_store.load("TQQQ")
+            self.assertEqual(state.pending_config.recurring_contribution, Decimal("500"))
+            self.assertEqual(state.current_cycle.recurring_contribution, Decimal("0"))
+        finally:
+            tempdir.cleanup()
+
+    def test_vr_cancel_pending_config_clears_recurring_contribution_only(self):
+        broker = IntegratedFakeBroker()
+        service, tempdir = _make_service(broker)
+        try:
+            broker.holdings["TQQQ"] = ("100", "105")
+            broker.prices["TQQQ"] = "110"
+            service.vr_initialize("TQQQ", Decimal("1000"), Decimal("10"), Decimal("15"))
+            service.vr_schedule_config("TQQQ", G=Decimal("20"), recurring_contribution=Decimal("500"))
+            service.vr_cancel_pending_config("TQQQ", recurring_contribution=True)
+            state = service.vr_store.load("TQQQ")
+            self.assertIsNone(state.pending_config.recurring_contribution)
+            self.assertEqual(state.pending_config.G, Decimal("20"))
+        finally:
+            tempdir.cleanup()
+
+    def test_vr_snapshot_reports_current_and_pending_recurring_contribution(self):
+        broker = IntegratedFakeBroker()
+        service, tempdir = _make_service(broker)
+        try:
+            broker.holdings["TQQQ"] = ("100", "105")
+            broker.prices["TQQQ"] = "110"
+            service.vr_initialize(
+                "TQQQ", Decimal("2000"), Decimal("10"), Decimal("15"),
+                recurring_contribution=Decimal("300"),
+            )
+            service.vr_schedule_config("TQQQ", recurring_contribution=Decimal("-100"))
+            snapshot = service.vr_snapshot("TQQQ")
+            self.assertEqual(snapshot["current_cycle"]["recurring_contribution"], "300")
+            self.assertEqual(snapshot["pending_config"]["recurring_contribution"], "-100")
+        finally:
+            tempdir.cleanup()
+
+
 class StrategyIsolationTests(unittest.TestCase):
     def test_vr_tick_never_touches_mumae_state_and_vice_versa(self):
         broker = IntegratedFakeBroker()
