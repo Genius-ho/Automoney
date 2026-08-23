@@ -5,7 +5,7 @@ from decimal import Decimal
 from pathlib import Path
 from unittest.mock import patch
 
-from web_gui.web_service import WebService
+from web_gui.web_service import WebService, resolve_plan_date
 
 _TODAY = date.today().isoformat()
 _YESTERDAY = (date.today() - timedelta(days=1)).isoformat()
@@ -50,6 +50,24 @@ class FakeMixedBroker(FakeBroker):
                 ]
             }
         }
+
+
+class FakeCalendarBroker(FakeBroker):
+    """Like FakeBroker, but with a real market calendar: `trading_days`
+    (a set of ISO date strings) are the only dates reported as having a
+    regularMarket session -- everything else (weekends/holidays) comes back
+    with no session, matching the real Toss calendar's shape."""
+
+    def __init__(self, trading_days):
+        self.trading_days = set(trading_days)
+
+    def get_us_market_calendar_raw(self, date_value):
+        if date_value in self.trading_days:
+            return {"result": {"today": {
+                "date": date_value,
+                "regularMarket": {"startTime": f"{date_value}T09:30:00-04:00", "endTime": f"{date_value}T16:00:00-04:00"},
+            }}}
+        return {"result": {"today": {"date": date_value}}}
 
 
 class WebServiceTests(unittest.TestCase):
@@ -358,6 +376,59 @@ class KnownSymbolsReconciliationTests(unittest.TestCase):
             WebService(Path(temp))  # first boot: nothing saved yet, nothing to reconcile
             path = Path(temp) / "runtime.json"
             self.assertFalse(path.exists())
+
+
+class ResolvePlanDateTests(unittest.TestCase):
+    """resolve_plan_date: a preview plan (build_plan's `today`) must never
+    be labeled with a non-trading calendar date -- e.g. build_plan's own
+    bare date.today() fallback would happily date a Sunday's preview
+    "2026-08-23", out of step with every other symbol whose plan already
+    stopped advancing at Friday's real session."""
+
+    def test_returns_today_unchanged_when_today_is_already_a_trading_day(self):
+        broker = FakeCalendarBroker(trading_days={"2026-08-21"})
+        self.assertEqual(resolve_plan_date(broker, today=date(2026, 8, 21)), date(2026, 8, 21))
+
+    def test_rolls_forward_from_a_weekend_to_the_next_real_trading_day(self):
+        broker = FakeCalendarBroker(trading_days={"2026-08-21", "2026-08-24"})
+        # 2026-08-22/23 are Sat/Sun -- next real session is Monday 2026-08-24.
+        self.assertEqual(resolve_plan_date(broker, today=date(2026, 8, 22)), date(2026, 8, 24))
+        self.assertEqual(resolve_plan_date(broker, today=date(2026, 8, 23)), date(2026, 8, 24))
+
+    def test_rolls_forward_past_a_holiday_too_not_just_weekends(self):
+        # 2026-08-24 is a Monday but a market holiday here; next real
+        # session is Tuesday 2026-08-25.
+        broker = FakeCalendarBroker(trading_days={"2026-08-21", "2026-08-25"})
+        self.assertEqual(resolve_plan_date(broker, today=date(2026, 8, 24)), date(2026, 8, 25))
+
+    def test_falls_back_to_a_local_weekday_skip_when_the_broker_has_no_calendar_support(self):
+        broker = FakeBroker()  # no get_us_market_calendar_raw at all
+        self.assertEqual(resolve_plan_date(broker, today=date(2026, 8, 21)), date(2026, 8, 21))  # Friday, untouched
+        self.assertEqual(resolve_plan_date(broker, today=date(2026, 8, 22)), date(2026, 8, 24))  # Saturday -> Monday
+        self.assertEqual(resolve_plan_date(broker, today=date(2026, 8, 23)), date(2026, 8, 24))  # Sunday -> Monday
+
+
+class RefreshAccountPlanDateTests(unittest.TestCase):
+    def test_refresh_account_uses_resolve_plan_date_when_no_plan_date_is_given(self):
+        with tempfile.TemporaryDirectory() as temp:
+            service = WebService(Path(temp), broker_factory=FakeBroker)
+            with patch("web_gui.web_service.time.sleep"), \
+                 patch("web_gui.web_service.resolve_plan_date", return_value=date(2026, 8, 24)) as mock_resolve:
+                result = service.refresh_account("TQQQ")
+
+            mock_resolve.assert_called_once()
+            order_ids = [order["id"] for order in result["orders"]]
+            self.assertTrue(order_ids, "expected at least one planned order")
+            self.assertTrue(all("20260824" in order_id for order_id in order_ids), order_ids)
+
+    def test_refresh_account_does_not_call_resolve_plan_date_when_plan_date_is_given_explicitly(self):
+        with tempfile.TemporaryDirectory() as temp:
+            service = WebService(Path(temp), broker_factory=FakeBroker)
+            with patch("web_gui.web_service.time.sleep"), \
+                 patch("web_gui.web_service.resolve_plan_date") as mock_resolve:
+                service.refresh_account("TQQQ", plan_date=date(2026, 8, 21))
+
+            mock_resolve.assert_not_called()
 
 
 if __name__ == "__main__":

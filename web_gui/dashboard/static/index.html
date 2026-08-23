@@ -1,8 +1,8 @@
 <!doctype html>
 <html lang="ko">
-<head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>무한매수 · 비상 관리</title><link rel="icon" href="data:,"><link rel="stylesheet" href="/styles.css"></head>
+<head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>무한매수 VR 투자 오토봇</title><link rel="icon" href="data:,"><link rel="stylesheet" href="/styles.css"></head>
 <body>
-  <header><div><p class="eyebrow">MUMAE WEB · EMERGENCY</p><h1 id="accountAlias">무한매수 계좌</h1></div><div class="connection"><span id="apiDot" class="dot"></span><div><b id="apiStatus">로그인 필요</b><small id="dataDir"></small></div></div></header>
+  <header><div><p class="eyebrow">무한매수 VR 투자 오토봇</p><h1 id="accountAlias">무한매수 계좌</h1></div><div class="connection"><span id="apiDot" class="dot"></span><div><b id="apiStatus">로그인 필요</b><small id="dataDir"></small></div></div></header>
   <main id="app" hidden>
     <p id="sessionWarning" class="warning session-warning" role="status" hidden></p>
     <section class="card index-strip" id="indexStrip" aria-label="주요 지수"></section>
@@ -105,6 +105,7 @@
         <button type="button" id="vrStartBtn">시작</button>
         <button type="button" id="vrStopBtn">중지</button>
         <button type="button" id="vrResetBtn" class="danger">VR 리셋</button>
+        <button type="button" id="vrCancelAllOrdersBtn" class="danger">VR 주문 일괄취소</button>
       </div>
 
       <details class="vr-chart" open>

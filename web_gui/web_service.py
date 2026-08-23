@@ -3,7 +3,7 @@ from __future__ import annotations
 
 import time
 from dataclasses import asdict, replace
-from datetime import date
+from datetime import date, timedelta
 from decimal import Decimal, InvalidOperation
 from pathlib import Path
 from typing import Any, Callable
@@ -14,6 +14,41 @@ from mumae_core import ETF_UNIVERSE, Mode, OrderIntent, StrategyState, attempt_a
 from runtime_store import RuntimeStore, get_strategy_type, prune_order_tracking
 from state_store import StateStore
 from toss_api import TossBroker
+
+# Mirrors vr_engine.py's own _MAX_HOLIDAY_LOOKBACK_DAYS -- how many calendar
+# days forward to search for a real US trading day before giving up.
+_MAX_TRADING_DAY_SEARCH_DAYS = 10
+
+
+def resolve_plan_date(broker: TossBroker, today: date | None = None) -> date:
+    """The trading day a fresh preview plan (build_plan's `today`) should be
+    dated/labeled for: today itself if it's a real US trading day, else the
+    next actual trading day on or after today -- e.g. a Saturday/Sunday/
+    holiday preview shows what the *next* real session's plan will look
+    like, rather than build_plan's own bare `date.today()` fallback, which
+    happily labels client_order_ids with a non-trading calendar date (never
+    wrong for order CONTENT, since nothing actually submits outside a real
+    trading session -- auto_tick's own session_key gate already prevents
+    that -- but misleading on the dashboard, and out of step with every
+    other symbol whose plan already advanced past the same weekend)."""
+    today = today or date.today()
+    if not hasattr(broker, "get_us_market_calendar_raw"):
+        # A broker test double without calendar support (common across this
+        # codebase's lighter-weight fakes) -- fall back to the bare
+        # weekday-skip approximation rather than crashing account refresh
+        # over a display-only date label.
+        if today.weekday() >= 5:  # Saturday=5, Sunday=6
+            today += timedelta(days=7 - today.weekday())
+        return today
+    for offset in range(_MAX_TRADING_DAY_SEARCH_DAYS):
+        candidate = today + timedelta(days=offset)
+        result = broker.get_us_market_calendar_raw(candidate.isoformat())
+        info = (result or {}).get("result", {}).get("today", {}) or {}
+        regular = info.get("regularMarket") or {}
+        if regular.get("startTime") and regular.get("endTime"):
+            resolved_raw = info.get("date")
+            return date.fromisoformat(resolved_raw) if resolved_raw else candidate
+    raise RuntimeError(f"No US trading day found within {_MAX_TRADING_DAY_SEARCH_DAYS} days of {today.isoformat()}.")
 
 
 def _text_decimal(value: Any, default: str = "0") -> Decimal:
@@ -268,6 +303,8 @@ class WebService:
     def refresh_account(self, symbol: str, plan_date: date | None = None) -> dict[str, Any]:
         symbol = symbol.upper()
         broker = self.broker()
+        if plan_date is None:
+            plan_date = resolve_plan_date(broker)
         holding_rows = {
             ticker: row
             for ticker, row in _collect_symbol_rows(broker.get_holdings_raw()).items()

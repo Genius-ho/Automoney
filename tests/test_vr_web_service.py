@@ -8,6 +8,7 @@ from decimal import Decimal
 from pathlib import Path
 
 import vr_execution_policy
+import vr_web_service
 from runtime_store import get_strategy_type, set_strategy_type
 from vr_engine import CycleTransitionBlocked
 from vr_execution_policy import BrokerCapacityExceededError, BrokerCapacityUnknownError, SellReservationUnknownError
@@ -270,6 +271,199 @@ class VRResetTests(unittest.TestCase):
             service.vr_reset("TQQQ")
 
             self.assertEqual(get_strategy_type(service.runtime, "TQQQ"), "VR_SKILL")
+        finally:
+            tempdir.cleanup()
+
+
+class VRCancelAllOrdersTests(unittest.TestCase):
+    """vr_cancel_all_orders: an on-demand bulk cancel of every OPEN VR
+    conditional order, independent of a cycle transition -- e.g. to clear
+    the way for vr_reset/can_switch_strategy without waiting for the cycle
+    to end (see vr_reset's own OPEN-order refusal)."""
+
+    def test_cancels_every_open_order_and_marks_them_cancelled(self):
+        broker = IntegratedFakeBroker(mode="LIVE")
+        service, tempdir = _make_service(broker)
+        try:
+            broker.holdings["TQQQ"] = ("100", "105")
+            broker.prices["TQQQ"] = "110"
+            service.vr_initialize("TQQQ", Decimal("1000"), Decimal("10"), Decimal("15"))
+            state_before = service.vr_store.load("TQQQ")
+            open_ids = [o.conditional_order_id for o in state_before.conditional_orders if o.status == "OPEN"]
+            self.assertGreater(len(open_ids), 0)
+
+            result = service.vr_cancel_all_orders("TQQQ")
+
+            self.assertEqual(result["cancelled_count"], len(open_ids))
+            self.assertEqual(result["total_open_before"], len(open_ids))
+            for conditional_order_id in open_ids:
+                self.assertIn(conditional_order_id, broker.cancelled_conditional_order_ids)
+                self.assertNotIn(conditional_order_id, broker.conditional_orders)
+            state_after = service.vr_store.load("TQQQ")
+            self.assertTrue(all(o.status == "CANCELLED" for o in state_after.conditional_orders))
+            # Cleared this way, vr_reset (which refuses on any OPEN order)
+            # must now succeed -- the actual motivating use case.
+            reset_result = service.vr_reset("TQQQ")
+            self.assertEqual(reset_result["status"], "UNINITIALIZED")
+        finally:
+            tempdir.cleanup()
+
+    def test_no_open_orders_is_a_no_op_not_an_error(self):
+        broker = IntegratedFakeBroker(mode="LIVE")
+        service, tempdir = _make_service(broker)
+        try:
+            result = service.vr_cancel_all_orders("TQQQ")
+            self.assertEqual(result["cancelled_count"], 0)
+            self.assertEqual(result["total_open_before"], 0)
+        finally:
+            tempdir.cleanup()
+
+    def test_skips_the_resync_entirely_when_there_are_no_open_orders(self):
+        broker = IntegratedFakeBroker(mode="LIVE")
+        service, tempdir = _make_service(broker)
+        try:
+            with unittest.mock.patch.object(service, "vr_sync_orders") as mock_sync:
+                service.vr_cancel_all_orders("TQQQ")
+            mock_sync.assert_not_called()
+        finally:
+            tempdir.cleanup()
+
+    def test_refuses_when_the_internal_resync_itself_hits_unknown_conditional_status(self):
+        """If vr_sync_orders can't fully reconcile every order (e.g. a
+        triggered regular order has an unrecognized field) it returns early
+        WITHOUT applying its partial reconciliation to state.conditional_
+        orders -- vr_cancel_all_orders must refuse rather than cancel
+        against that incompletely-reconciled state, since an order the sync
+        never reached could in fact already be filled at the broker."""
+        broker = IntegratedFakeBroker(mode="LIVE")
+        service, tempdir = _make_service(broker)
+        try:
+            broker.holdings["TQQQ"] = ("100", "105")
+            broker.prices["TQQQ"] = "110"
+            service.vr_initialize("TQQQ", Decimal("1000"), Decimal("10"), Decimal("15"))
+            state = service.vr_store.load("TQQQ")
+            bad_id = state.conditional_orders[0].conditional_order_id
+            regular_order_id = broker.trigger_and_fill(bad_id, state.conditional_orders[0].quantity)
+            for row in broker.closed_orders:
+                if row["orderId"] == regular_order_id:
+                    row["side"] = "BOGUS"  # unrecognized -- trips UnknownConditionalOrderStatusError
+
+            with self.assertRaises(ValueError):
+                service.vr_cancel_all_orders("TQQQ")
+
+            state_after = service.vr_store.load("TQQQ")
+            self.assertEqual(state_after.status, "UNKNOWN_CONDITIONAL_STATUS")
+            self.assertEqual(len(broker.cancelled_conditional_order_ids), 0)
+        finally:
+            tempdir.cleanup()
+
+    def test_already_terminal_orders_are_left_untouched(self):
+        broker = IntegratedFakeBroker(mode="LIVE")
+        service, tempdir = _make_service(broker)
+        try:
+            broker.holdings["TQQQ"] = ("100", "105")
+            broker.prices["TQQQ"] = "110"
+            service.vr_initialize("TQQQ", Decimal("1000"), Decimal("10"), Decimal("15"))
+            state = service.vr_store.load("TQQQ")
+            first_id = state.conditional_orders[0].conditional_order_id
+            broker.trigger_and_fill(first_id, state.conditional_orders[0].quantity)
+            service.vr_sync_orders("TQQQ")
+            state = service.vr_store.load("TQQQ")
+            filled_order = next(o for o in state.conditional_orders if o.conditional_order_id == first_id)
+            self.assertEqual(filled_order.status, "FILLED")
+            open_ids_before = [o.conditional_order_id for o in state.conditional_orders if o.status == "OPEN"]
+
+            result = service.vr_cancel_all_orders("TQQQ")
+
+            self.assertEqual(result["cancelled_count"], len(open_ids_before))
+            state_after = service.vr_store.load("TQQQ")
+            still_filled = next(o for o in state_after.conditional_orders if o.conditional_order_id == first_id)
+            self.assertEqual(still_filled.status, "FILLED")
+        finally:
+            tempdir.cleanup()
+
+    def test_resyncs_first_so_a_locally_stale_filled_order_is_not_mismarked_cancelled(self):
+        """Without an internal resync, vr_cancel_all_orders would see this
+        order as locally OPEN (never having been synced), DELETE it (the
+        fake broker still has the row and returns 204, just like a real
+        already-filled order could still legitimately be deleted or 404 --
+        either way cancel_and_confirm treats it as confirmed), and mark it
+        CANCELLED -- permanently losing the fill and its Pool impact. This
+        reproduces that exact scenario by never calling vr_sync_orders
+        manually first, relying only on vr_cancel_all_orders's own
+        resync."""
+        broker = IntegratedFakeBroker(mode="LIVE")
+        service, tempdir = _make_service(broker)
+        try:
+            broker.holdings["TQQQ"] = ("100", "105")
+            broker.prices["TQQQ"] = "110"
+            service.vr_initialize("TQQQ", Decimal("1000"), Decimal("10"), Decimal("15"))
+            state = service.vr_store.load("TQQQ")
+            first_id = state.conditional_orders[0].conditional_order_id
+            first_quantity = state.conditional_orders[0].quantity
+            broker.trigger_and_fill(first_id, first_quantity)  # filled at the broker; local state still says OPEN
+
+            service.vr_cancel_all_orders("TQQQ")
+
+            state_after = service.vr_store.load("TQQQ")
+            filled_order = next(o for o in state_after.conditional_orders if o.conditional_order_id == first_id)
+            self.assertEqual(filled_order.status, "FILLED")
+            self.assertNotIn(first_id, broker.cancelled_conditional_order_ids)
+            self.assertGreater(len(state_after.applied_fill_order_ids), 0)
+        finally:
+            tempdir.cleanup()
+
+    def test_refuses_while_cycle_transition_is_in_progress(self):
+        broker = IntegratedFakeBroker(mode="LIVE")
+        service, tempdir = _make_service(broker)
+        try:
+            broker.holdings["TQQQ"] = ("100", "105")
+            broker.prices["TQQQ"] = "110"
+            service.vr_initialize("TQQQ", Decimal("1000"), Decimal("10"), Decimal("15"))
+            state = service.vr_store.load("TQQQ")
+            state.status = "CYCLE_TRANSITION_IN_PROGRESS"
+            service.vr_store.save(state)
+
+            with self.assertRaises(ValueError):
+                service.vr_cancel_all_orders("TQQQ")
+
+            # Nothing was cancelled -- the in-progress transition still owns
+            # every one of these orders.
+            self.assertEqual(len(broker.cancelled_conditional_order_ids), 0)
+        finally:
+            tempdir.cleanup()
+
+    def test_partial_failure_still_persists_orders_already_confirmed_cancelled(self):
+        broker = IntegratedFakeBroker(mode="LIVE")
+        service, tempdir = _make_service(broker)
+        try:
+            broker.holdings["TQQQ"] = ("100", "105")
+            broker.prices["TQQQ"] = "110"
+            service.vr_initialize("TQQQ", Decimal("1000"), Decimal("10"), Decimal("15"))
+            state = service.vr_store.load("TQQQ")
+            open_ids = [o.conditional_order_id for o in state.conditional_orders if o.status == "OPEN"]
+            self.assertGreaterEqual(len(open_ids), 2)
+            failing_id = open_ids[1]
+
+            real_cancel_and_confirm = vr_web_service.cancel_and_confirm
+
+            def flaky_cancel(broker_arg, conditional_order_id):
+                if conditional_order_id == failing_id:
+                    from toss_api import TossApiError
+                    raise vr_execution_policy.CancellationNotConfirmedError(
+                        f"Conditional order {conditional_order_id} cancellation failed: "
+                        + str(TossApiError("Toss API HTTP 500: internal error"))
+                    )
+                return real_cancel_and_confirm(broker_arg, conditional_order_id)
+
+            with unittest.mock.patch.object(vr_web_service, "cancel_and_confirm", side_effect=flaky_cancel):
+                with self.assertRaises(ValueError):
+                    service.vr_cancel_all_orders("TQQQ")
+
+            state_after = service.vr_store.load("TQQQ")
+            by_id = {o.conditional_order_id: o for o in state_after.conditional_orders}
+            self.assertEqual(by_id[open_ids[0]].status, "CANCELLED")
+            self.assertEqual(by_id[failing_id].status, "OPEN")
         finally:
             tempdir.cleanup()
 

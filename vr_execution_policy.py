@@ -115,12 +115,20 @@ SELL_RESERVATION_OTHER = "OTHER"
 
 # Whether registering multiple concurrent SELL conditional orders for the
 # same symbol actually reserves/holds sellable quantity against double-
-# selling (GET /api/v1/sellable-quantity), or only checks it at trigger
-# time. Not documented in the official spec, not yet empirically tested.
-# UNKNOWN blocks arming any ladder with a nonzero SELL leg count on a LIVE
-# broker -- same fail-closed spirit as capacity, kept as a separate gate
-# since it's a distinct, independently-confirmable fact about the broker.
-CONDITIONAL_SELL_RESERVATION_BEHAVIOR: str = SELL_RESERVATION_UNKNOWN
+# selling, or only checks it at trigger time. Not documented in the official
+# spec -- empirically confirmed live (smoke_sell_reservation_test.py, TQQQ,
+# real account, 2026-08-22, market session CLOSED): with a 126-share
+# position and Order A already an OPEN SELL conditional order for all 126
+# shares, Order B (+1 share, distinct deep-OTM trigger) was ACCEPTED, not
+# rejected -- Toss does NOT block/reserve sellable quantity against
+# concurrent OPEN SELL conditional orders at CREATE time. (Both test orders
+# were cancelled immediately after the observation; see
+# smoke_artifacts/TQQQ-sellres-stage2-*.json, redacted, for the full
+# request/response evidence, run from the automoney-dev checkout.) Whether
+# Toss instead enforces this at trigger time was NOT tested (would require
+# letting an order actually fire) -- callers must not assume any trigger-
+# time protection beyond what this constant records.
+CONDITIONAL_SELL_RESERVATION_BEHAVIOR: str = SELL_RESERVATION_DOES_NOT_RESERVE_UNTIL_TRIGGER
 
 # Pure runaway-loop guard for buy_ladder_prices' search -- not a business
 # rule. Should never bind for realistic Pool/price ratios (the book's

@@ -49,7 +49,9 @@ from vr_execution_policy import (
     BrokerCapacityBlockedError,
     BrokerCapacityExceededError,
     BrokerCapacityUnknownError,
+    CancellationNotConfirmedError,
     SellReservationUnknownError,
+    cancel_and_confirm,
 )
 from vr_formula import band
 from vr_funds_ledger import FundsReservationLedger, available_vr_buying_power
@@ -69,6 +71,19 @@ _NO_NEW_ORDER_STATUSES = {
     "BROKER_CONDITIONAL_CAPACITY_UNKNOWN", "BROKER_CONDITIONAL_CAPACITY_EXCEEDED",
     "SELL_RESERVATION_UNKNOWN",
 }
+
+
+def _open_conditional_order_ids(state: VRState) -> list[str]:
+    """conditional_order_id for every order in state.conditional_orders
+    whose status is OPEN and whose broker id is known -- the single shared
+    "which orders still need cancelling" definition used by both a manual
+    bulk cancel (vr_cancel_all_orders) and a cycle transition's own
+    cancellation (_vr_run_transition), so the two can never silently
+    disagree about what counts as cancellable."""
+    return [
+        order.conditional_order_id for order in state.conditional_orders
+        if order.status == "OPEN" and order.conditional_order_id
+    ]
 
 
 class VRWebServiceMixin:
@@ -257,6 +272,83 @@ class VRWebServiceMixin:
         # rung (no rearm; see vr_execution_policy's module docstring).
         return {"symbol": symbol, "orders": [asdict(o) for o in state.conditional_orders], "synced": True}
 
+    def vr_cancel_all_orders(self, symbol: str) -> dict[str, Any]:
+        """On-demand bulk cancel of every currently-OPEN VR conditional
+        order for `symbol`, independent of a cycle transition -- e.g. to
+        clear the way for can_switch_strategy/vr_reset without waiting for
+        the cycle to end. Refuses while a cycle transition is already in
+        progress (that sequence owns cancellation itself and must be
+        resumed, not raced). A no-op (skips the resync below entirely) when
+        local state already shows zero OPEN orders -- there is nothing this
+        call could safely act on either way.
+
+        Otherwise resyncs against the broker first (vr_sync_orders) so a
+        locally-stale OPEN order that actually already triggered/filled at
+        Toss is reconciled (status + Pool impact) before any DELETE is
+        attempted -- without this, that order's DELETE could 404
+        (cancel_and_confirm treats any 404 as a confirmed cancellation) and
+        get mismarked CANCELLED, silently losing its fill from Pool
+        bookkeeping. If that resync itself cannot fully reconcile every
+        order (state.status becomes UNKNOWN_CONDITIONAL_STATUS -- see
+        vr_sync_orders), refuses rather than cancelling against
+        incompletely-reconciled state: some orders may still show their
+        pre-sync OPEN status purely because the sync loop never reached
+        them, which is exactly the stale-state risk this resync exists to
+        close, not something to paper over by cancelling anyway.
+
+        Cancels one order at a time via the same cancel_and_confirm() the
+        transition path (cancel_cycle_orders) relies on, then persists
+        state once at the end (in a finally, so a failure partway through
+        still records every order actually confirmed cancelled before the
+        failure) -- on top of whatever vr_sync_orders itself may already
+        have persisted above (it saves on its own whenever it reconciles
+        anything), so this is the second, not necessarily the only, save
+        of this call. Per-order persistence during the cancel loop itself
+        would still buy no extra correctness beyond that: like
+        cancel_cycle_orders, this relies on cancel_and_confirm's own
+        404-is-confirmed idempotency -- a retry after a crash or a partial
+        failure just re-DELETEs whatever is still locally OPEN and
+        converges to the same result."""
+        symbol = symbol.upper()
+        state = self.vr_store.load(symbol)
+        if state.status == "CYCLE_TRANSITION_IN_PROGRESS":
+            raise ValueError(f"{symbol}: 사이클 전환이 진행 중입니다. 먼저 전환이 끝나거나 재개되게 하세요.")
+        if not _open_conditional_order_ids(state):
+            return {
+                "symbol": symbol, "cancelled_count": 0, "total_open_before": 0,
+                "orders": [asdict(o) for o in state.conditional_orders],
+            }
+        self.vr_sync_orders(symbol)
+        state = self.vr_store.load(symbol)
+        if state.status == "UNKNOWN_CONDITIONAL_STATUS":
+            raise ValueError(
+                f"{symbol}: 재동기화 중 알 수 없는 조건주문 상태가 발견되어 취소를 진행하지 않습니다. "
+                f"먼저 원인을 확인하세요: {state.blocked_reason}"
+            )
+        broker = self.broker()
+        open_ids = _open_conditional_order_ids(state)
+        cancelled_ids: set[str] = set()
+        error: CancellationNotConfirmedError | None = None
+        try:
+            for conditional_order_id in open_ids:
+                cancel_and_confirm(broker, conditional_order_id)
+                cancelled_ids.add(conditional_order_id)
+        except CancellationNotConfirmedError as raised:
+            error = raised
+        finally:
+            if cancelled_ids:
+                state.conditional_orders = [
+                    replace(order, status="CANCELLED") if order.conditional_order_id in cancelled_ids else order
+                    for order in state.conditional_orders
+                ]
+                self.vr_store.save(state)
+        if error is not None:
+            raise ValueError(f"{symbol}: {len(cancelled_ids)}/{len(open_ids)}건 취소 후 실패: {error}") from error
+        return {
+            "symbol": symbol, "cancelled_count": len(cancelled_ids), "total_open_before": len(open_ids),
+            "orders": [asdict(o) for o in state.conditional_orders],
+        }
+
     # --- biweekly cycle transition, with crash-safe resume ------------------
 
     def _vr_confirmed_close_price(self, symbol: str, session_date: date) -> Decimal | None:
@@ -273,10 +365,7 @@ class VRWebServiceMixin:
 
     def _vr_run_transition(self, symbol: str, state: VRState, now: datetime) -> None:
         broker = self.broker()
-        open_ids = [
-            order.conditional_order_id for order in state.conditional_orders
-            if order.status == "OPEN" and order.conditional_order_id
-        ]
+        open_ids = _open_conditional_order_ids(state)
         try:
             cancel_cycle_orders(broker, open_ids, still_open_after_sync=False)
         except CycleTransitionBlocked as error:

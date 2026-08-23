@@ -142,6 +142,51 @@ class VRDispatchTests(unittest.TestCase):
             with self.assertRaises(ValueError):
                 engine.execute("vr.reset", {"symbol": "TQQQ"}, source="TEST", actor="tester")
 
+    def test_vr_cancel_all_orders_via_dispatch_unblocks_reset(self):
+        with tempfile.TemporaryDirectory() as temp:
+            broker = VRFakeBroker(mode="LIVE")
+            engine = ApplicationEngine(Path(temp), broker_factory=lambda: broker)
+            with patch.dict(os.environ, {"MUMAE_WEB_LIVE_ACTIONS": "I_UNDERSTAND_WEB_LIVE_TRADING"}), \
+                 patch.object(
+                     vr_execution_policy, "VERIFIED_CAPACITY",
+                     vr_execution_policy.ConditionalOrderCapacity(verified_max=1000, scope=vr_execution_policy.CAPACITY_SCOPE_ACCOUNT, verified_at="2026-08-21", source="test"),
+                 ), \
+                 patch.object(vr_execution_policy, "CONDITIONAL_SELL_RESERVATION_BEHAVIOR", vr_execution_policy.SELL_RESERVATION_RESERVES_QUANTITY):
+                engine.execute(
+                    "vr.initialize",
+                    {"symbol": "TQQQ", "initial_pool": "1000", "G": "10", "band_pct": "15"},
+                    source="TEST", actor="tester",
+                )
+
+                # vr.reset refuses while orders are still OPEN...
+                with self.assertRaises(ValueError):
+                    engine.execute("vr.reset", {"symbol": "TQQQ"}, source="TEST", actor="tester")
+
+                # VRFakeBroker's conditional-orders GET always returns an
+                # empty list, so the resync vr_cancel_all_orders now does
+                # before cancelling (see review fix) already reconciles
+                # every locally-OPEN order to CANCELLED via vr_sync_orders'
+                # own "missing from both OPEN/CLOSED lists" handling --
+                # nothing is left for the cancel loop itself to act on,
+                # hence cancelled_count == 0 even though the orders are in
+                # fact all gone by the time this call returns.
+                cancel_result = engine.execute("vr.cancel_all_orders", {"symbol": "TQQQ"}, source="TEST", actor="tester")
+                self.assertEqual(cancel_result["cancelled_count"], 0)
+                self.assertFalse(any(o["status"] == "OPEN" for o in cancel_result["orders"]))
+
+                # ...and now succeeds once they're all cancelled.
+                reset_result = engine.execute("vr.reset", {"symbol": "TQQQ"}, source="TEST", actor="tester")
+                self.assertEqual(reset_result["status"], "UNINITIALIZED")
+
+    def test_vr_cancel_all_orders_blocked_in_live_without_web_live_actions_ack(self):
+        with tempfile.TemporaryDirectory() as temp:
+            broker = VRFakeBroker(mode="LIVE")
+            engine = ApplicationEngine(Path(temp), broker_factory=lambda: broker)
+            with patch.dict(os.environ, {}, clear=False):
+                os.environ.pop("MUMAE_WEB_LIVE_ACTIONS", None)
+                with self.assertRaises(LiveActionsRequiredError):
+                    engine.execute("vr.cancel_all_orders", {"symbol": "TQQQ"}, source="TEST", actor="tester")
+
     def test_vr_schedule_config_and_cancel_via_dispatch(self):
         with tempfile.TemporaryDirectory() as temp:
             broker = VRFakeBroker()

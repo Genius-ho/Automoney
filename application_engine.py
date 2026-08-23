@@ -4,6 +4,7 @@ from __future__ import annotations
 import os
 import threading
 from dataclasses import asdict
+from datetime import date, timedelta
 from decimal import Decimal
 from pathlib import Path
 from typing import Any, Callable
@@ -180,14 +181,24 @@ class ApplicationEngine(TradingWebService):
         }
 
     def snapshot(self, symbol: str) -> dict[str, Any]:
-        """Return the latest engine-owned state without contacting the broker."""
+        """Return the latest engine-owned state without contacting the
+        broker. Deliberately does not call resolve_plan_date (that needs a
+        market-calendar broker call) -- instead just rolls a weekend
+        calendar date forward to the following Monday (weekday()>=5), a
+        local, broker-free approximation that fixes the common weekend case
+        without covering US market holidays. Good enough for a preview that
+        never itself submits anything (only account.refresh/auto_tick do,
+        both correctly session-gated already)."""
         symbol = symbol.upper()
         state = self.load_state(symbol)
         current: Decimal | None = None
         previous: Decimal | None = None
         if symbol in self.quote_cache:
             current, previous = self.quote_cache[symbol]
-        return self.dashboard(state, current, previous)
+        plan_date = date.today()
+        if plan_date.weekday() >= 5:  # Saturday=5, Sunday=6
+            plan_date += timedelta(days=7 - plan_date.weekday())
+        return self.dashboard(state, current, previous, plan_date=plan_date)
 
     def audit_entries(self) -> list[dict[str, Any]]:
         return self.audit.entries()
@@ -324,6 +335,11 @@ class ApplicationEngine(TradingWebService):
         symbol = str(payload.get("symbol", "")).upper()
         return self.vr_reset(symbol)
 
+    def _vr_cancel_all_orders(self, payload: dict[str, Any]) -> dict[str, Any]:
+        self._require_settings_gate("vr.cancel_all_orders")
+        symbol = str(payload.get("symbol", "")).upper()
+        return self.vr_cancel_all_orders(symbol)
+
     def _vr_schedule_config(self, payload: dict[str, Any]) -> dict[str, Any]:
         self._require_settings_gate("vr.schedule_config")
         symbol = str(payload.get("symbol", "")).upper()
@@ -437,6 +453,8 @@ class ApplicationEngine(TradingWebService):
             return self.vr_stop(symbol)
         if command == "vr.reset":
             return self._vr_reset(payload)
+        if command == "vr.cancel_all_orders":
+            return self._vr_cancel_all_orders(payload)
         if command == "vr.schedule_config":
             return self._vr_schedule_config(payload)
         if command == "vr.cancel_pending_config":

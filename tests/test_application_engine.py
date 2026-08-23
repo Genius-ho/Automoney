@@ -100,6 +100,27 @@ class ApplicationEngineAccountTests(unittest.TestCase):
             self.assertEqual(result["state"]["symbol"], "TQQQ")
             self.assertEqual(result["state"]["t_value"], "0")
 
+    def test_snapshot_labels_a_weekend_preview_with_the_following_monday(self):
+        """snapshot() is documented to never contact the broker, so it can't
+        use resolve_plan_date's market-calendar lookup -- it must still not
+        label a fresh order with a non-trading Saturday/Sunday date the way
+        build_plan's own bare date.today() fallback would."""
+        with tempfile.TemporaryDirectory() as temp:
+            broker = MixedAccountBroker()
+            engine = ApplicationEngine(Path(temp), broker_factory=lambda: broker)
+            engine.refresh_account("TQQQ")  # populates state + quote_cache
+
+            with patch("application_engine.date") as mock_date:
+                mock_date.today.return_value = date(2026, 8, 23)  # Sunday
+                mock_date.side_effect = lambda *a, **kw: date(*a, **kw)
+                result = engine.snapshot("TQQQ")
+
+            order_ids = [order["id"] for order in result["orders"]]
+            self.assertTrue(order_ids, "expected at least one planned order")
+            self.assertTrue(all("20260824" in order_id for order_id in order_ids), order_ids)
+            self.assertFalse(any("20260823" in order_id for order_id in order_ids), order_ids)
+
+
 class LinuxEnvironmentCredentialTests(unittest.TestCase):
     def test_engine_reads_systemd_toss_credentials_from_environment(self):
         with tempfile.TemporaryDirectory() as temp:
