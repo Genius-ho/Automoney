@@ -59,19 +59,33 @@ export function calculateNaverWinnerScore({ mySalePrice, lowestPrice, competitor
 // 대신 사용자 결정: NAVER API HUB의 쇼핑 인사이트(카테고리/키워드 클릭 트렌드)로
 // "꾸준히 높은 클릭 트렌드인지" + "최근 상승 추세인지" 두 신호를 본다.
 // startDate로부터 monthsBack개월치 월간 ratio(0~100, 그 구간 내 상대값)를 받아
-// 평균(꾸준함)과 초반 대비 후반 성장률(상승세)을 계산한다. category는 네이버쇼핑
-// cat_id -- 필수 파라미터라 없으면 이 함수를 호출하지 않는 게 caller의 책임
-// (product-link-analysis.mjs는 category를 모르면 그냥 건너뛰고 중립 프록시로
-// 남긴다).
+// 최근 6개월 평균(꾸준함)과 초반 대비 후반 성장률(momentum 기반 상승세 근사치)을
+// 계산한다. category는 네이버쇼핑 cat_id -- 필수 파라미터라 없으면 이 함수를
+// 호출하지 않는 게 caller의 책임 (product-link-analysis.mjs는 category를
+// 모르면 그냥 건너뛰고 중립 프록시로 남긴다).
+//
+// 2026-08-23 사용자 지적: "지금부터 2달 뒤"를 알려면 momentum 근사치보다 나은
+// 신호가 있다 -- 10개월 전과 12개월 전은 정확히 "2달 뒤"와 "지금"의 작년
+// 같은 달(month)이다 (10 = 12 - 2). 그래서 작년에 그 두 달 사이 클릭 트렌드가
+// 올랐다면, 계절성(매년 반복되는 수요 패턴)상 올해도 지금부터 2달 뒤에 오를
+// 가능성이 momentum 근사치보다 직접적인 힌트가 된다. monthsBack을 13으로
+// 늘려 이 계절성 신호(seasonalGrowth)를 같이 계산하고, 작년 데이터가 없는
+// (신상품 등) 경우엔 null로 둬서 caller가 momentum 근사치로 대체할 수 있게
+// 한다.
 export async function checkNaverTrendLive(client, keyword, category, {
   now = new Date(),
-  monthsBack = 6,
+  monthsBack = 13,
   fetchShoppingKeywordTrendImpl = fetchShoppingKeywordTrend,
 } = {}) {
   const endDate = new Date(now);
   const startDate = new Date(now);
   startDate.setMonth(startDate.getMonth() - monthsBack);
   const toDateString = (date) => date.toISOString().slice(0, 10);
+  const monthKeyAt = (date, deltaMonths) => {
+    const shifted = new Date(date);
+    shifted.setMonth(shifted.getMonth() + deltaMonths);
+    return shifted.toISOString().slice(0, 7);
+  };
 
   const raw = await fetchShoppingKeywordTrendImpl(client, {
     keyword,
@@ -80,19 +94,29 @@ export async function checkNaverTrendLive(client, keyword, category, {
     endDate: toDateString(endDate),
     timeUnit: 'month',
   });
-  const ratios = (raw?.results?.[0]?.data || [])
-    .map((point) => Number(point.ratio))
-    .filter((value) => Number.isFinite(value));
-  if (ratios.length === 0) return null;
+  const points = (raw?.results?.[0]?.data || [])
+    .map((point) => ({ monthKey: String(point.period || '').slice(0, 7), ratio: Number(point.ratio) }))
+    .filter((point) => point.monthKey && Number.isFinite(point.ratio));
+  if (points.length === 0) return null;
 
   const avg = (values) => values.reduce((sum, value) => sum + value, 0) / values.length;
-  const avgRatio = avg(ratios);
-  const half = Math.max(1, Math.floor(ratios.length / 2));
-  const earlyAvg = avg(ratios.slice(0, half));
-  const recentAvg = avg(ratios.slice(-half));
+  const recentRatios = points.slice(-6).map((point) => point.ratio);
+  const avgRatio = avg(recentRatios);
+  const half = Math.max(1, Math.floor(recentRatios.length / 2));
+  const earlyAvg = avg(recentRatios.slice(0, half));
+  const recentAvg = avg(recentRatios.slice(-half));
   const growthRate = earlyAvg > 0 ? (recentAvg - earlyAvg) / earlyAvg : (recentAvg > 0 ? 1 : 0);
 
-  return { avgRatio, growthRate, months: ratios.length };
+  const byMonth = new Map(points.map((point) => [point.monthKey, point.ratio]));
+  const nowEquivalentLastYear = byMonth.get(monthKeyAt(now, -12));
+  const futureEquivalentLastYear = byMonth.get(monthKeyAt(now, -10));
+  const seasonalGrowth = nowEquivalentLastYear != null && futureEquivalentLastYear != null
+    ? (nowEquivalentLastYear > 0
+      ? (futureEquivalentLastYear - nowEquivalentLastYear) / nowEquivalentLastYear
+      : (futureEquivalentLastYear > 0 ? 1 : 0))
+    : null;
+
+  return { avgRatio, growthRate, seasonalGrowth, months: recentRatios.length };
 }
 
 export async function researchNaverDraft(db, client, draft, { keyword } = {}) {

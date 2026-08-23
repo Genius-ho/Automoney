@@ -104,3 +104,25 @@ test('naverTrend gives a low score for a low, declining click-trend ratio', () =
   });
   assert.ok(breakdown.naverTrend.points < breakdown.naverTrend.max * 0.2);
 });
+
+// 2026-08-23: seasonalGrowth(작년 "지금"과 "2달 뒤" 두 달의 실측 성장률)가
+// 있으면 momentum 근사치(growthRate)보다 우선한다 -- "2달 뒤에 오를 것"을
+// 더 직접적으로 반영하는 신호이기 때문.
+test('naverTrend prefers seasonalGrowth over growthRate when both are present, and names it in the reason', () => {
+  const withSeasonal = computeCompetitivenessScore(strongCandidate(), {
+    naverTrend: { avgRatio: 50, growthRate: -0.4, seasonalGrowth: 0.4 },
+  });
+  const withoutSeasonal = computeCompetitivenessScore(strongCandidate(), {
+    naverTrend: { avgRatio: 50, growthRate: 0.4 },
+  });
+  assert.equal(withSeasonal.breakdown.naverTrend.points, withoutSeasonal.breakdown.naverTrend.points);
+  assert.match(withSeasonal.breakdown.naverTrend.reason, /계절성/);
+});
+
+test('naverTrend falls back to growthRate (momentum) when seasonalGrowth is null', () => {
+  const { breakdown } = computeCompetitivenessScore(strongCandidate(), {
+    naverTrend: { avgRatio: 50, growthRate: 0.4, seasonalGrowth: null },
+  });
+  assert.doesNotMatch(breakdown.naverTrend.reason, /계절성/);
+  assert.match(breakdown.naverTrend.reason, /최근 성장률/);
+});

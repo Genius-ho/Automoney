@@ -78,17 +78,26 @@ function scoreProfitMargin({ coupangExpectedProfit, coupangMarginRate, naverExpe
   return { points: profitPoints + marginPoints, reason: `예상순이익=${profit}, 마진율=${marginRate ?? '-'}` };
 }
 
-// naverTrend: { avgRatio (0~100, 구간 내 상대적 클릭비율 평균 -- "꾸준히
-// 높은가"), growthRate (초반 대비 후반 성장률 -- "최근 상승 추세인가") }.
-// avgRatio에 60%, growthRate에 40% 가중 -- 사용자가 명시한 두 신호
-// ("꾸준히 높은 것"과 "지금보다 검색이 올라갈 것") 그대로 반영.
-// growthRate -50%~+50%를 0~1로 매핑 (그 밖은 클램프).
+// naverTrend: { avgRatio (0~100, 최근 6개월 상대적 클릭비율 평균 -- "꾸준히
+// 높은가"), growthRate (최근 6개월 내 초반 대비 후반 성장률 -- momentum 기반
+// 근사치), seasonalGrowth (작년 "지금"과 "2달 뒤"에 해당하는 두 달의 실제
+// 성장률 -- "지금부터 2달 뒤에 오를 것"을 momentum보다 직접 반영하는 계절성
+// 신호, 작년 데이터가 없으면 null) }.
+// avgRatio에 60%, "상승세"에 40% 가중 -- 사용자가 명시한 두 신호("꾸준히
+// 높은 것"과 "지금보다 2달 뒤 검색이 올라갈 것") 그대로 반영. "상승세"는
+// seasonalGrowth가 있으면 그걸(작년 같은 2개월 구간 실측치라 더 직접적),
+// 없으면 growthRate로 대체한다. 어느 쪽이든 -50%~+50%를 0~1로 매핑(클램프).
 function scoreNaverTrend(naverTrend) {
   if (!naverTrend) return { points: WEIGHTS.naverTrend * 0.5, reason: '네이버 트렌드 데이터 없음 (중립값)' };
-  const { avgRatio, growthRate } = naverTrend;
+  const { avgRatio, growthRate, seasonalGrowth } = naverTrend;
+  const usingSeasonal = seasonalGrowth != null;
+  const effectiveGrowth = usingSeasonal ? seasonalGrowth : growthRate;
   const levelPoints = clamp(avgRatio / 100, 0, 1) * (WEIGHTS.naverTrend * 0.6);
-  const growthPoints = clamp((growthRate + 0.5) / 1, 0, 1) * (WEIGHTS.naverTrend * 0.4);
-  return { points: levelPoints + growthPoints, reason: `평균 클릭비율=${round1(avgRatio)}, 성장률=${round1(growthRate * 100)}%` };
+  const growthPoints = clamp((effectiveGrowth + 0.5) / 1, 0, 1) * (WEIGHTS.naverTrend * 0.4);
+  const growthLabel = usingSeasonal
+    ? `작년 동일시기 2개월 성장률(계절성)=${round1(effectiveGrowth * 100)}%`
+    : `최근 성장률=${round1(effectiveGrowth * 100)}%`;
+  return { points: levelPoints + growthPoints, reason: `평균 클릭비율=${round1(avgRatio)}, ${growthLabel}` };
 }
 
 function scoreCostShipping({ cost, shippingFee } = {}) {
