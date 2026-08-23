@@ -56,3 +56,11 @@ export async function listLinkAnalysisHistory(db, { limit = 50, offset = 0 } = {
   );
   return result.rows.map(toLinkAnalysisHistoryRow);
 }
+
+// 2026-08-23 사용자 요청: 히스토리 목록에서 지우는 기능. link_analysis_history는
+// 순수 기록용 테이블이라(다른 테이블이 여길 참조하지 않음, schema.sql 참고)
+// product_drafts 삭제와 달리 FK 충돌 걱정 없이 바로 지울 수 있다.
+export async function deleteLinkAnalysisHistory(db, id) {
+  const result = await db.query('delete from link_analysis_history where id = $1 returning id', [id]);
+  return result.rows.length > 0;
+}

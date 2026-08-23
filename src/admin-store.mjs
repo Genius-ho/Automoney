@@ -294,6 +294,27 @@ export async function setProductDraftStatus(db, id, status) {
   return updateProductDraft(db, id, { status });
 }
 
+// 2026-08-23 사용자 요청: "이미지 개선" 탭에서 잘못 등록한 초안을 지울 수 있게.
+// product_drafts를 참조하는 대부분의 테이블(product_images 등)은 on delete
+// cascade라 같이 지워지지만, 실제 주문/발주 이력을 남기는 channel_orders/
+// supplier_orders는 일부러 cascade를 안 걸어뒀다 (schema.sql) -- 그런 draft를
+// 지우려 하면 Postgres가 foreign_key_violation(23503)으로 막아준다. 여기서는
+// 그 에러를 그대로 던지지 않고 사람이 읽을 수 있는 메시지로 바꿔서 caller가
+// 409로 보여줄 수 있게 한다.
+export async function deleteProductDraft(db, id) {
+  try {
+    const result = await db.query('delete from product_drafts where id = $1 returning id', [id]);
+    return result.rows.length > 0;
+  } catch (error) {
+    if (error.code === '23503') {
+      const blocked = new Error('실제 주문/발주 이력이 있는 상품이라 삭제할 수 없습니다.');
+      blocked.code = 'DRAFT_HAS_ORDER_HISTORY';
+      throw blocked;
+    }
+    throw error;
+  }
+}
+
 export function shouldCreateGeneratedDetailHtml(value) {
   return !String(value || '').trim();
 }

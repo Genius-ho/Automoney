@@ -3,6 +3,7 @@ import test from 'node:test';
 
 import {
   countProductDrafts,
+  deleteProductDraft,
   exportProductDraft,
   shouldOverwriteOptimizedTitles,
   shouldCreateGeneratedDetailHtml,
@@ -318,6 +319,41 @@ test('setProductDraftStatus validates and updates status', async () => {
 
   assert.ok(calls[0].sql.includes('status = $1'));
   assert.equal(calls[0].params[0], 'blocked');
+});
+
+test('deleteProductDraft deletes by id and returns true when a row was removed', async () => {
+  const calls = [];
+  const db = { async query(sql, params = []) { calls.push({ sql, params }); return { rows: [{ id: 1 }] }; } };
+
+  const deleted = await deleteProductDraft(db, 1);
+
+  assert.equal(deleted, true);
+  assert.match(calls[0].sql, /delete from product_drafts where id = \$1/);
+  assert.deepEqual(calls[0].params, [1]);
+});
+
+test('deleteProductDraft returns false when nothing matched the id', async () => {
+  const db = { async query() { return { rows: [] }; } };
+  assert.equal(await deleteProductDraft(db, 999), false);
+});
+
+// 2026-08-23: channel_orders/supplier_orders reference product_drafts
+// without on delete cascade (schema.sql, on purpose -- real order history
+// must never silently vanish with a draft), so Postgres rejects the DELETE
+// with a foreign_key_violation. deleteProductDraft turns that into a
+// friendly, catchable error instead of the raw Postgres error.
+test('deleteProductDraft turns a foreign_key_violation (23503) into a friendly DRAFT_HAS_ORDER_HISTORY error', async () => {
+  const db = { async query() { const error = new Error('update or delete on table "product_drafts" violates foreign key constraint'); error.code = '23503'; throw error; } };
+
+  await assert.rejects(
+    () => deleteProductDraft(db, 1),
+    (error) => error.code === 'DRAFT_HAS_ORDER_HISTORY' && /주문\/발주 이력/.test(error.message),
+  );
+});
+
+test('deleteProductDraft propagates any other database error unchanged', async () => {
+  const db = { async query() { throw new Error('connection lost'); } };
+  await assert.rejects(() => deleteProductDraft(db, 1), /connection lost/);
 });
 
 test('exportProductDraft returns channel specific preview JSON', async () => {

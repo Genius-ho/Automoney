@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
 
-import { insertLinkAnalysisHistory, listLinkAnalysisHistory } from '../src/link-analysis-history-store.mjs';
+import { deleteLinkAnalysisHistory, insertLinkAnalysisHistory, listLinkAnalysisHistory } from '../src/link-analysis-history-store.mjs';
 
 function fakeDb(rows) {
   const queries = [];
@@ -92,4 +92,18 @@ test('listLinkAnalysisHistory defaults to limit 50, offset 0', async () => {
   const db = fakeDb([]);
   await listLinkAnalysisHistory(db);
   assert.deepEqual(db.queries[0].params, [50, 0]);
+});
+
+test('deleteLinkAnalysisHistory deletes by id and returns true when a row was removed', async () => {
+  const db = fakeDb([{ id: 5 }]);
+  const deleted = await deleteLinkAnalysisHistory(db, 5);
+  assert.equal(deleted, true);
+  assert.match(db.queries[0].sql, /delete from link_analysis_history where id = \$1/);
+  assert.deepEqual(db.queries[0].params, [5]);
+});
+
+test('deleteLinkAnalysisHistory returns false when nothing matched the id', async () => {
+  const db = fakeDb([]);
+  const deleted = await deleteLinkAnalysisHistory(db, 999);
+  assert.equal(deleted, false);
 });

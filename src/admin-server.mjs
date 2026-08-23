@@ -7,7 +7,7 @@ import { createHash } from 'node:crypto';
 import { isAutomationPaused, loadAiSecrets, loadCodexConfig, loadCoupangConfig, loadDatabaseUrl, loadDomemePrivateConfig, loadEnvConfig, loadJobPathsConfig, loadNaverCommerceConfig, loadNaverConfig, loadPricingRules, loadPythonConfig, loadTelegramConfig } from './config.mjs';
 import { generateManualImportImagesAndNotify, importDraftFromSupplierUrl, parseSupplierProductNo } from './manual-url-import.mjs';
 import { analyzeProductLinks } from './product-link-analysis.mjs';
-import { listLinkAnalysisHistory } from './link-analysis-history-store.mjs';
+import { deleteLinkAnalysisHistory, listLinkAnalysisHistory } from './link-analysis-history-store.mjs';
 import { sendCriticalAlert } from './telegram-notifier.mjs';
 import { DomemeClient } from './domeme-client.mjs';
 import { runCandidateDiscoveryBatch, runDueProductAutomationStage, runNextProductAutomationStage } from './auto-discovery-batch.mjs';
@@ -71,6 +71,7 @@ import {
   getManualDetailWorkflowContext,
   getProductDraft,
   countProductDrafts,
+  deleteProductDraft,
   listProductDrafts,
   regenerateOptimizedTitles,
   regenerateGeneratedDetailHtml,
@@ -1193,6 +1194,15 @@ async function handleRequest({ request, response, db, aiSecrets, rootDir }) {
     return;
   }
 
+  // 2026-08-23 사용자 요청: 히스토리 항목 지우기.
+  const historyDeleteMatch = url.pathname.match(/^\/api\/product-drafts\/link-analysis-history\/(\d+)$/);
+  if (historyDeleteMatch && request.method === 'DELETE') {
+    const deleted = await deleteLinkAnalysisHistory(db, Number(historyDeleteMatch[1]));
+    if (!deleted) { sendJson(response, 404, { error: 'History entry not found' }); return; }
+    sendJson(response, 200, { deleted: true });
+    return;
+  }
+
   const match = url.pathname.match(/^\/api\/product-drafts(?:\/(\d+)(?:\/(approve|block|export\/coupang|export\/naver))?)?$/);
   if (!match) {
     sendJson(response, 404, { error: 'Not found' });
@@ -1233,6 +1243,20 @@ async function handleRequest({ request, response, db, aiSecrets, rootDir }) {
 
   if (!action && request.method === 'PATCH') {
     sendMaybeDraft(response, await updateProductDraft(db, Number(id), await readJson(request)));
+    return;
+  }
+
+  // 2026-08-23 사용자 요청: "이미지 개선" 탭에서 잘못 등록한 초안 지우기.
+  // deleteProductDraft가 실제 주문/발주 이력이 있는 draft는 DRAFT_HAS_ORDER_HISTORY로
+  // 막아준다 (admin-store.mjs 헤더 코멘트 참고) -- 그 경우 409로 이유를 그대로 보여준다.
+  if (!action && request.method === 'DELETE') {
+    try {
+      const deleted = await deleteProductDraft(db, Number(id));
+      if (!deleted) { sendJson(response, 404, { error: 'Product draft not found' }); return; }
+      sendJson(response, 200, { deleted: true });
+    } catch (error) {
+      sendJson(response, error.code === 'DRAFT_HAS_ORDER_HISTORY' ? 409 : 500, { error: error.message, code: error.code });
+    }
     return;
   }
 
@@ -1957,6 +1981,8 @@ export function adminHtml() {
     // 승인 전 초안을 전부 보여주고 각 항목마다 실제 생성 여부를 debug-export로
     // 다시 조회해서 "이미지 생성 시작" 또는 "확인/재생성"을 보여준다 -- 탭을
     // 옮겼다 와도 매번 서버 상태를 새로 읽으므로 화면과 실제 상태가 어긋나지 않는다.
+    let imageImprovementSortBy='updatedAt';
+    let imageImprovementSortDir='desc';
     async function loadImageImprovementView(){
       const el=document.getElementById('specialView');
       el.innerHTML='<div style="padding:12px"><p class="muted">불러오는 중...</p></div>';
@@ -1967,17 +1993,21 @@ export function adminHtml() {
           const debugExport=await api('/api/product-drafts/'+d.id+'/debug-export').catch(()=>null);
           return {...d, generatedAiImageCount: debugExport?.generatedAiImageCount||0};
         }));
+        const sorted=sortByField(withState,imageImprovementSortBy,imageImprovementSortDir,d=>d.updatedAt,d=>d.sellingTitle||d.originalProductName||d.supplierProductNo);
         el.innerHTML='<div style="padding:12px"><div class="section"><h3>이미지 개선 (등록된 초안)</h3>'
           +'<p class="muted">"점수"/"URL 등록" 탭이나 텔레그램으로 등록한 상품이 여기 나옵니다. 아직 이미지가 없으면 "이미지 생성 시작"을 눌러야 대표/상세 이미지가 만들어집니다 (완료되면 텔레그램으로도 알려드려요). 이미 생성된 건 열어서 재생성하거나 직접 업로드로 교체할 수 있습니다.</p>'
-          +(withState.length?'<table><thead><tr><th>상품</th><th>상태</th><th>이미지</th><th>작업</th></tr></thead><tbody>'
-            +withState.map(d=>'<tr><td>'+escapeHtml(d.sellingTitle||d.originalProductName||d.supplierProductNo)+'</td><td>'+escapeHtml(d.status)+'</td><td>'+(d.generatedAiImageCount>0?'생성됨 ('+d.generatedAiImageCount+'개)':'없음')+'</td><td>'
+          +sortControlsHtml('imageImprovement',imageImprovementSortBy,imageImprovementSortDir)
+          +(sorted.length?'<table><thead><tr><th>상품</th><th>등록/수정일시</th><th>상태</th><th>이미지</th><th>작업</th></tr></thead><tbody>'
+            +sorted.map(d=>'<tr><td>'+escapeHtml(d.sellingTitle||d.originalProductName||d.supplierProductNo)+'</td><td>'+escapeHtml(formatDateTime(d.updatedAt))+'</td><td>'+escapeHtml(d.status)+'</td><td>'+(d.generatedAiImageCount>0?'생성됨 ('+d.generatedAiImageCount+'개)':'없음')+'</td><td>'
               +(d.generatedAiImageCount>0
                 ?'<a href="/admin?draftId='+d.id+'">열어서 확인/재생성</a>'
                 :'<button type="button" data-generate-images-draft-id="'+d.id+'">이미지 생성 시작</button>')
+              +' <button type="button" data-delete-draft-id="'+d.id+'">삭제</button>'
               +'<span class="muted" data-generate-images-result="'+d.id+'"></span>'
               +'</td></tr>').join('')
             +'</tbody></table>':'<p class="muted">등록된 초안이 없습니다. "점수" 탭에서 상품을 등록해보세요.</p>')
           +'</div></div>';
+        bindSortControls(el,'imageImprovement',(sortBy,sortDir)=>{imageImprovementSortBy=sortBy;imageImprovementSortDir=sortDir;loadImageImprovementView();});
         el.querySelectorAll('[data-generate-images-draft-id]').forEach(button=>button.onclick=async()=>{
           const draftId=button.dataset.generateImagesDraftId;
           const resultEl=el.querySelector('[data-generate-images-result="'+CSS.escape(draftId)+'"]');
@@ -1989,6 +2019,19 @@ export function adminHtml() {
           }catch(error){
             button.disabled=false;
             resultEl.textContent=' 요청 실패: '+error.message;
+          }
+        });
+        el.querySelectorAll('[data-delete-draft-id]').forEach(button=>button.onclick=async()=>{
+          const draftId=button.dataset.deleteDraftId;
+          if(!confirm('이 초안을 삭제하시겠습니까? 되돌릴 수 없습니다.'))return;
+          const resultEl=el.querySelector('[data-generate-images-result="'+CSS.escape(draftId)+'"]');
+          button.disabled=true;
+          try{
+            await api('/api/product-drafts/'+draftId,{method:'DELETE'});
+            loadImageImprovementView();
+          }catch(error){
+            button.disabled=false;
+            if(resultEl)resultEl.textContent=' 삭제 실패: '+error.message;
           }
         });
       }catch(error){
@@ -2007,17 +2050,37 @@ export function adminHtml() {
       if(sourceMarket==='domeme')return 'https://domeggook.com/main/item/itemView.php?no='+no+'&market=dome';
       return 'https://domeggook.com/main/item/itemView.php?no='+no;
     }
+    // 정렬 상태값은 항상 sortControlsHtml/sortByField가 아는 'updatedAt'(날짜)
+    // 또는 'name' 둘 중 하나로 유지한다 -- 실제 히스토리 행의 날짜 필드명은
+    // analyzedAt이지만, 그 매핑은 sortByField에 넘기는 dateFn(h=>h.analyzedAt)
+    // 안에서만 하면 되므로 상태값 자체는 이미지개선 뷰와 동일한 어휘를 쓴다.
+    let historySortBy='updatedAt';
+    let historySortDir='desc';
     function loadHistoryView(){
       const el=document.getElementById('specialView');
       el.innerHTML='<div style="padding:12px"><p class="muted">불러오는 중...</p></div>';
       api('/api/product-drafts/link-analysis-history?limit=100').then(data=>{
-        const history=data.history||[];
-        el.innerHTML='<div style="padding:12px"><div class="section"><h3>히스토리 (최근 분석 순)</h3>'
+        const history=sortByField(data.history||[],historySortBy,historySortDir,h=>h.analyzedAt,h=>h.name||h.supplierProductNo);
+        el.innerHTML='<div style="padding:12px"><div class="section"><h3>히스토리</h3>'
           +'<p class="muted">"링크 입력"/텔레그램 링크 분석으로 나온 점수 기록입니다. 저장은 안 하고 점수만 매긴 것도 여기 쌓입니다 (등록 여부와 무관). 상품명을 누르면 원본 링크로 이동합니다.</p>'
-          +(history.length?'<table><thead><tr><th>분석일시</th><th>키워드</th><th>출처</th><th>점수</th><th>상품명</th><th>마켓</th><th>필터상태</th><th>상품번호</th></tr></thead><tbody>'
-            +history.map(h=>'<tr><td>'+escapeHtml((h.analyzedAt||'').replace('T',' ').slice(0,19))+'</td><td>'+escapeHtml(h.keyword||'-')+'</td><td>'+escapeHtml(h.source==='telegram'?'텔레그램':'GUI')+'</td><td>'+(h.score??'-')+'</td><td><a href="'+attr(supplierProductUrl(h.supplierProductNo,h.sourceMarket))+'" target="_blank">'+escapeHtml(h.name||h.supplierProductNo)+'</a></td><td>'+escapeHtml(h.sourceMarket||'-')+'</td><td>'+escapeHtml(h.filterStatus||'-')+'</td><td>'+escapeHtml(h.supplierProductNo)+'</td></tr>').join('')
+          +sortControlsHtml('history',historySortBy,historySortDir)
+          +(history.length?'<table><thead><tr><th>분석일시</th><th>키워드</th><th>출처</th><th>점수</th><th>상품명</th><th>마켓</th><th>필터상태</th><th>상품번호</th><th>작업</th></tr></thead><tbody>'
+            +history.map(h=>'<tr><td>'+escapeHtml(formatDateTime(h.analyzedAt))+'</td><td>'+escapeHtml(h.keyword||'-')+'</td><td>'+escapeHtml(h.source==='telegram'?'텔레그램':'GUI')+'</td><td>'+(h.score??'-')+'</td><td><a href="'+attr(supplierProductUrl(h.supplierProductNo,h.sourceMarket))+'" target="_blank">'+escapeHtml(h.name||h.supplierProductNo)+'</a></td><td>'+escapeHtml(h.sourceMarket||'-')+'</td><td>'+escapeHtml(h.filterStatus||'-')+'</td><td>'+escapeHtml(h.supplierProductNo)+'</td><td><button type="button" data-delete-history-id="'+h.id+'">삭제</button></td></tr>').join('')
             +'</tbody></table>':'<p class="muted">아직 기록된 히스토리가 없습니다.</p>')
           +'</div></div>';
+        bindSortControls(el,'history',(sortBy,sortDir)=>{historySortBy=sortBy;historySortDir=sortDir;loadHistoryView();});
+        el.querySelectorAll('[data-delete-history-id]').forEach(button=>button.onclick=async()=>{
+          const historyId=button.dataset.deleteHistoryId;
+          if(!confirm('이 히스토리 기록을 삭제하시겠습니까? 되돌릴 수 없습니다.'))return;
+          button.disabled=true;
+          try{
+            await api('/api/product-drafts/link-analysis-history/'+historyId,{method:'DELETE'});
+            loadHistoryView();
+          }catch(error){
+            button.disabled=false;
+            alert('삭제 실패: '+error.message);
+          }
+        });
       }).catch(error=>{el.innerHTML='<div style="padding:12px"><p class="muted">불러오기 실패: '+escapeHtml(error.message)+'</p></div>';});
     }
     const SUPPLIER_ORDER_STATUS_LABELS={detected:'감지됨',mapping_required:'매핑 필요',validating_supplier:'검증/차단됨',order_draft_ready:'발주안 준비됨',awaiting_purchase_approval:'승인 대기',supplier_ordering:'발주 중',supplier_ordered:'발주 완료',supplier_order_failed:'발주 실패',cancelled:'취소됨'};
@@ -2821,6 +2884,26 @@ export function adminHtml() {
     function renderNaverResearchResult(r){document.getElementById('naverResearchResult').innerHTML='lowest='+money(r.lowestPrice)+' / avg='+money(r.topPriceAvg)+' / competitors='+money(r.competitorCount)+' / gap='+percent(r.priceGapRate)+' / winnerScore='+r.winnerScore+' / winnerStatus='+escapeHtml(labelWinner(r.winnerStatus))+'<br>'+(r.reasons||[]).map(x=>'<span class="badge">'+escapeHtml(x)+'</span>').join('');}
     function renderNaverBestItem(r){const best=r.bestItem||(r.raw&&r.raw.bestItem);const target=document.getElementById('naverBestItem');if(!best){target.innerHTML='<p class="muted">네이버 최저가 상품 정보 없음</p>';return;}target.innerHTML='<table><tbody><tr><th>네이버 최저가 상품명</th><td>'+escapeHtml(stripTags(best.title||''))+'</td></tr><tr><th>쇼핑몰</th><td>'+escapeHtml(best.mallName||'')+'</td></tr><tr><th>가격</th><td>'+money(best.lprice)+'</td></tr><tr><th>링크</th><td><a href="'+attr(best.link||'#')+'" target="_blank" rel="noopener noreferrer"><button>네이버최저가</button></a></td></tr></tbody></table>';}
     async function api(path,options={}){const response=await fetch(path,{headers:{'content-type':'application/json'},...options});const data=await response.json();if(!response.ok)throw Object.assign(new Error(data.error||'Request failed'),{code:data.code,details:data});return data;}
+    // 2026-08-23 사용자 요청: "이미지 개선"/"히스토리" 목록에 날짜를 보여주고,
+    // 날짜/상품명 정렬(기본은 최신이 위로 오게 내림차순)과 삭제 기능을 추가.
+    // 두 뷰가 똑같은 정렬 UI/로직을 쓰므로 여기 공용 헬퍼로 뺀다.
+    function formatDateTime(iso){return iso?String(iso).replace('T',' ').slice(0,19):'-'}
+    function sortByField(list,sortBy,sortDir,dateFn,nameFn){
+      const dir=sortDir==='asc'?1:-1;
+      return [...list].sort((a,b)=>sortBy==='name'
+        ?String(nameFn(a)||'').localeCompare(String(nameFn(b)||''))*dir
+        :(new Date(dateFn(a)||0).getTime()-new Date(dateFn(b)||0).getTime())*dir);
+    }
+    function sortControlsHtml(prefix,sortBy,sortDir){
+      return '<p class="muted" style="display:flex;gap:8px;align-items:center">정렬: '
+        +'<select id="'+prefix+'SortBy"><option value="updatedAt"'+(sortBy==='updatedAt'?' selected':'')+'>날짜</option><option value="name"'+(sortBy==='name'?' selected':'')+'>상품명</option></select>'
+        +'<select id="'+prefix+'SortDir"><option value="desc"'+(sortDir==='desc'?' selected':'')+'>내림차순</option><option value="asc"'+(sortDir==='asc'?' selected':'')+'>오름차순</option></select>'
+        +'</p>';
+    }
+    function bindSortControls(el,prefix,onChange){
+      el.querySelector('#'+prefix+'SortBy').addEventListener('change',e=>onChange(e.target.value,el.querySelector('#'+prefix+'SortDir').value));
+      el.querySelector('#'+prefix+'SortDir').addEventListener('change',e=>onChange(el.querySelector('#'+prefix+'SortBy').value,e.target.value));
+    }
     function reasonBadges(reasons){return(reasons||[]).map(x=>'<span class="badge">'+escapeHtml(x)+'</span>')}function money(v){return v==null?'-':Number(v).toLocaleString('ko-KR')}function moneyWithRate(v,r){return money(v)+(r==null?'':'<br><span class="muted">'+Math.round(Number(r)*100)+'%</span>')}function percent(v){return v==null?'-':Math.round(Number(v)*1000)/10+'%'}function rocketLabel(v){if(v===true)return'Yes';if(v===false)return'No';return'-'}function labelStatus(v){return({draft:'Draft',pass:'Pass',needs_review:'Needs review',blocked:'Blocked',approved:'Approved'})[v]||v||'-'}function labelWinner(v){return({strong_candidate:'Strong',candidate:'Candidate',needs_review:'Needs review',reject:'Reject'})[v]||v||'-'}function labelMarket(v){return({domeme:'도매매',domeggook:'도매꾹',unknown:'unknown'})[v]||v||'unknown'}function labelSellUnit(v){return({single:'단품',bundle:'묶음'})[v]||v||'-'}function stripTags(v){return String(v??'').replace(/<[^>]*>/g,'')}function escapeHtml(v){return String(v??'').replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]))}function attr(v){return escapeHtml(v)}
     async function loadImagePrompts(id){const data=await api('/api/product-drafts/'+id+'/image-prompts');const panel=detail.querySelector('[data-panel="image"]');if(!panel)return;const card=(type,label)=>{const r=(data.requests||[]).find(x=>x.requestType===type);const original=r?escapeHtml(r.promptOriginal):'';const rendered=r?escapeHtml(r.promptRendered):'';const warnings=(r?.warnings||[]).map(x=>'<span class="badge reasonReview">'+escapeHtml(x)+'</span>').join('');return '<div class="section"><h2>'+label+'</h2><p><button data-prompt-generate="'+type+'">프롬프트 생성</button> <button data-prompt-copy="'+type+'">복사</button> <button data-prompt-status="approved" data-prompt-type="'+type+'">승인</button> <button data-prompt-status="rejected" data-prompt-type="'+type+'">거절</button></p><label>원문 템플릿</label><pre data-prompt-original="'+type+'">'+original+'</pre><label>상품정보 치환 후 최종 프롬프트</label><pre data-prompt-rendered="'+type+'">'+rendered+'</pre><div>'+warnings+'</div></div>';};panel.innerHTML='<h2>AI 이미지 프롬프트</h2>'+card('main_image','대표이미지 프롬프트')+card('detail_page','상세페이지 프롬프트');for(const b of panel.querySelectorAll('[data-prompt-generate]'))b.addEventListener('click',async()=>{await api('/api/product-drafts/'+id+'/image-prompts/'+b.dataset.promptGenerate,{method:'POST',body:'{}'});await loadImagePrompts(id);});for(const b of panel.querySelectorAll('[data-prompt-status]'))b.addEventListener('click',async()=>{await api('/api/product-drafts/'+id+'/image-prompts/'+b.dataset.promptType,{method:'PATCH',body:JSON.stringify({status:b.dataset.promptStatus})});await loadImagePrompts(id);});for(const b of panel.querySelectorAll('[data-prompt-copy]'))b.addEventListener('click',()=>copyText(panel.querySelector('[data-prompt-rendered="'+b.dataset.promptCopy+'"]').textContent));}
     async function copyText(text){if(navigator.clipboard?.writeText){try{await navigator.clipboard.writeText(text);return}catch{}}const area=document.createElement('textarea');area.value=text;document.body.appendChild(area);area.select();document.execCommand('copy');area.remove();}
