@@ -1420,6 +1420,11 @@ export function adminHtml() {
        its wiring below) or switchView would start hiding/showing it instead
        of the real status-filter toolbar. */
     .keywordSearchBar{display:flex;gap:8px;padding:10px 16px;border-bottom:1px solid #d8dee7;background:#fff;align-items:center;flex:0 0 auto}
+    /* Same [hidden]-vs-class-display trap as .toolbar (see the comment on
+       .toolbar[hidden] above) -- this bar sets its own display:flex, so it
+       needs its own [hidden]{display:none} override too. */
+    #linkAnalysisStatusBar{display:flex;gap:10px;padding:8px 16px;border-bottom:1px solid #d8dee7;background:#fffbe6;align-items:center;flex:0 0 auto}
+    #linkAnalysisStatusBar[hidden]{display:none}
     .viewNav button.primary{background:#1f6feb;color:#fff;border-color:#1f6feb}
     .toolbar select,.toolbar input:not([type=checkbox]){width:auto;min-width:120px;flex:0 0 auto}
     .tableWrap{overflow:auto;flex:1 1 auto} table{border-collapse:collapse;width:max-content;min-width:100%;font-size:12px;table-layout:fixed}
@@ -1472,6 +1477,14 @@ export function adminHtml() {
         <input id="keywordSearchInput" style="max-width:300px" placeholder="키워드로 도매매 검색 (예: 여성 벨트)">
         <button id="keywordSearchButton" type="button">도매매에서 검색</button>
       </div>
+      <!-- 2026-08-23 사용자 요청: "링크 입력"의 분석하기는 AI 호출들 때문에
+           링크당 20~30초씩 걸리는데, 어느 탭에 있든 진행 상황이 보여야 한다
+           -- specialView 밖(switchView가 innerHTML을 갈아치우는 대상 밖)에
+           둬서 뷰를 옮겨도 사라지지 않는다. -->
+      <div id="linkAnalysisStatusBar" hidden>
+        <span id="linkAnalysisStatusText" class="muted"></span>
+        <button id="linkAnalysisStatusViewButton" type="button" hidden>점수 보기</button>
+      </div>
       <div class="toolbar" hidden>
         <select id="statusFilter"><option value="">all</option><option value="draft">draft</option><option value="needs_review">needs_review</option><option value="blocked">blocked</option><option value="approved">approved</option></select>
         <select id="naverWinnerFilter"><option value="">naver all</option><option value="candidate">candidate</option><option value="needs_review">needs_review</option><option value="reject">reject</option></select>
@@ -1523,6 +1536,27 @@ export function adminHtml() {
     for(const radio of document.querySelectorAll('input[name="pageSize"]'))radio.addEventListener('change',(e)=>{currentPageSize=Number(e.target.value);currentPage=1;loadList();});
     prevPageButton.addEventListener('click',()=>{if(currentPage>1){currentPage-=1;loadList();}});
     nextPageButton.addEventListener('click',()=>{if(currentPage*currentPageSize<currentTotal){currentPage+=1;loadList();}});
+    // 2026-08-23 사용자 요청: "링크 입력" 분석을 백그라운드로 -- 버튼을 누르면
+    // fetch를 기다리지 않고 바로 돌려주고(SPA라 뷰를 옮겨도 fetch 자체는 계속
+    // 진행됨), 진행 상태를 위 linkAnalysisStatusBar(어느 뷰에서든 보임)에
+    // 반영한다. linkAnalysisJob이 null이면 진행 중인/막 끝난 분석이 없다는 뜻.
+    let linkAnalysisJob=null;
+    const linkAnalysisStatusBar=document.getElementById('linkAnalysisStatusBar');
+    const linkAnalysisStatusText=document.getElementById('linkAnalysisStatusText');
+    const linkAnalysisStatusViewButton=document.getElementById('linkAnalysisStatusViewButton');
+    function renderLinkAnalysisStatus(){
+      if(!linkAnalysisJob){linkAnalysisStatusBar.hidden=true;return;}
+      linkAnalysisStatusBar.hidden=false;
+      linkAnalysisStatusViewButton.hidden=linkAnalysisJob.status!=='done';
+      if(linkAnalysisJob.status==='running')linkAnalysisStatusText.textContent='링크 분석 중... ('+linkAnalysisJob.total+'건, 완료되면 여기 표시가 바뀝니다)';
+      else if(linkAnalysisJob.status==='done')linkAnalysisStatusText.textContent='링크 분석 완료 ('+linkAnalysisJob.resultsCount+'건)';
+      else linkAnalysisStatusText.textContent='링크 분석 실패: '+linkAnalysisJob.error;
+      const linkInputResult=document.getElementById('linkInputResult');
+      if(linkInputResult)linkInputResult.textContent=linkAnalysisStatusText.textContent;
+      const linkInputSubmitButton=document.getElementById('linkInputSubmitButton');
+      if(linkInputSubmitButton)linkInputSubmitButton.disabled=linkAnalysisJob.status==='running';
+    }
+    linkAnalysisStatusViewButton.addEventListener('click',()=>{switchView('score');linkAnalysisJob=null;renderLinkAnalysisStatus();});
     let currentView='linkInput';
     const viewButtons={linkInput:document.getElementById('viewLinkInputButton'),score:document.getElementById('viewScoreButton'),imageImprovement:document.getElementById('viewImageImprovementButton'),history:document.getElementById('viewHistoryButton'),approvalInbox:document.getElementById('viewApprovalInboxButton'),dashboard:document.getElementById('viewDashboardButton'),all:document.getElementById('viewAllButton'),recommend:document.getElementById('viewRecommendButton'),registrations:document.getElementById('viewRegistrationsButton'),autoBatch:document.getElementById('viewAutoBatchButton'),keywordSourcing:document.getElementById('viewKeywordSourcingButton'),urlImport:document.getElementById('viewUrlImportButton'),channelOrders:document.getElementById('viewChannelOrdersButton'),domemePrecheck:document.getElementById('viewDomemePrecheckButton'),purchaseOrders:document.getElementById('viewPurchaseOrdersButton'),orderExceptions:document.getElementById('viewOrderExceptionsButton')};
     for(const [view,button] of Object.entries(viewButtons))button.addEventListener('click',()=>switchView(view));
@@ -1848,20 +1882,30 @@ export function adminHtml() {
         +'<div id="linkInputResult" class="muted"></div>'
         +'</div>'
         +'</div>';
-      document.getElementById('linkInputSubmitButton').onclick=async()=>{
+      renderLinkAnalysisStatus();
+      document.getElementById('linkInputSubmitButton').onclick=()=>{
         const resultEl=document.getElementById('linkInputResult');
         const textarea=document.getElementById('linkInputTextarea');
         const value=textarea.value.trim();
         if(!value){resultEl.textContent='링크 또는 상품번호를 입력해주세요.';return;}
-        resultEl.textContent='분석 중...';
-        try{
-          const data=await api('/api/product-drafts/analyze-links',{method:'POST',body:JSON.stringify({text:value,keyword:lastSearchedKeyword})});
-          lastLinkAnalysisResults=data.results;
-          resultEl.textContent='분석 완료 ('+data.results.length+'건) -- "점수" 탭으로 이동합니다.';
-          switchView('score');
-        }catch(error){
-          resultEl.textContent='분석 실패: '+error.message;
-        }
+        const lineCount=value.split(/\\r?\\n/).map((line)=>line.trim()).filter(Boolean).length;
+        // await 없이 바로 반환 -- 서버 쪽 analyzeProductLinks는 링크당 AI
+        // 호출(이미지 품질/반품/중복 판단 + 네이버 트렌드 키워드·카테고리
+        // 추출)이 껴서 20~30초씩 걸리므로, 이 탭에 머물러 기다릴 필요 없이
+        // 다른 탭으로 옮겨도 linkAnalysisStatusBar가 계속 진행 상황을 보여준다.
+        linkAnalysisJob={status:'running',total:lineCount};
+        renderLinkAnalysisStatus();
+        textarea.value='';
+        api('/api/product-drafts/analyze-links',{method:'POST',body:JSON.stringify({text:value,keyword:lastSearchedKeyword})})
+          .then((data)=>{
+            lastLinkAnalysisResults=data.results;
+            linkAnalysisJob={status:'done',resultsCount:data.results.length};
+            renderLinkAnalysisStatus();
+          })
+          .catch((error)=>{
+            linkAnalysisJob={status:'error',error:error.message};
+            renderLinkAnalysisStatus();
+          });
       };
     }
     const SCORE_DIMENSION_LABELS={imageQuality:'이미지 품질',returnRisk:'반품 리스크',duplicateRisk:'중복 위험',profitMargin:'예상마진/가격',naverTrend:'네이버 트렌드',legalRisk:'법적 리스크',costShipping:'원가/배송비',optionComplexity:'옵션 복잡도',sourceCompleteness:'원본 완성도'};
