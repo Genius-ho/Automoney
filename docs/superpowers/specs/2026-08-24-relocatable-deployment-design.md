@@ -39,7 +39,7 @@ Create templates for:
 - `mumae-candle-logger.service`
 - `mumae-backtest-notify.service`
 
-Each template uses a single explicit project-root placeholder. The renderer replaces that placeholder with a systemd-safe absolute path. Committed templates contain no `/home/ho/apps/...` path.
+Each template uses a single explicit project-root placeholder. The renderer replaces that placeholder with a systemd-safe absolute path. Committed templates contain no host-specific checkout path such as `/home/<user>/apps/...`.
 
 Timer units remain path-independent and unchanged.
 
@@ -96,7 +96,7 @@ Automated tests will cover:
 
 - Rendering from two unrelated temporary roots produces units containing only the selected root.
 - A renamed path and a path containing spaces render correctly.
-- No committed deployment template, example, launcher, test, or documentation file contains `/home/ho/apps/`.
+- No committed deployment template, example, launcher, test, or operational documentation file contains the production checkout prefix.
 - An unresolved placeholder is rejected.
 - Missing required files fail preflight before installation callbacks run.
 - `--check` performs no writes and no systemctl calls.
