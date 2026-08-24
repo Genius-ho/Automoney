@@ -139,7 +139,11 @@ class SplitSessionAutoTickBroker(AutoTickBroker):
     def get_us_market_calendar_raw(self, date_str):
         now = datetime.now(timezone.utc)
         if self._regular_start is None:
-            self._regular_start = now + timedelta(minutes=30)
+            self._regular_start = (
+                now - timedelta(minutes=10)
+                if self.phase == "regular"
+                else now + timedelta(minutes=30)
+            )
         regular_start = self._regular_start
         day_start = regular_start - timedelta(hours=12)
         pre_start = now + timedelta(minutes=20) if self.phase == "day" else now - timedelta(minutes=10)
@@ -266,6 +270,54 @@ class TradingWebServiceTests(unittest.TestCase):
 
             self.assertEqual(result["unmatched_count"], 1)
             self.assertEqual(service.order_statuses["TQQQ"][order.client_order_id], "UNSENT")
+            self.assertNotIn(order.client_order_id, service.runtime.broker_order_ids)
+
+    def test_sync_does_not_rebind_a_future_date_order(self):
+        with tempfile.TemporaryDirectory() as temp:
+            broker = FakeTradingBroker()
+            service = self._service(temp, broker)
+            order = service.plan_cache["TQQQ"][0]
+            today_token = f"-{date.today():%Y%m%d}-"
+            future_client_id = order.client_order_id.replace(
+                today_token, f"-{date.today() + timedelta(days=1):%Y%m%d}-"
+            )
+            broker.open_orders = [{
+                "orderId": "future-app-order", "symbol": "TQQQ",
+                "side": order.side.upper(), "quantity": str(order.quantity),
+                "price": str(order.limit_price), "orderType": "LIMIT",
+                "timeInForce": "CLS", "status": "PENDING",
+            }]
+            service.runtime.broker_order_ids[future_client_id] = "future-app-order"
+
+            result = service.sync_orders("TQQQ")
+
+            self.assertEqual(result["unmatched_count"], 1)
+            self.assertNotIn(order.client_order_id, service.runtime.broker_order_ids)
+
+    def test_sync_does_not_rebind_an_order_returned_for_another_symbol(self):
+        with tempfile.TemporaryDirectory() as temp:
+            class UnfilteredBroker(FakeTradingBroker):
+                def get_all_orders_raw(self, status, symbol, from_date, to_date):
+                    return self.open_orders if status == "OPEN" else self.closed_orders
+
+            broker = UnfilteredBroker()
+            service = self._service(temp, broker)
+            order = service.plan_cache["TQQQ"][0]
+            prior_client_id = order.client_order_id.replace(
+                f"-{date.today():%Y%m%d}-",
+                f"-{date.today() - timedelta(days=1):%Y%m%d}-",
+            )
+            broker.open_orders = [{
+                "orderId": "wrong-symbol-order", "symbol": "SOXL",
+                "side": order.side.upper(), "quantity": str(order.quantity),
+                "price": str(order.limit_price), "orderType": "LIMIT",
+                "timeInForce": "CLS", "status": "PENDING",
+            }]
+            service.runtime.broker_order_ids[prior_client_id] = "wrong-symbol-order"
+
+            result = service.sync_orders("TQQQ")
+
+            self.assertEqual(result["unmatched_count"], 1)
             self.assertNotIn(order.client_order_id, service.runtime.broker_order_ids)
 
     def test_historical_same_price_order_is_not_matched_to_todays_plan_without_broker_id(self):
@@ -813,12 +865,10 @@ class AutoTickTests(unittest.TestCase):
             self.assertNotIn("TQQQ", service.runtime.last_auto_error)
 
     def test_auto_tick_submits_sells_before_the_buy_delay_elapses(self):
-        """Sell legs are immediate-sell limit orders, so they must not wait
-        for auto_order_delay_minutes the way LOC buy legs do -- a pre-market
-        pop that fades by the regular open would otherwise be missed."""
+        """The pre-market CLS sell must not wait for the LOC buy delay."""
         with tempfile.TemporaryDirectory() as temp:
-            broker = AutoTickBroker()
-            broker.market_open_offset_minutes = 10
+            broker = SplitSessionAutoTickBroker()
+            broker.phase = "late"
             # auto_tick's own refresh_account call re-derives position_qty from
             # broker holdings, so the held position must come from the broker
             # (not just the initial plan()/state.json seed) or it gets reset to 0.
@@ -843,7 +893,7 @@ class AutoTickTests(unittest.TestCase):
 
             sell_ids = [cid for cid in broker.submitted if "sell" in cid]
             buy_ids = [cid for cid in broker.submitted if "buy" in cid]
-            self.assertTrue(sell_ids, "sell legs should submit immediately, unblocked by the buy delay")
+            self.assertTrue(sell_ids, "CLS sell should submit in pre-market, unblocked by the buy delay")
             self.assertEqual(buy_ids, [])
 
     def test_auto_tick_splits_day_limit_sell_from_late_cls_sell(self):
@@ -875,6 +925,39 @@ class AutoTickTests(unittest.TestCase):
 
             self.assertIn(today_prefix + "-quarter-sell", broker.submitted)
             self.assertEqual(broker.submitted.count(today_prefix + "-take-profit"), 1)
+
+    def test_auto_tick_does_not_send_day_sell_after_day_market_ends(self):
+        with tempfile.TemporaryDirectory() as temp:
+            broker = SplitSessionAutoTickBroker()
+            broker.phase = "late"
+            broker.get_holdings_raw = lambda: {"result": {"holdings": [
+                {"symbol": "TQQQ", "quantity": "8", "averagePrice": "75"},
+            ]}}
+            service = TradingWebService(Path(temp), broker_factory=lambda: broker)
+            self._start(service, broker, "TQQQ")
+            service.runtime.auto_order_delay_minutes = 60
+            broker.submitted.clear()
+
+            service.auto_tick()
+
+            self.assertTrue(any(cid.endswith("-quarter-sell") for cid in broker.submitted))
+            self.assertFalse(any(cid.endswith("-take-profit") for cid in broker.submitted))
+
+    def test_auto_tick_does_not_send_cls_sell_after_premarket_ends(self):
+        with tempfile.TemporaryDirectory() as temp:
+            broker = SplitSessionAutoTickBroker()
+            broker.phase = "regular"
+            broker.get_holdings_raw = lambda: {"result": {"holdings": [
+                {"symbol": "TQQQ", "quantity": "8", "averagePrice": "75"},
+            ]}}
+            service = TradingWebService(Path(temp), broker_factory=lambda: broker)
+            self._start(service, broker, "TQQQ")
+            service.runtime.auto_order_delay_minutes = 60
+            broker.submitted.clear()
+
+            service.auto_tick()
+
+            self.assertFalse(any(cid.endswith("-quarter-sell") for cid in broker.submitted))
 
     def test_retry_failed_order_submits_the_same_strategy_leg(self):
         with tempfile.TemporaryDirectory() as temp:

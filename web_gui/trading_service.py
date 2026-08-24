@@ -126,9 +126,15 @@ class TradingWebService(VRWebServiceMixin, WebService):
             self.store.save(state)
 
     @staticmethod
-    def _dated_strategy_leg(client_order_id: str, symbol: str) -> tuple[str, str] | None:
-        match = re.fullmatch(rf"(.+-{re.escape(symbol)}-)\d{{8}}-(.+)", client_order_id)
-        return (match.group(1), match.group(2)) if match else None
+    def _dated_strategy_leg(client_order_id: str, symbol: str) -> tuple[str, date, str] | None:
+        match = re.fullmatch(rf"(.+-{re.escape(symbol)}-)(\d{{8}})-(.+)", client_order_id)
+        if not match:
+            return None
+        try:
+            plan_date = datetime.strptime(match.group(2), "%Y%m%d").date()
+        except ValueError:
+            return None
+        return match.group(1), plan_date, match.group(3)
 
     @staticmethod
     def _broker_row_matches_order(row: dict[str, Any], order: OrderIntent) -> bool:
@@ -154,14 +160,27 @@ class TradingWebService(VRWebServiceMixin, WebService):
         current_leg = self._dated_strategy_leg(order.client_order_id, symbol)
         if current_leg is None:
             return None
+        current_prefix, current_date, current_suffix = current_leg
         candidates: list[tuple[str, str]] = []
         for prior_client_id, broker_order_id in self.runtime.broker_order_ids.items():
             if prior_client_id == order.client_order_id:
                 continue
-            if self._dated_strategy_leg(prior_client_id, symbol) != current_leg:
+            prior_leg = self._dated_strategy_leg(prior_client_id, symbol)
+            if prior_leg is None:
+                continue
+            prior_prefix, prior_date, prior_suffix = prior_leg
+            if (
+                prior_prefix != current_prefix
+                or prior_suffix != current_suffix
+                or prior_date >= current_date
+            ):
                 continue
             row = open_rows.get("toss-open-" + str(broker_order_id))
-            if row is not None and self._broker_row_matches_order(row, order):
+            if (
+                row is not None
+                and str(row.get("symbol") or "").upper() == symbol
+                and self._broker_row_matches_order(row, order)
+            ):
                 candidates.append((prior_client_id, str(broker_order_id)))
         if len(candidates) != 1:
             return None
@@ -1094,7 +1113,8 @@ class TradingWebService(VRWebServiceMixin, WebService):
             return
         now = datetime.now(timezone.utc)
         session_key = None
-        day_market_start = cls_sell_start = regular_start = regular_end = None
+        day_market_start = day_market_end = None
+        cls_sell_start = cls_sell_end = regular_start = regular_end = None
         for offset in (0, 1):
             target = (now - timedelta(days=offset)).date().isoformat()
             today = self.broker().get_us_market_calendar_raw(target).get("result", {}).get("today", {})
@@ -1109,16 +1129,26 @@ class TradingWebService(VRWebServiceMixin, WebService):
                 datetime.fromisoformat(day_market["startTime"]).astimezone(timezone.utc)
                 if day_market.get("startTime") else None
             )
+            day_end = (
+                datetime.fromisoformat(day_market["endTime"]).astimezone(timezone.utc)
+                if day_market.get("endTime") else None
+            )
             pre_start = (
                 datetime.fromisoformat(pre_market["startTime"]).astimezone(timezone.utc)
                 if pre_market.get("startTime") else None
+            )
+            pre_end = (
+                datetime.fromisoformat(pre_market["endTime"]).astimezone(timezone.utc)
+                if pre_market.get("endTime") else None
             )
             session_starts = [value for value in (day_start, pre_start, start) if value is not None]
             session_start = min(session_starts)
             if session_start <= now <= end:
                 regular_start, regular_end = start, end
                 day_market_start = day_start or session_start
+                day_market_end = day_end or pre_start or start
                 cls_sell_start = pre_start or start
+                cls_sell_end = pre_end or start
                 session_key = str(today.get("date") or target)
                 break
         if not session_key:
@@ -1138,8 +1168,16 @@ class TradingWebService(VRWebServiceMixin, WebService):
                     self.sync_orders(symbol)
             except (TossApiError, PermissionError, ValueError) as error:
                 print(f"Auto-tick sync skipped {symbol}: {error}", file=sys.stderr)
-        day_sell_ready = day_market_start is not None and day_market_start <= now
-        cls_sell_ready = cls_sell_start is not None and cls_sell_start <= now
+        day_sell_ready = (
+            day_market_start is not None
+            and day_market_end is not None
+            and day_market_start <= now < day_market_end
+        )
+        cls_sell_ready = (
+            cls_sell_start is not None
+            and cls_sell_end is not None
+            and cls_sell_start <= now < cls_sell_end
+        )
         buy_ready = regular_start + timedelta(minutes=self.runtime.auto_order_delay_minutes) <= now
         for symbol in tuple(self.runtime.active_symbols):
             if get_strategy_type(self.runtime, symbol) == STRATEGY_VR_SKILL:
