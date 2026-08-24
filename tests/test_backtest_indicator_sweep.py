@@ -176,6 +176,8 @@ class SweepReportTests(unittest.TestCase):
         self.assertEqual(report["bar_count"], 80)
         self.assertEqual(report["days"], 1)
         self.assertIn("grid", report)
+        self.assertEqual(len(report["grid"][0]), 4)
+        self.assertIn("target_pct", report["target_grid"][0])
         self.assertLessEqual(len(report["buy_top"]), 5)
         self.assertLessEqual(len(report["sell_top"]), 5)
 
@@ -222,12 +224,26 @@ class TelegramSummaryTests(unittest.TestCase):
             "incomplete_outcomes": 0,
             "buy_top": [],
             "sell_top": [],
+            "target_top": [{
+                "lookback_minutes": 15,
+                "target_pct": 2.0,
+                "horizon_minutes": 60,
+                "complete_count": 10,
+                "target_hit_rate_pct": 80.0,
+                "median_hit_minutes": 12,
+                "avg_gross_return_pct": 2.0,
+                "avg_net_return_pct": 1.9,
+                "avg_max_adverse_pct": -1.2,
+            }],
         }
 
         text = telegram_summary(report)
 
         self.assertIn("-3% 급락 매수", text)
         self.assertIn("+2%, +3%, +4% 목표", text)
+        self.assertIn("도달80.0%", text)
+        self.assertIn("총2.0% 순1.9%", text)
+        self.assertIn("최대하락-1.2%", text)
 
 
 if __name__ == "__main__":

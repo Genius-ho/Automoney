@@ -262,7 +262,8 @@ def evaluate_recovery_target(
         "complete_count": len(outcomes),
         "target_hit_count": len(hits),
         "target_hit_rate_pct": round(len(hits) / len(outcomes) * 100, 1) if outcomes else None,
-        "median_hit_minutes": int(statistics.median(item["hit_minutes"] for item in hits)) if hits else None,
+        "median_hit_minutes": round(statistics.median(item["hit_minutes"] for item in hits), 1) if hits else None,
+        "avg_gross_return_pct": round(statistics.mean(item["gross_return_pct"] for item in outcomes), 3) if outcomes else None,
         "avg_net_return_pct": round(statistics.mean(item["net_return_pct"] for item in outcomes), 3) if outcomes else None,
         "avg_max_adverse_pct": round(statistics.mean(item["max_adverse_pct"] for item in outcomes), 3) if outcomes else None,
         "incomplete_outcomes": incomplete_outcomes,
@@ -602,23 +603,59 @@ def sweep_report(
         bars, minimum_sessions=minimum_sessions
     )
     research_status = "VALIDATED" if validation_count else "EXPLORATORY"
-    grid = _build_recovery_grid(bars, round_trip_cost_bps=round_trip_cost_bps)
-    discovery_grid = (
-        _build_recovery_grid(discovery_bars, round_trip_cost_bps=round_trip_cost_bps)
-        if discovery_bars else grid
+    # Keep the previous indicator-grid fields for programmatic callers. The
+    # user-facing report below is driven by the new recovery target grid.
+    legacy_grid = _build_grid(bars, round_trip_cost_bps=round_trip_cost_bps)
+    legacy_discovery_grid = (
+        _build_grid(discovery_bars, round_trip_cost_bps=round_trip_cost_bps)
+        if discovery_bars else legacy_grid
     )
-    validation_grid = (
+    legacy_validation_grid = (
+        _build_grid(validation_bars, round_trip_cost_bps=round_trip_cost_bps)
+        if validation_bars else []
+    )
+    legacy_discovery_buy_top = _ranked(legacy_discovery_grid, 0, True, minimum_count=MIN_SIGNAL_COUNT)
+    legacy_discovery_sell_top = _ranked(legacy_discovery_grid, 1, False, minimum_count=MIN_SIGNAL_COUNT)
+    legacy_validation_buy_top = (
+        _validation_ranked(
+            legacy_discovery_grid,
+            legacy_validation_grid,
+            0,
+            True,
+            minimum_validation_signals=minimum_validation_signals,
+        )
+        if legacy_validation_grid else []
+    )
+    legacy_validation_sell_top = (
+        _validation_ranked(
+            legacy_discovery_grid,
+            legacy_validation_grid,
+            1,
+            False,
+            minimum_validation_signals=minimum_validation_signals,
+        )
+        if legacy_validation_grid else []
+    )
+    legacy_buy_top = legacy_validation_buy_top if research_status == "VALIDATED" else legacy_discovery_buy_top
+    legacy_sell_top = legacy_validation_sell_top if research_status == "VALIDATED" else legacy_discovery_sell_top
+
+    target_grid = _build_recovery_grid(bars, round_trip_cost_bps=round_trip_cost_bps)
+    target_discovery_grid = (
+        _build_recovery_grid(discovery_bars, round_trip_cost_bps=round_trip_cost_bps)
+        if discovery_bars else target_grid
+    )
+    target_validation_grid = (
         _build_recovery_grid(validation_bars, round_trip_cost_bps=round_trip_cost_bps)
         if validation_bars else []
     )
-    discovery_top = _ranked_recovery(discovery_grid, minimum_count=MIN_SIGNAL_COUNT)
+    discovery_top = _ranked_recovery(target_discovery_grid, minimum_count=MIN_SIGNAL_COUNT)
     validation_top = (
         _validation_ranked_recovery(
-            discovery_grid,
-            validation_grid,
+            target_discovery_grid,
+            target_validation_grid,
             minimum_validation_signals=minimum_validation_signals,
         )
-        if validation_grid else []
+        if target_validation_grid else []
     )
     target_top = validation_top if research_status == "VALIDATED" else discovery_top
     return {
@@ -633,15 +670,18 @@ def sweep_report(
         "grid_scope": "FULL_HISTORY_EXPLORATORY",
         "incomplete_outcomes": sum(
             row.get("incomplete_outcomes", 0)
-            for row in grid
+            for row in target_grid
         ),
         "range": (bars[0].timestamp.isoformat(), bars[-1].timestamp.isoformat()) if bars else None,
-        "grid": grid,
-        "target_grid": grid,
-        "discovery_grid": discovery_grid,
-        "discovery_target_grid": discovery_grid,
-        "validation_grid": validation_grid,
-        "validation_target_grid": validation_grid,
+        "grid": legacy_grid,
+        "discovery_grid": legacy_discovery_grid,
+        "validation_grid": legacy_validation_grid,
+        "legacy_grid": legacy_grid,
+        "legacy_discovery_grid": legacy_discovery_grid,
+        "legacy_validation_grid": legacy_validation_grid,
+        "target_grid": target_grid,
+        "discovery_target_grid": target_discovery_grid,
+        "validation_target_grid": target_validation_grid,
         "drop_threshold_pct": DROP_THRESHOLD_PCT,
         "recovery_lookback_minutes": RECOVERY_LOOKBACK_MINUTES,
         "recovery_target_pcts": RECOVERY_TARGET_PCTS,
@@ -649,14 +689,14 @@ def sweep_report(
         "discovery_target_top": discovery_top,
         "validation_target_top": validation_top,
         "target_top": target_top,
-        # Compatibility aliases: this report now has one BUY-entry/target path;
-        # SELL is the target exit rather than an independent signal ranking.
-        "discovery_buy_top": discovery_top,
-        "discovery_sell_top": [],
-        "validation_buy_top": validation_top,
-        "validation_sell_top": [],
-        "buy_top": target_top,
-        "sell_top": [],
+        # Preserve the old tuple-shaped fields for programmatic callers. New
+        # consumers should use target_top and the target_* grid fields.
+        "discovery_buy_top": legacy_discovery_buy_top,
+        "discovery_sell_top": legacy_discovery_sell_top,
+        "validation_buy_top": legacy_validation_buy_top,
+        "validation_sell_top": legacy_validation_sell_top,
+        "buy_top": legacy_buy_top,
+        "sell_top": legacy_sell_top,
     }
 
 
@@ -685,7 +725,7 @@ def print_report(report: dict) -> None:
     else:
         print("[전체 기간 그리드 — 탐색 결과]")
 
-    header = f"{'고점관찰':>8} {'목표':>6} {'제한(분)':>8} {'신호':>6} {'완료':>6} {'목표도달':>9} {'중앙도달(분)':>13} {'평균순수익%':>12} {'평균최대하락%':>14}"
+    header = f"{'고점관찰':>8} {'목표':>6} {'제한(분)':>8} {'신호':>6} {'완료':>6} {'목표도달':>9} {'중앙도달(분)':>13} {'총수익%':>9} {'순수익%':>9} {'평균최대하락%':>14}"
     print(header)
     print("-" * len(header))
     for row in report["target_grid"]:
@@ -693,7 +733,8 @@ def print_report(report: dict) -> None:
             f"{row['lookback_minutes']:>8} {row['target_pct']:>5.1f}% {row['horizon_minutes']:>8} "
             f"{row['signal_count']:>6} {row['complete_count']:>6} "
             f"{cell(row, 'target_hit_rate_pct'):>8}% {cell(row, 'median_hit_minutes'):>13} "
-            f"{cell(row, 'avg_net_return_pct'):>12} {cell(row, 'avg_max_adverse_pct'):>14}"
+            f"{cell(row, 'avg_gross_return_pct'):>9} {cell(row, 'avg_net_return_pct'):>9} "
+            f"{cell(row, 'avg_max_adverse_pct'):>14}"
         )
 
     print()
@@ -704,7 +745,8 @@ def print_report(report: dict) -> None:
             f"제한 {row['horizon_minutes']}분 · 완료 n={row['complete_count']} "
             f"· 표본 {row.get('sample_status', sample_status(row['complete_count']))} "
             f"· 도달률 {row['target_hit_rate_pct']}% · 중앙 도달 {row['median_hit_minutes']}분 "
-            f"· 순수익 {row['avg_net_return_pct']}%"
+            f"· 총수익 {row['avg_gross_return_pct']}% · 순수익 {row['avg_net_return_pct']}% "
+            f"· 최대하락 {row['avg_max_adverse_pct']}%"
         )
 
 
@@ -729,7 +771,9 @@ def telegram_summary(report: dict) -> str:
                 f"· 관찰{row['lookback_minutes']}분 목표+{row['target_pct']:g}% 제한{row['horizon_minutes']}분 "
                 f"완료n={row['complete_count']} "
                 f"표본{row.get('sample_status', sample_status(row['complete_count']))} "
-                f"도달{row['target_hit_rate_pct']}% 중앙{row['median_hit_minutes']}분"
+                f"도달{row['target_hit_rate_pct']}% 중앙{row['median_hit_minutes']}분 "
+                f"총{row['avg_gross_return_pct']}% 순{row['avg_net_return_pct']}% "
+                f"최대하락{row['avg_max_adverse_pct']}%"
             )
     else:
         lines.append("· 조건을 만족하는 조합 없음")

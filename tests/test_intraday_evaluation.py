@@ -95,6 +95,16 @@ class DropRecoveryEvaluationTests(unittest.TestCase):
         self.assertEqual([item["target_hit_count"] for item in results], [1, 1, 1])
         self.assertEqual([item["median_hit_minutes"] for item in results], [3, 6, 9])
 
+        with_cost = evaluate_recovery_target(
+            bars,
+            [signal],
+            target_pct=2.0,
+            horizon_minutes=12,
+            round_trip_cost_bps=10,
+        )
+        self.assertAlmostEqual(with_cost["avg_gross_return_pct"], 2.0)
+        self.assertAlmostEqual(with_cost["avg_net_return_pct"], 1.9)
+
     def test_recovery_target_excludes_a_signal_without_a_complete_horizon(self):
         start = datetime(2026, 8, 25, 15, 57, tzinfo=NY)
         bars = [
