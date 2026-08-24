@@ -1,0 +1,20 @@
+[Unit]
+Description=Mumae indicator backtest sweep + Telegram notify (one-shot)
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=oneshot
+User=ho
+Group=ho
+WorkingDirectory="@MUMAE_PROJECT_ROOT@"
+EnvironmentFile="@MUMAE_PROJECT_ROOT@/deploy/mumae.env"
+ExecStart="@MUMAE_PROJECT_ROOT@/.venv/bin/python" "@MUMAE_PROJECT_ROOT@/backtest_indicator_sweep.py" KORU --notify
+ExecStart="@MUMAE_PROJECT_ROOT@/.venv/bin/python" "@MUMAE_PROJECT_ROOT@/backtest_indicator_sweep.py" SOXL --notify
+ExecStart="@MUMAE_PROJECT_ROOT@/.venv/bin/python" "@MUMAE_PROJECT_ROOT@/backtest_indicator_sweep.py" TQQQ --notify
+UMask=0077
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectSystem=strict
+ProtectHome=read-only
+ReadWritePaths="@MUMAE_PROJECT_ROOT@/data"
