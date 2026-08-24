@@ -53,6 +53,18 @@ class SessionAwareResamplingTests(unittest.TestCase):
 
         self.assertEqual(vwap, [100.0, 50.0])
 
+    def test_vwap_resets_after_a_missing_resampled_bar(self):
+        start = datetime(2026, 8, 25, 9, 30, tzinfo=NY)
+        bars = [
+            Bar(start, 100, 100, 100, 100, 1),
+            Bar(start + timedelta(minutes=3), 110, 110, 110, 110, 1),
+            Bar(start + timedelta(minutes=9), 200, 200, 200, 200, 1),
+        ]
+
+        vwap = compute_vwap(bars)
+
+        self.assertEqual(vwap, [100.0, 105.0, 200.0])
+
     def test_rsi_warmup_restarts_at_phase_boundary(self):
         regular = datetime(2026, 8, 25, 9, 30, tzinfo=NY)
         after = datetime(2026, 8, 25, 16, 0, tzinfo=NY)

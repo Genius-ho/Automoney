@@ -223,4 +223,3 @@ Review the complete diff for session-boundary leakage, partial-bar inclusion, ou
 - [ ] Step 6: Report the result.
 
 Include final test count, current cache session counts, exploratory or validation status, changed commits, and the fact that live order execution was not modified.
-

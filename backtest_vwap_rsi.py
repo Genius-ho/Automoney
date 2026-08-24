@@ -133,19 +133,15 @@ def resample(bars: list[Bar], minutes: int = RESAMPLE_MINUTES) -> list[Bar]:
 
 
 def compute_vwap(bars: list[Bar]) -> list[float]:
-    """VWAP reset at each US session and market-phase boundary."""
+    """VWAP reset at each session, phase, and missing-bar boundary."""
     vwap: list[float] = []
-    cum_pv = cum_vol = 0.0
-    current_segment = None
-    for bar in bars:
-        segment = bar.segment_key
-        if segment != current_segment:
-            current_segment = segment
-            cum_pv = cum_vol = 0.0
-        typical_price = (bar.high + bar.low + bar.close) / 3
-        cum_pv += typical_price * bar.volume
-        cum_vol += bar.volume
-        vwap.append(cum_pv / cum_vol if cum_vol else bar.close)
+    for start, end in segment_ranges(bars):
+        cum_pv = cum_vol = 0.0
+        for bar in bars[start:end]:
+            typical_price = (bar.high + bar.low + bar.close) / 3
+            cum_pv += typical_price * bar.volume
+            cum_vol += bar.volume
+            vwap.append(cum_pv / cum_vol if cum_vol else bar.close)
     return vwap
 
 
@@ -459,6 +455,7 @@ def main() -> None:
         )
     print()
     print(f"비용 가정: 왕복 {result['round_trip_cost_bps']}bps")
+    print("매도 수익률은 하락이 음수로 표시됩니다.")
     print(f"{'시각':19} {'구분':4} {'가격':>10} {'VWAP괴리%':>10} {'StochRSI':>8} {'결과%':>8}")
     for outcome in result["signals"]:
         signal = outcome.signal

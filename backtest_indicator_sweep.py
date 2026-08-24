@@ -440,6 +440,7 @@ def print_report(report: dict) -> None:
         f"비용 가정: 왕복 {report.get('round_trip_cost_bps', 0.0)}bps "
         f"· 불완전 결과 제외 {report.get('incomplete_outcomes', 0)}건"
     )
+    print("매도 수익률은 하락이 음수로 표시되며, 더 낮을수록 유리합니다.")
     if report["range"]:
         print(f"기간: {report['range'][0]} ~ {report['range'][1]}")
     print()
@@ -485,6 +486,7 @@ def telegram_summary(report: dict) -> str:
         f"거래세션 {report.get('session_count', report['days'])}개 · "
         f"상태 {report.get('research_status', 'EXPLORATORY')}",
         f"비용 왕복 {report.get('round_trip_cost_bps', 0.0)}bps · 불완전 제외 {report.get('incomplete_outcomes', 0)}건",
+        "매도 수익률은 하락이 음수로 표시되며, 더 낮을수록 유리합니다.",
     ]
     if report.get("research_status") == "VALIDATED":
         lines.append("검증 상위 후보는 후반 세션 기준이며, 전체 기간 그리드는 탐색 참고용입니다.")
