@@ -124,7 +124,10 @@ class EvaluateTests(unittest.TestCase):
 
         result = evaluate(bars, [])
 
-        self.assertEqual(result["SELL"], {"count": 0, "hit_rate_pct": None, "avg_return_pct": None})
+        self.assertEqual(
+            result["SELL"],
+            {"count": 0, "hit_rate_pct": None, "avg_return_pct": None, "avg_net_return_pct": None},
+        )
 
 
 class LoadBarsTests(unittest.TestCase):

@@ -218,6 +218,30 @@ def compute_stoch_rsi(
     return k, d
 
 
+def compute_segmented_stoch_rsi(
+    bars: list[Bar],
+    *,
+    rsi_period: int = 14,
+    stoch_period: int = 14,
+    smooth_k: int = 3,
+    smooth_d: int = 3,
+) -> tuple[list[float | None], list[float | None]]:
+    segments = [bars[start:end] for start, end in segment_ranges(bars)]
+    k_values: list[float | None] = []
+    d_values: list[float | None] = []
+    for segment in segments:
+        k, d = compute_stoch_rsi(
+            [bar.close for bar in segment],
+            rsi_period=rsi_period,
+            stoch_period=stoch_period,
+            smooth_k=smooth_k,
+            smooth_d=smooth_d,
+        )
+        k_values.extend(k)
+        d_values.extend(d)
+    return k_values, d_values
+
+
 @dataclass
 class Signal:
     index: int
@@ -245,7 +269,12 @@ def detect_signals(
     a lone RSI extreme or a lone VWAP gap is not enough on its own."""
     signals: list[Signal] = []
     armed_buy = armed_sell = False
+    previous_segment = None
     for index, bar in enumerate(bars):
+        segment = bar.segment_key
+        if segment != previous_segment:
+            armed_buy = armed_sell = False
+            previous_segment = segment
         gap = (bar.close - vwap[index]) / vwap[index] * 100 if vwap[index] else 0.0
         bar_rsi = rsi[index]
         buy_condition = gap <= -vwap_gap_pct and bar_rsi is not None and bar_rsi <= rsi_buy
@@ -266,12 +295,35 @@ class SignalOutcome:
     favorable: bool
 
 
-def evaluate_signals(bars: list[Bar], signals: list[Signal], *, forward_bars: int = 10) -> list[SignalOutcome]:
+def _evaluate_signal_items(
+    bars: list[Bar],
+    signals: list[Signal],
+    *,
+    forward_bars: int = 10,
+    horizon_minutes: int | None = None,
+) -> tuple[list[SignalOutcome], int]:
+    if horizon_minutes is None:
+        horizon_minutes = forward_bars * RESAMPLE_MINUTES
+    if horizon_minutes <= 0 or horizon_minutes % RESAMPLE_MINUTES:
+        raise ValueError("horizon minutes must be a positive multiple of the resample interval")
+    steps = horizon_minutes // RESAMPLE_MINUTES
+    by_key = {(bar.segment_key, bar.timestamp): bar for bar in bars}
     outcomes = []
+    incomplete = 0
     for signal in signals:
-        window = bars[signal.index + 1: signal.index + 1 + forward_bars]
-        if not window:
+        if not 0 <= signal.index < len(bars):
+            incomplete += 1
             continue
+        segment = bars[signal.index].segment_key
+        target_times = [
+            signal.timestamp + timedelta(minutes=RESAMPLE_MINUTES * offset)
+            for offset in range(1, steps + 1)
+        ]
+        window = [by_key.get((segment, timestamp)) for timestamp in target_times]
+        if any(item is None for item in window):
+            incomplete += 1
+            continue
+        window = [item for item in window if item is not None]
         end_price = window[-1].close
         forward_return = (end_price - signal.price) / signal.price * 100
         if signal.side == "BUY":
@@ -281,6 +333,19 @@ def evaluate_signals(bars: list[Bar], signals: list[Signal], *, forward_bars: in
             best_case = (signal.price - min(item.close for item in window)) / signal.price * 100
             favorable = forward_return < 0
         outcomes.append(SignalOutcome(signal, forward_return, best_case, favorable))
+    return outcomes, incomplete
+
+
+def evaluate_signals(
+    bars: list[Bar],
+    signals: list[Signal],
+    *,
+    forward_bars: int = 10,
+    horizon_minutes: int | None = None,
+) -> list[SignalOutcome]:
+    outcomes, _incomplete = _evaluate_signal_items(
+        bars, signals, forward_bars=forward_bars, horizon_minutes=horizon_minutes
+    )
     return outcomes
 
 
@@ -313,9 +378,9 @@ def run_backtest(
     minute_bars = fetch_minute_candles(broker, symbol, max_pages=max_pages)
     bars = resample(minute_bars)
     vwap = compute_vwap(bars)
-    stoch_k, _stoch_d = compute_stoch_rsi([bar.close for bar in bars])
+    stoch_k, _stoch_d = compute_segmented_stoch_rsi(bars)
     signals = detect_signals(bars, vwap, stoch_k, vwap_gap_pct=vwap_gap_pct, rsi_buy=rsi_buy, rsi_sell=rsi_sell)
-    outcomes = evaluate_signals(bars, signals, forward_bars=forward_bars)
+    outcomes, incomplete_outcomes = _evaluate_signal_items(bars, signals, forward_bars=forward_bars)
     return {
         "symbol": symbol,
         "minute_candles": len(minute_bars),
@@ -323,6 +388,7 @@ def run_backtest(
         "range": (bars[0].timestamp.isoformat(), bars[-1].timestamp.isoformat()) if bars else None,
         "buy": summarize(outcomes, "BUY"),
         "sell": summarize(outcomes, "SELL"),
+        "incomplete_outcomes": incomplete_outcomes,
         "signals": outcomes,
     }
 
