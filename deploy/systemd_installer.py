@@ -157,6 +157,15 @@ def install_units(
         geteuid=geteuid,
         command_runner=command_runner,
     )
+    previously_active = False
+    if restart:
+        try:
+            command_runner(["systemctl", "is-active", "--quiet", "mumae.service"])
+            previously_active = True
+        except subprocess.CalledProcessError as error:
+            if error.returncode not in {3, 4}:
+                raise
+
     unit_dir.mkdir(parents=True, exist_ok=True)
     snapshots: dict[str, tuple[bytes, int] | None] = {}
     for name in UNIT_NAMES:
@@ -169,14 +178,6 @@ def install_units(
             shutil.copy2(destination, unit_dir / f"{name}.previous")
         else:
             snapshots[name] = None
-
-    previously_active = False
-    if restart:
-        try:
-            command_runner(["systemctl", "is-active", "--quiet", "mumae.service"])
-            previously_active = True
-        except subprocess.CalledProcessError:
-            pass
 
     try:
         for name, content in rendered.items():
@@ -191,8 +192,8 @@ def install_units(
             command_runner(["systemctl", "is-active", "--quiet", "mumae.service"])
     except Exception as original_error:
         rollback_errors: list[Exception] = []
-        try:
-            for name, snapshot in snapshots.items():
+        for name, snapshot in snapshots.items():
+            try:
                 destination = unit_dir / name
                 if snapshot is None:
                     destination.unlink(missing_ok=True)
@@ -202,13 +203,14 @@ def install_units(
                 temporary.write_bytes(content)
                 temporary.chmod(mode)
                 os.replace(temporary, destination)
-        except Exception as error:
-            rollback_errors.append(error)
-        try:
-            command_runner(["systemctl", "daemon-reload"])
-        except Exception as error:
-            rollback_errors.append(error)
-        if restart and previously_active:
+            except Exception as error:
+                rollback_errors.append(error)
+        if not rollback_errors:
+            try:
+                command_runner(["systemctl", "daemon-reload"])
+            except Exception as error:
+                rollback_errors.append(error)
+        if restart and previously_active and not rollback_errors:
             try:
                 command_runner(["systemctl", "restart", "mumae.service"])
             except Exception as error:

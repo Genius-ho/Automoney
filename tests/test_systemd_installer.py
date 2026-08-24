@@ -292,6 +292,77 @@ class InstallerTransactionTests(unittest.TestCase):
         self.assertEqual(restart_count, 2)
         self.assertEqual(calls[-1], ["systemctl", "restart", "mumae.service"])
 
+    def test_is_active_transport_failure_aborts_before_replacing_units(self):
+        root = make_complete_project_fixture(self)
+        unit_dir = make_existing_unit_fixture(self, root)
+        before = {name: (unit_dir / name).read_bytes() for name in UNIT_NAMES}
+        calls: list[list[str]] = []
+
+        def fail_activity_check(args):
+            command = list(args)
+            calls.append(command)
+            if command == ["systemctl", "is-active", "--quiet", "mumae.service"]:
+                raise subprocess.CalledProcessError(1, command, stderr="systemd unavailable")
+
+        with patch("deploy.systemd_installer.shutil.which", return_value=None):
+            with self.assertRaisesRegex(subprocess.CalledProcessError, "is-active"):
+                install_units(
+                    root,
+                    unit_dir,
+                    check_only=False,
+                    restart=True,
+                    command_runner=fail_activity_check,
+                )
+
+        self.assertEqual(
+            before,
+            {name: (unit_dir / name).read_bytes() for name in UNIT_NAMES},
+        )
+        self.assertEqual(calls, [["systemctl", "is-active", "--quiet", "mumae.service"]])
+
+    def test_partial_unit_restore_never_restarts_the_service(self):
+        root = make_complete_project_fixture(self)
+        unit_dir = make_existing_unit_fixture(self, root)
+        before = {name: (unit_dir / name).read_bytes() for name in UNIT_NAMES}
+        calls: list[list[str]] = []
+        restart_count = 0
+        real_replace = __import__("os").replace
+
+        def fail_restart(args):
+            nonlocal restart_count
+            command = list(args)
+            calls.append(command)
+            if command == ["systemctl", "restart", "mumae.service"]:
+                restart_count += 1
+                raise subprocess.CalledProcessError(1, command, stderr="restart failed")
+
+        def fail_one_rollback(source, destination):
+            if Path(destination).name == "mumae.service" and str(source).endswith(".rollback"):
+                raise OSError("main unit restore failed")
+            return real_replace(source, destination)
+
+        with patch("deploy.systemd_installer.shutil.which", return_value=None), patch(
+            "deploy.systemd_installer.os.replace", side_effect=fail_one_rollback
+        ):
+            with self.assertRaisesRegex(RuntimeError, "main unit restore failed"):
+                install_units(
+                    root,
+                    unit_dir,
+                    check_only=False,
+                    restart=True,
+                    command_runner=fail_restart,
+                )
+
+        self.assertEqual(restart_count, 1)
+        self.assertEqual(
+            (unit_dir / "mumae-candle-logger.service").read_bytes(),
+            before["mumae-candle-logger.service"],
+        )
+        self.assertEqual(
+            (unit_dir / "mumae-backtest-notify.service").read_bytes(),
+            before["mumae-backtest-notify.service"],
+        )
+
     def test_rollback_reload_failure_reports_the_original_and_rollback_errors(self):
         root = make_complete_project_fixture(self)
         unit_dir = make_existing_unit_fixture(self, root)
@@ -324,7 +395,10 @@ class InstallerTransactionTests(unittest.TestCase):
         (unit_dir / "mumae.service").write_text("old-main", encoding="utf-8")
 
         def fail_reload(args):
-            raise subprocess.CalledProcessError(1, list(args))
+            command = list(args)
+            if command == ["systemctl", "is-active", "--quiet", "mumae.service"]:
+                raise subprocess.CalledProcessError(3, command)
+            raise subprocess.CalledProcessError(1, command)
 
         with patch("deploy.systemd_installer.shutil.which", return_value=None):
             with self.assertRaises(RuntimeError):
