@@ -209,6 +209,65 @@ class TradingWebServiceTests(unittest.TestCase):
             self.assertEqual(result["orders"][0]["status"], "PENDING")
             self.assertEqual(result["unmatched_count"], 0)
 
+    def test_sync_rebinds_an_identical_prior_date_app_order_to_todays_leg(self):
+        with tempfile.TemporaryDirectory() as temp:
+            broker = FakeTradingBroker()
+            service = self._service(temp, broker)
+            order = service.plan_cache["TQQQ"][0]
+            today_token = f"-{date.today():%Y%m%d}-"
+            prior_token = f"-{date.today() - timedelta(days=1):%Y%m%d}-"
+            prior_client_id = order.client_order_id.replace(today_token, prior_token)
+            self.assertNotEqual(prior_client_id, order.client_order_id)
+            broker.open_orders = [{
+                "orderId": "prior-app-order",
+                "symbol": "TQQQ",
+                "side": order.side.upper(),
+                "quantity": str(order.quantity),
+                "price": str(order.limit_price),
+                "orderType": "LIMIT",
+                "timeInForce": "CLS",
+                "status": "PENDING",
+            }]
+            service.runtime.broker_order_ids[prior_client_id] = "prior-app-order"
+            service.runtime_store.save(service.runtime)
+
+            result = service.sync_orders("TQQQ")
+
+            self.assertEqual(result["unmatched_count"], 0)
+            self.assertEqual(service.order_statuses["TQQQ"][order.client_order_id], "PENDING")
+            self.assertEqual(
+                service.runtime.broker_order_ids[order.client_order_id],
+                "prior-app-order",
+            )
+            self.assertNotIn(prior_client_id, service.runtime.broker_order_ids)
+
+    def test_sync_does_not_rebind_a_prior_date_order_with_changed_quantity(self):
+        with tempfile.TemporaryDirectory() as temp:
+            broker = FakeTradingBroker()
+            service = self._service(temp, broker)
+            order = service.plan_cache["TQQQ"][0]
+            today_token = f"-{date.today():%Y%m%d}-"
+            prior_token = f"-{date.today() - timedelta(days=1):%Y%m%d}-"
+            prior_client_id = order.client_order_id.replace(today_token, prior_token)
+            broker.open_orders = [{
+                "orderId": "different-prior-order",
+                "symbol": "TQQQ",
+                "side": order.side.upper(),
+                "quantity": str(order.quantity + 1),
+                "price": str(order.limit_price),
+                "orderType": "LIMIT",
+                "timeInForce": "CLS",
+                "status": "PENDING",
+            }]
+            service.runtime.broker_order_ids[prior_client_id] = "different-prior-order"
+            service.runtime_store.save(service.runtime)
+
+            result = service.sync_orders("TQQQ")
+
+            self.assertEqual(result["unmatched_count"], 1)
+            self.assertEqual(service.order_statuses["TQQQ"][order.client_order_id], "UNSENT")
+            self.assertNotIn(order.client_order_id, service.runtime.broker_order_ids)
+
     def test_historical_same_price_order_is_not_matched_to_todays_plan_without_broker_id(self):
         with tempfile.TemporaryDirectory() as temp:
             broker = FakeTradingBroker()
@@ -496,7 +555,7 @@ class NewOrderGuardTests(unittest.TestCase):
 
             self.assertEqual(broker.submitted, [])
 
-    def test_start_auto_activates_symbol_and_submits_initial_orders(self):
+    def test_start_auto_activates_symbol_without_submitting_before_scheduler(self):
         with tempfile.TemporaryDirectory() as temp:
             broker = LiveTradingBroker()
             service = TradingWebService(Path(temp), broker_factory=lambda: broker)
@@ -509,23 +568,22 @@ class NewOrderGuardTests(unittest.TestCase):
             self.assertIn("TQQQ", service.runtime.active_symbols)
             self.assertIn("TQQQ", service.runtime.known_symbols)
             self.assertTrue(result["auto_enabled"])
-            self.assertGreater(len(broker.submitted), 0)
-            self.assertIn("TQQQ", service.runtime.last_auto_attempt_at)
+            self.assertEqual(result["queued"], len(planned))
+            self.assertEqual(broker.submitted, [])
+            self.assertNotIn("TQQQ", service.runtime.last_auto_attempt_at)
 
-    def test_start_auto_rolls_back_active_symbols_when_nothing_confirmed(self):
+    def test_start_auto_rejects_a_wrong_confirmation_without_activating(self):
         with tempfile.TemporaryDirectory() as temp:
             broker = LiveTradingBroker()
             service = TradingWebService(Path(temp), broker_factory=lambda: broker)
-            # Fresh (never-held) position -> build_plan produces a single buy-only
-            # entry order; zero cash means it gets trimmed and nothing is affordable.
-            self._plan(service, cash_usd="0", position_qty=0, avg_cost="0", t_value="0")
+            self._plan(service)
             service.sync_orders("TQQQ")
-            planned = service.plan_cache["TQQQ"]
 
-            with self.assertRaises(ValueError):
-                service.start_auto("TQQQ", f"SUBMIT TQQQ {len(planned)}")
+            with self.assertRaises(PermissionError):
+                service.start_auto("TQQQ", "SUBMIT TQQQ 999")
 
             self.assertNotIn("TQQQ", service.runtime.active_symbols)
+            self.assertEqual(broker.submitted, [])
 
     def test_stop_auto_blocks_further_new_orders(self):
         with tempfile.TemporaryDirectory() as temp:
@@ -589,7 +647,8 @@ class NewOrderGuardTests(unittest.TestCase):
             planned_soxl = service.plan_cache["SOXL"]
             result = service.start_auto("SOXL", f"SUBMIT SOXL {len(planned_soxl)}")
 
-            self.assertGreater(len(result["submitted"]), 0)
+            self.assertEqual(result["queued"], len(planned_soxl))
+            self.assertEqual(broker.submitted, [])
             self.assertIn("SOXL", service.runtime.active_symbols)
             self.assertNotIn("TQQQ", service.runtime.active_symbols)
 
@@ -711,6 +770,47 @@ class AutoTickTests(unittest.TestCase):
             service.auto_tick()
 
             self.assertEqual(broker.submitted, [])
+
+    def test_auto_tick_does_not_resubmit_rebound_prior_date_open_orders(self):
+        from toss_api import order_time_in_force
+
+        with tempfile.TemporaryDirectory() as temp:
+            broker = AutoTickBroker()
+            broker.get_holdings_raw = lambda: {"result": {"holdings": [{
+                "symbol": "TQQQ", "quantity": "8", "averagePrice": "75",
+            }]}}
+            service = TradingWebService(Path(temp), broker_factory=lambda: broker)
+            service.plan({
+                "symbol": "TQQQ", "current_price": "84.5", "previous_close": "82",
+                "cash_usd": "5000", "position_qty": 8, "avg_cost": "75",
+                "t_value": "3", "base_buy_qty": 2, "mode": "GENERAL",
+            })
+            planned = list(service.plan_cache["TQQQ"])
+            today_token = f"-{date.today():%Y%m%d}-"
+            prior_token = f"-{date.today() - timedelta(days=1):%Y%m%d}-"
+            for index, order in enumerate(planned, start=1):
+                prior_client_id = order.client_order_id.replace(today_token, prior_token)
+                broker_order_id = f"prior-{index}"
+                service.runtime.broker_order_ids[prior_client_id] = broker_order_id
+                broker.open_orders.append({
+                    "orderId": broker_order_id,
+                    "symbol": "TQQQ",
+                    "side": order.side.upper(),
+                    "quantity": str(order.quantity),
+                    "price": str(order.limit_price),
+                    "orderType": "LIMIT",
+                    "timeInForce": order_time_in_force(order),
+                    "status": "PENDING",
+                })
+            service.runtime.active_symbols.append("TQQQ")
+            service.runtime.known_symbols.append("TQQQ")
+            service.runtime.auto_order_delay_minutes = 0
+            service.runtime_store.save(service.runtime)
+
+            service.auto_tick()
+
+            self.assertEqual(broker.submitted, [])
+            self.assertNotIn("TQQQ", service.runtime.last_auto_error)
 
     def test_auto_tick_submits_sells_before_the_buy_delay_elapses(self):
         """Sell legs are immediate-sell limit orders, so they must not wait

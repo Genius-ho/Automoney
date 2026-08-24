@@ -125,6 +125,56 @@ class TradingWebService(VRWebServiceMixin, WebService):
         if changed:
             self.store.save(state)
 
+    @staticmethod
+    def _dated_strategy_leg(client_order_id: str, symbol: str) -> tuple[str, str] | None:
+        match = re.fullmatch(rf"(.+-{re.escape(symbol)}-)\d{{8}}-(.+)", client_order_id)
+        return (match.group(1), match.group(2)) if match else None
+
+    @staticmethod
+    def _broker_row_matches_order(row: dict[str, Any], order: OrderIntent) -> bool:
+        try:
+            row_quantity = int(Decimal(str(row.get("quantity") or "0")))
+            row_price = Decimal(str(row.get("price") or "0")).quantize(CENT)
+        except (InvalidOperation, ValueError):
+            return False
+        return (
+            str(row.get("side") or "").lower() == order.side
+            and row_quantity == order.quantity
+            and row_price == (order.limit_price or Decimal("0")).quantize(CENT)
+            and str(row.get("orderType") or "").upper() == "LIMIT"
+            and str(row.get("timeInForce") or "").upper() == order_time_in_force(order)
+        )
+
+    def _rebind_prior_open_order(
+        self,
+        symbol: str,
+        order: OrderIntent,
+        open_rows: dict[str, dict[str, Any]],
+    ) -> str | None:
+        current_leg = self._dated_strategy_leg(order.client_order_id, symbol)
+        if current_leg is None:
+            return None
+        candidates: list[tuple[str, str]] = []
+        for prior_client_id, broker_order_id in self.runtime.broker_order_ids.items():
+            if prior_client_id == order.client_order_id:
+                continue
+            if self._dated_strategy_leg(prior_client_id, symbol) != current_leg:
+                continue
+            row = open_rows.get("toss-open-" + str(broker_order_id))
+            if row is not None and self._broker_row_matches_order(row, order):
+                candidates.append((prior_client_id, str(broker_order_id)))
+        if len(candidates) != 1:
+            return None
+        prior_client_id, broker_order_id = candidates[0]
+        self.runtime.broker_order_ids.pop(prior_client_id, None)
+        self.runtime.broker_order_ids[order.client_order_id] = broker_order_id
+        self.runtime.broker_client_order_ids.pop(prior_client_id, None)
+        self.runtime.active_order_ids = [
+            order.client_order_id if item == prior_client_id else item
+            for item in self.runtime.active_order_ids
+        ]
+        return broker_order_id
+
     def sync_orders(self, symbol: str) -> dict[str, Any]:
         symbol = symbol.upper()
         today_value = date.today()
@@ -185,8 +235,12 @@ class TradingWebService(VRWebServiceMixin, WebService):
         records: dict[str, dict[str, Any]] = {}
         unmatched = dict(open_rows)
         result: list[dict[str, Any]] = []
+        rebound = False
         for order in planned:
             actual_id = self.runtime.broker_order_ids.get(order.client_order_id)
+            if not actual_id:
+                actual_id = self._rebind_prior_open_order(symbol, order, open_rows)
+                rebound = rebound or actual_id is not None
             match = next((index for index in reversed(range(len(rows))) if index in unused and actual_id and str(rows[index].get("orderId") or "") == actual_id), None)
             status = "UNSENT"
             if match is not None:
@@ -203,6 +257,8 @@ class TradingWebService(VRWebServiceMixin, WebService):
                 status = "UNCONFIRMED"
             statuses[order.client_order_id] = status
             result.append(self._order_payload(symbol, order, status))
+        if rebound:
+            self.runtime_store.save(self.runtime)
         for item_id, row in unmatched.items():
             result.append({
                 "id": item_id,
@@ -982,35 +1038,35 @@ class TradingWebService(VRWebServiceMixin, WebService):
         return {"submitted": submitted, "confirmed": confirmed, "errors": errors, **synced}
 
     def start_auto(self, symbol: str, confirmation: str) -> dict[str, Any]:
-        """Transition a symbol from STOPPED to RUNNING and send its initial batch.
-
-        active_symbols is flipped on *before* calling submit_orders() so the
-        single guard inside submit_orders() sees the symbol as running; if
-        nothing ends up confirmed, a symbol that was not already running is
-        rolled back to STOPPED so a failed start never leaves it half-active.
-        """
+        """Enable scheduled submission without bypassing market-phase gates."""
         symbol = symbol.upper()
-        was_active = symbol in self.runtime.active_symbols
-        if not was_active:
+        broker = self.broker()
+        if broker.mode != "LIVE" or not broker.live_ack:
+            raise PermissionError("Windows판과 동일하게 LIVE 모드와 실주문 확인값이 모두 필요합니다.")
+        if symbol not in self.orders_synced:
+            raise ValueError("토스 실제 주문현황을 먼저 동기화해야 합니다.")
+        if self.unmatched_orders.get(symbol):
+            raise ValueError("현재 계획과 다른 토스 OPEN 주문이 있어 자동운용을 시작할 수 없습니다.")
+        planned = self.plan_cache.get(symbol, [])
+        if not planned:
+            raise ValueError("시작할 주문계획이 없습니다.")
+        expected = f"SUBMIT {symbol} {len(planned)}"
+        if confirmation != expected:
+            raise PermissionError("실주문 확인 문구가 일치하지 않습니다: " + expected)
+        if symbol not in self.runtime.active_symbols:
             self.runtime.active_symbols.append(symbol)
         if symbol not in self.runtime.known_symbols:
             self.runtime.known_symbols.append(symbol)
         self.runtime.auto_enabled = True
         self.runtime.phase = "ACTIVE"
         self.runtime_store.save(self.runtime)
-        try:
-            planned = self.plan_cache.get(symbol, [])
-            result = self.submit_orders(symbol, [item.client_order_id for item in planned], confirmation, all_pending=True)
-            if result["confirmed"] <= 0:
-                raise ValueError("토스에서 확인된 주문이 없어 자동매수를 시작하지 않았습니다.")
-        except Exception:
-            if not was_active:
-                self.runtime.active_symbols = [item for item in self.runtime.active_symbols if item != symbol]
-                self.runtime.auto_enabled = bool(self.runtime.active_symbols)
-                self.runtime.phase = "ACTIVE" if self.runtime.auto_enabled else "STOPPED"
-                self.runtime_store.save(self.runtime)
-            raise
-        return {**result, "auto_enabled": True, "active_symbols": self.runtime.active_symbols}
+        return {
+            "auto_enabled": True,
+            "active_symbols": self.runtime.active_symbols,
+            "queued": len(planned),
+            "submitted": [],
+            "confirmed": 0,
+        }
 
     def stop_auto(self, symbol: str) -> dict[str, Any]:
         """Pause new-order submission for symbol only. Never touches broker
@@ -1095,17 +1151,26 @@ class TradingWebService(VRWebServiceMixin, WebService):
                 # above has already stopped refreshing it.
                 continue
             planned = self.plan_cache.get(symbol, [])
+            statuses = self.order_statuses.get(symbol, {})
+            schedulable_statuses = {"UNSENT", "REJECTED", "CANCELED"}
             day_sell_ids = [
                 item.client_order_id
                 for item in planned
                 if item.side == "sell" and order_time_in_force(item) == "DAY"
+                and statuses.get(item.client_order_id) in schedulable_statuses
             ]
             cls_sell_ids = [
                 item.client_order_id
                 for item in planned
                 if item.side == "sell" and order_time_in_force(item) == "CLS"
+                and statuses.get(item.client_order_id) in schedulable_statuses
             ]
-            buy_ids = [item.client_order_id for item in planned if item.side == "buy"]
+            buy_ids = [
+                item.client_order_id
+                for item in planned
+                if item.side == "buy"
+                and statuses.get(item.client_order_id) in schedulable_statuses
+            ]
 
             if day_sell_ready and day_sell_ids and self.runtime.auto_day_sell_attempt_keys.get(symbol) != session_key:
                 self.runtime.auto_day_sell_attempt_keys[symbol] = session_key
@@ -1133,7 +1198,7 @@ class TradingWebService(VRWebServiceMixin, WebService):
                 except (TossApiError, PermissionError, ValueError) as error:
                     print(f"Auto-tick CLS sell skipped {symbol}: {error}", file=sys.stderr)
 
-            if buy_ready and self.runtime.auto_attempt_keys.get(symbol) != session_key:
+            if buy_ready and buy_ids and self.runtime.auto_attempt_keys.get(symbol) != session_key:
                 self.runtime.auto_attempt_keys[symbol] = session_key
                 self.runtime_store.save(self.runtime)
                 try:
