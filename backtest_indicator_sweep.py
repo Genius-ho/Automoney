@@ -1,11 +1,10 @@
-"""Sweep several intraday indicators (single and AND-paired) over the
-3-minute KORU bars we can actually fetch, to see which one best marks a
-temporary flash dip/spike worth a small buy/sell.
+"""Backtest 3-minute drop-entry and recovery-target behavior over the
+intraday bars we can actually fetch.
 
-Reuses the data pipeline (fetch/resample/VWAP/RSI/StochRSI) from
-backtest_vwap_rsi.py and adds a few more indicators, then runs every
-combination through the same edge-triggered signal / forward-return
-evaluation so the results are directly comparable.
+The data pipeline remains compatible with the previous indicator research,
+but the primary report now asks the strategy question directly: after a
+three-percent drawdown from a prior rolling high, how often does an entry
+reach +2%, +3%, or +4% before the configured timeout?
 """
 from __future__ import annotations
 
@@ -38,6 +37,10 @@ FORWARD_BARS = 5  # 5 * 3m = 15 minutes
 # several horizons per signal instead of judging on one fixed window.
 HORIZON_MINUTES = (15, 30, 60, 90, 120, 180)
 MIN_SIGNAL_COUNT = 5
+DROP_THRESHOLD_PCT = 3.0
+RECOVERY_LOOKBACK_MINUTES = (15, 30, 60)
+RECOVERY_TARGET_PCTS = (2.0, 3.0, 4.0)
+RECOVERY_HORIZON_MINUTES = (60, 180, 360)
 
 
 def compute_sma(closes: list[float], period: int) -> list[float | None]:
@@ -139,6 +142,132 @@ class SweepSignal:
     timestamp: datetime
     side: str
     price: float
+
+
+@dataclass
+class DropSignal:
+    index: int
+    timestamp: datetime
+    side: str
+    price: float
+    drop_pct: float
+    reference_price: float
+
+
+def detect_drop_entries(
+    bars: list[Bar],
+    *,
+    lookback_minutes: int = 15,
+    drop_threshold_pct: float = DROP_THRESHOLD_PCT,
+) -> list[DropSignal]:
+    """Find -3% drawdowns from a prior rolling high and enter next bar."""
+    if lookback_minutes <= 0 or lookback_minutes % RESAMPLE_MINUTES:
+        raise ValueError("lookback minutes must be a positive multiple of the resample interval")
+    if drop_threshold_pct <= 0:
+        raise ValueError("drop threshold must be positive")
+    lookback_bars = lookback_minutes // RESAMPLE_MINUTES
+    signals: list[DropSignal] = []
+    for start, end in segment_ranges(bars):
+        armed = False
+        for index in range(start + lookback_bars, end):
+            reference_price = max(bar.close for bar in bars[index - lookback_bars:index])
+            drop_pct = (bars[index].close - reference_price) / reference_price * 100
+            condition = drop_pct <= -drop_threshold_pct
+            if condition and not armed and index + 1 < end:
+                entry = bars[index + 1]
+                signals.append(
+                    DropSignal(
+                        index=index + 1,
+                        timestamp=entry.timestamp,
+                        side="BUY",
+                        price=entry.open,
+                        drop_pct=drop_pct,
+                        reference_price=reference_price,
+                    )
+                )
+            armed = condition
+    return signals
+
+
+def evaluate_recovery_target(
+    bars: list[Bar],
+    signals: list[DropSignal],
+    *,
+    target_pct: float,
+    horizon_minutes: int,
+    round_trip_cost_bps: float = 0.0,
+) -> dict:
+    """Measure whether a drop entry reaches a recovery target before timeout."""
+    if target_pct <= 0:
+        raise ValueError("recovery target must be positive")
+    if horizon_minutes <= 0 or horizon_minutes % RESAMPLE_MINUTES:
+        raise ValueError("horizon minutes must be a positive multiple of the resample interval")
+    if round_trip_cost_bps < 0:
+        raise ValueError("round-trip cost cannot be negative")
+    cost_pct = round_trip_cost_bps / 100.0
+    ranges = segment_ranges(bars)
+    outcomes: list[dict] = []
+    incomplete_outcomes = 0
+    for signal in signals:
+        if not 0 <= signal.index < len(bars):
+            incomplete_outcomes += 1
+            continue
+        segment_end = next(
+            (end for start, end in ranges if start <= signal.index < end),
+            signal.index + 1,
+        )
+        deadline = signal.timestamp + timedelta(minutes=horizon_minutes)
+        target_price = signal.price * (1 + target_pct / 100)
+        maximum_adverse_pct = 0.0
+        hit_minutes: int | None = None
+        deadline_bar: Bar | None = None
+        for index in range(signal.index, segment_end):
+            bar = bars[index]
+            if bar.timestamp > deadline:
+                break
+            maximum_adverse_pct = min(
+                maximum_adverse_pct,
+                (bar.low - signal.price) / signal.price * 100,
+            )
+            if bar.high >= target_price:
+                hit_minutes = int((bar.timestamp - signal.timestamp).total_seconds() // 60)
+                break
+            if bar.timestamp == deadline:
+                deadline_bar = bar
+                break
+        if hit_minutes is not None:
+            gross_return_pct = target_pct
+            outcomes.append({
+                "target_hit": True,
+                "hit_minutes": hit_minutes,
+                "gross_return_pct": gross_return_pct,
+                "net_return_pct": gross_return_pct - cost_pct,
+                "max_adverse_pct": maximum_adverse_pct,
+            })
+            continue
+        if deadline_bar is None:
+            incomplete_outcomes += 1
+            continue
+        gross_return_pct = (deadline_bar.close - signal.price) / signal.price * 100
+        outcomes.append({
+            "target_hit": False,
+            "hit_minutes": None,
+            "gross_return_pct": gross_return_pct,
+            "net_return_pct": gross_return_pct - cost_pct,
+            "max_adverse_pct": maximum_adverse_pct,
+        })
+    hits = [item for item in outcomes if item["target_hit"]]
+    return {
+        "signal_count": len(signals),
+        "complete_count": len(outcomes),
+        "target_hit_count": len(hits),
+        "target_hit_rate_pct": round(len(hits) / len(outcomes) * 100, 1) if outcomes else None,
+        "median_hit_minutes": int(statistics.median(item["hit_minutes"] for item in hits)) if hits else None,
+        "avg_net_return_pct": round(statistics.mean(item["net_return_pct"] for item in outcomes), 3) if outcomes else None,
+        "avg_max_adverse_pct": round(statistics.mean(item["max_adverse_pct"] for item in outcomes), 3) if outcomes else None,
+        "incomplete_outcomes": incomplete_outcomes,
+        "outcomes": outcomes,
+    }
 
 
 def edge_trigger(bars: list[Bar], buy_mask: list[bool], sell_mask: list[bool]) -> list[SweepSignal]:
@@ -313,6 +442,97 @@ def _build_grid(
     return grid
 
 
+def _build_recovery_grid(
+    bars: list[Bar],
+    *,
+    round_trip_cost_bps: float,
+) -> list[dict]:
+    grid: list[dict] = []
+    for lookback_minutes in RECOVERY_LOOKBACK_MINUTES:
+        signals = detect_drop_entries(
+            bars,
+            lookback_minutes=lookback_minutes,
+            drop_threshold_pct=DROP_THRESHOLD_PCT,
+        )
+        for target_pct in RECOVERY_TARGET_PCTS:
+            for horizon_minutes in RECOVERY_HORIZON_MINUTES:
+                stats = evaluate_recovery_target(
+                    bars,
+                    signals,
+                    target_pct=target_pct,
+                    horizon_minutes=horizon_minutes,
+                    round_trip_cost_bps=round_trip_cost_bps,
+                )
+                grid.append({
+                    "lookback_minutes": lookback_minutes,
+                    "drop_threshold_pct": DROP_THRESHOLD_PCT,
+                    "target_pct": target_pct,
+                    "horizon_minutes": horizon_minutes,
+                    **stats,
+                })
+    return grid
+
+
+def _ranked_recovery(
+    grid: list[dict],
+    *,
+    minimum_count: int,
+) -> list[dict]:
+    candidates = [
+        dict(row, sample_status=sample_status(row["complete_count"]))
+        for row in grid
+        if row["complete_count"] >= minimum_count
+        and row["target_hit_rate_pct"] is not None
+    ]
+    return sorted(
+        candidates,
+        key=lambda row: (
+            row["target_hit_rate_pct"],
+            row["complete_count"],
+            row["avg_net_return_pct"] if row["avg_net_return_pct"] is not None else float("-inf"),
+        ),
+        reverse=True,
+    )[:5]
+
+
+def _validation_ranked_recovery(
+    discovery_grid: list[dict],
+    validation_grid: list[dict],
+    *,
+    minimum_validation_signals: int,
+) -> list[dict]:
+    validation_by_key = {
+        (
+            row["lookback_minutes"],
+            row["target_pct"],
+            row["horizon_minutes"],
+        ): row
+        for row in validation_grid
+    }
+    results: list[dict] = []
+    for discovery in _ranked_recovery(discovery_grid, minimum_count=MIN_SIGNAL_COUNT):
+        key = (
+            discovery["lookback_minutes"],
+            discovery["target_pct"],
+            discovery["horizon_minutes"],
+        )
+        validation = validation_by_key[key]
+        if (
+            validation["complete_count"] >= minimum_validation_signals
+            and validation["target_hit_rate_pct"] is not None
+        ):
+            results.append(dict(validation, sample_status=sample_status(validation["complete_count"])))
+    return sorted(
+        results,
+        key=lambda row: (
+            row["target_hit_rate_pct"],
+            row["complete_count"],
+            row["avg_net_return_pct"] if row["avg_net_return_pct"] is not None else float("-inf"),
+        ),
+        reverse=True,
+    )[:5]
+
+
 def _ranked(
     grid: list[tuple[str, int, dict, dict]],
     side_index: int,
@@ -382,24 +602,25 @@ def sweep_report(
         bars, minimum_sessions=minimum_sessions
     )
     research_status = "VALIDATED" if validation_count else "EXPLORATORY"
-    grid = _build_grid(bars, round_trip_cost_bps=round_trip_cost_bps)
+    grid = _build_recovery_grid(bars, round_trip_cost_bps=round_trip_cost_bps)
     discovery_grid = (
-        _build_grid(discovery_bars, round_trip_cost_bps=round_trip_cost_bps)
+        _build_recovery_grid(discovery_bars, round_trip_cost_bps=round_trip_cost_bps)
         if discovery_bars else grid
     )
-    validation_grid = _build_grid(validation_bars, round_trip_cost_bps=round_trip_cost_bps) if validation_bars else []
-    discovery_buy_top = _ranked(discovery_grid, 0, True, minimum_count=MIN_SIGNAL_COUNT)
-    discovery_sell_top = _ranked(discovery_grid, 1, False, minimum_count=MIN_SIGNAL_COUNT)
-    validation_buy_top = _validation_ranked(
-        discovery_grid, validation_grid, 0, True,
-        minimum_validation_signals=minimum_validation_signals,
-    ) if validation_grid else []
-    validation_sell_top = _validation_ranked(
-        discovery_grid, validation_grid, 1, False,
-        minimum_validation_signals=minimum_validation_signals,
-    ) if validation_grid else []
-    buy_top = validation_buy_top if research_status == "VALIDATED" else discovery_buy_top
-    sell_top = validation_sell_top if research_status == "VALIDATED" else discovery_sell_top
+    validation_grid = (
+        _build_recovery_grid(validation_bars, round_trip_cost_bps=round_trip_cost_bps)
+        if validation_bars else []
+    )
+    discovery_top = _ranked_recovery(discovery_grid, minimum_count=MIN_SIGNAL_COUNT)
+    validation_top = (
+        _validation_ranked_recovery(
+            discovery_grid,
+            validation_grid,
+            minimum_validation_signals=minimum_validation_signals,
+        )
+        if validation_grid else []
+    )
+    target_top = validation_top if research_status == "VALIDATED" else discovery_top
     return {
         "symbol": symbol,
         "bar_count": len(bars),
@@ -411,19 +632,31 @@ def sweep_report(
         "round_trip_cost_bps": round_trip_cost_bps,
         "grid_scope": "FULL_HISTORY_EXPLORATORY",
         "incomplete_outcomes": sum(
-            buy.get("incomplete_outcomes", 0)
-            for _name, _minutes, buy, _sell in grid
+            row.get("incomplete_outcomes", 0)
+            for row in grid
         ),
         "range": (bars[0].timestamp.isoformat(), bars[-1].timestamp.isoformat()) if bars else None,
         "grid": grid,
+        "target_grid": grid,
         "discovery_grid": discovery_grid,
+        "discovery_target_grid": discovery_grid,
         "validation_grid": validation_grid,
-        "discovery_buy_top": discovery_buy_top,
-        "discovery_sell_top": discovery_sell_top,
-        "validation_buy_top": validation_buy_top,
-        "validation_sell_top": validation_sell_top,
-        "buy_top": buy_top,
-        "sell_top": sell_top,
+        "validation_target_grid": validation_grid,
+        "drop_threshold_pct": DROP_THRESHOLD_PCT,
+        "recovery_lookback_minutes": RECOVERY_LOOKBACK_MINUTES,
+        "recovery_target_pcts": RECOVERY_TARGET_PCTS,
+        "recovery_horizon_minutes": RECOVERY_HORIZON_MINUTES,
+        "discovery_target_top": discovery_top,
+        "validation_target_top": validation_top,
+        "target_top": target_top,
+        # Compatibility aliases: this report now has one BUY-entry/target path;
+        # SELL is the target exit rather than an independent signal ranking.
+        "discovery_buy_top": discovery_top,
+        "discovery_sell_top": [],
+        "validation_buy_top": validation_top,
+        "validation_sell_top": [],
+        "buy_top": target_top,
+        "sell_top": [],
     }
 
 
@@ -440,7 +673,10 @@ def print_report(report: dict) -> None:
         f"비용 가정: 왕복 {report.get('round_trip_cost_bps', 0.0)}bps "
         f"· 불완전 결과 제외 {report.get('incomplete_outcomes', 0)}건"
     )
-    print("매도 수익률은 하락이 음수로 표시되며, 더 낮을수록 유리합니다.")
+    print(
+        f"전략: 최근 고점 대비 -{report.get('drop_threshold_pct', DROP_THRESHOLD_PCT)}% 급락 매수 "
+        f"→ 목표 {', '.join(f'+{target:g}%' for target in report.get('recovery_target_pcts', RECOVERY_TARGET_PCTS))} 회복"
+    )
     if report["range"]:
         print(f"기간: {report['range'][0]} ~ {report['range'][1]}")
     print()
@@ -449,66 +685,51 @@ def print_report(report: dict) -> None:
     else:
         print("[전체 기간 그리드 — 탐색 결과]")
 
-    header = f"{'지표 조합':32} {'창(분)':>6} {'매수n':>5} {'매수적중%':>9} {'매수평균%':>9} {'매수순수익%':>11}   {'매도n':>5} {'매도적중%':>9} {'매도평균%':>9} {'매도순수익%':>11}"
+    header = f"{'고점관찰':>8} {'목표':>6} {'제한(분)':>8} {'신호':>6} {'완료':>6} {'목표도달':>9} {'중앙도달(분)':>13} {'평균순수익%':>12} {'평균최대하락%':>14}"
     print(header)
     print("-" * len(header))
-    for name, minutes, buy, sell in report["grid"]:
+    for row in report["target_grid"]:
         print(
-            f"{name:32} {minutes:>6} {buy['count']:>5} {cell(buy, 'hit_rate_pct'):>9} {cell(buy, 'avg_return_pct'):>9} {cell(buy, 'avg_net_return_pct'):>11}   "
-            f"{sell['count']:>5} {cell(sell, 'hit_rate_pct'):>9} {cell(sell, 'avg_return_pct'):>9} {cell(sell, 'avg_net_return_pct'):>11}"
+            f"{row['lookback_minutes']:>8} {row['target_pct']:>5.1f}% {row['horizon_minutes']:>8} "
+            f"{row['signal_count']:>6} {row['complete_count']:>6} "
+            f"{cell(row, 'target_hit_rate_pct'):>8}% {cell(row, 'median_hit_minutes'):>13} "
+            f"{cell(row, 'avg_net_return_pct'):>12} {cell(row, 'avg_max_adverse_pct'):>14}"
         )
 
     print()
-    print(f"[매수 상위 5 — 평균수익% 높은 순, 표본 {MIN_SIGNAL_COUNT}건 이상]")
-    for name, minutes, stats in report["buy_top"]:
+    print(f"[목표 도달률 상위 5 — 완료 표본 {MIN_SIGNAL_COUNT}건 이상]")
+    for row in report.get("target_top", report.get("buy_top", [])):
         print(
-            f"  {name} · {minutes}분창 · n={stats['count']} "
-            f"· 표본 {stats.get('sample_status', sample_status(stats['count']))} "
-            f"· 적중률 {stats['hit_rate_pct']}% · 총수익 {stats['avg_return_pct']}% "
-            f"· 순수익 {stats.get('avg_net_return_pct', stats['avg_return_pct'])}%"
-        )
-
-    print()
-    print(f"[매도 상위 5 — 평균수익%(매도후 하락폭) 낮은 순, 표본 {MIN_SIGNAL_COUNT}건 이상]")
-    for name, minutes, stats in report["sell_top"]:
-        print(
-            f"  {name} · {minutes}분창 · n={stats['count']} "
-            f"· 표본 {stats.get('sample_status', sample_status(stats['count']))} "
-            f"· 적중률 {stats['hit_rate_pct']}% · 총수익 {stats['avg_return_pct']}% "
-            f"· 순수익 {stats.get('avg_net_return_pct', stats['avg_return_pct'])}%"
+            f"  고점관찰 {row['lookback_minutes']}분 · 목표 +{row['target_pct']:g}% · "
+            f"제한 {row['horizon_minutes']}분 · 완료 n={row['complete_count']} "
+            f"· 표본 {row.get('sample_status', sample_status(row['complete_count']))} "
+            f"· 도달률 {row['target_hit_rate_pct']}% · 중앙 도달 {row['median_hit_minutes']}분 "
+            f"· 순수익 {row['avg_net_return_pct']}%"
         )
 
 
 def telegram_summary(report: dict) -> str:
-    """Condensed, BUY-first summary (매수만 잘하면 매도는 괜찮다는 우선순위에 맞춤)."""
+    """Condensed drop-entry/recovery-target summary."""
     lines = [
-        f"[지표 스윕 결과] {report['symbol']} · 3분봉 {report['bar_count']}개 · "
+        f"[급락 회복 스윕 결과] {report['symbol']} · 3분봉 {report['bar_count']}개 · "
         f"거래세션 {report.get('session_count', report['days'])}개 · "
         f"상태 {report.get('research_status', 'EXPLORATORY')}",
         f"비용 왕복 {report.get('round_trip_cost_bps', 0.0)}bps · 불완전 제외 {report.get('incomplete_outcomes', 0)}건",
-        "매도 수익률은 하락이 음수로 표시되며, 더 낮을수록 유리합니다.",
+        f"전략 -{report.get('drop_threshold_pct', DROP_THRESHOLD_PCT):g}% 급락 매수 → "
+        f"+{', +'.join(f'{target:g}%' for target in report.get('recovery_target_pcts', RECOVERY_TARGET_PCTS))} 목표",
     ]
     if report.get("research_status") == "VALIDATED":
         lines.append("검증 상위 후보는 후반 세션 기준이며, 전체 기간 그리드는 탐색 참고용입니다.")
     lines.append("")
-    lines.append(f"매수 상위 (표본 {MIN_SIGNAL_COUNT}건+):")
-    if report["buy_top"]:
-        for name, minutes, stats in report["buy_top"]:
+    lines.append(f"목표 도달률 상위 (완료 표본 {MIN_SIGNAL_COUNT}건+):")
+    target_top = report.get("target_top", report.get("buy_top", []))
+    if target_top:
+        for row in target_top:
             lines.append(
-                f"· {name} ({minutes}분) n={stats['count']} "
-                f"표본{stats.get('sample_status', sample_status(stats['count']))} "
-                f"적중{stats['hit_rate_pct']}% 총{stats['avg_return_pct']}% 순{stats.get('avg_net_return_pct', stats['avg_return_pct'])}%"
-            )
-    else:
-        lines.append("· 조건을 만족하는 조합 없음")
-    lines.append("")
-    lines.append(f"매도 상위 (표본 {MIN_SIGNAL_COUNT}건+):")
-    if report["sell_top"]:
-        for name, minutes, stats in report["sell_top"]:
-            lines.append(
-                f"· {name} ({minutes}분) n={stats['count']} "
-                f"표본{stats.get('sample_status', sample_status(stats['count']))} "
-                f"적중{stats['hit_rate_pct']}% 총{stats['avg_return_pct']}% 순{stats.get('avg_net_return_pct', stats['avg_return_pct'])}%"
+                f"· 관찰{row['lookback_minutes']}분 목표+{row['target_pct']:g}% 제한{row['horizon_minutes']}분 "
+                f"완료n={row['complete_count']} "
+                f"표본{row.get('sample_status', sample_status(row['complete_count']))} "
+                f"도달{row['target_hit_rate_pct']}% 중앙{row['median_hit_minutes']}분"
             )
     else:
         lines.append("· 조건을 만족하는 조합 없음")
@@ -553,7 +774,7 @@ def main() -> None:
 
 def build_parser():
     import argparse
-    parser = argparse.ArgumentParser(description="여러 지표 x 시간창 조합을 스윕해 매수/매도 신호 후보를 순위화")
+    parser = argparse.ArgumentParser(description="-3% 급락 진입 후 +2/+3/+4% 회복 목표 도달률을 스윕")
     parser.add_argument("symbol", nargs="?", default="KORU")
     parser.add_argument("--pages", type=int, default=30, help="live 소스일 때만 의미 있음 (cache는 top-up용으로만 사용)")
     parser.add_argument("--source", choices=("cache", "live"), default="cache")

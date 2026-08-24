@@ -212,7 +212,7 @@ class TelegramSummaryTests(unittest.TestCase):
         self.assertIn("KORU", text)
         self.assertIn("조건을 만족하는 조합 없음", text)
 
-    def test_explains_signed_sell_return_convention(self):
+    def test_explains_drop_entry_and_recovery_targets(self):
         report = {
             "symbol": "TQQQ",
             "bar_count": 10,
@@ -226,7 +226,8 @@ class TelegramSummaryTests(unittest.TestCase):
 
         text = telegram_summary(report)
 
-        self.assertIn("매도 수익률은 하락이 음수", text)
+        self.assertIn("-3% 급락 매수", text)
+        self.assertIn("+2%, +3%, +4% 목표", text)
 
 
 if __name__ == "__main__":
