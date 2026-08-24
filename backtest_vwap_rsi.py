@@ -9,6 +9,7 @@ each signal.
 from __future__ import annotations
 
 import argparse
+import os
 import statistics
 import time
 from dataclasses import dataclass
@@ -44,7 +45,7 @@ T = TypeVar("T")
 
 
 def segment_ranges(bars: list[Bar]) -> list[tuple[int, int]]:
-    """Return contiguous ranges sharing one US session and market phase."""
+    """Return contiguous ranges sharing one US session, phase, and bar cadence."""
     if not bars:
         return []
     ranges: list[tuple[int, int]] = []
@@ -52,7 +53,8 @@ def segment_ranges(bars: list[Bar]) -> list[tuple[int, int]]:
     previous = bars[0].segment_key
     for index in range(1, len(bars)):
         current = bars[index].segment_key
-        if current != previous:
+        adjacent = bars[index].timestamp - bars[index - 1].timestamp
+        if current != previous or adjacent != timedelta(minutes=RESAMPLE_MINUTES):
             ranges.append((start, index))
             start = index
             previous = current
@@ -268,22 +270,19 @@ def detect_signals(
     Both the VWAP-gap and RSI-extreme conditions must hold at once (AND):
     a lone RSI extreme or a lone VWAP gap is not enough on its own."""
     signals: list[Signal] = []
-    armed_buy = armed_sell = False
-    previous_segment = None
-    for index, bar in enumerate(bars):
-        segment = bar.segment_key
-        if segment != previous_segment:
-            armed_buy = armed_sell = False
-            previous_segment = segment
-        gap = (bar.close - vwap[index]) / vwap[index] * 100 if vwap[index] else 0.0
-        bar_rsi = rsi[index]
-        buy_condition = gap <= -vwap_gap_pct and bar_rsi is not None and bar_rsi <= rsi_buy
-        sell_condition = gap >= vwap_gap_pct and bar_rsi is not None and bar_rsi >= rsi_sell
-        if buy_condition and not armed_buy:
-            signals.append(Signal(index, bar.timestamp, "BUY", bar.close, gap, bar_rsi))
-        if sell_condition and not armed_sell:
-            signals.append(Signal(index, bar.timestamp, "SELL", bar.close, gap, bar_rsi))
-        armed_buy, armed_sell = buy_condition, sell_condition
+    for start, end in segment_ranges(bars):
+        armed_buy = armed_sell = False
+        for index in range(start, end):
+            bar = bars[index]
+            gap = (bar.close - vwap[index]) / vwap[index] * 100 if vwap[index] else 0.0
+            bar_rsi = rsi[index]
+            buy_condition = gap <= -vwap_gap_pct and bar_rsi is not None and bar_rsi <= rsi_buy
+            sell_condition = gap >= vwap_gap_pct and bar_rsi is not None and bar_rsi >= rsi_sell
+            if buy_condition and not armed_buy:
+                signals.append(Signal(index, bar.timestamp, "BUY", bar.close, gap, bar_rsi))
+            if sell_condition and not armed_sell:
+                signals.append(Signal(index, bar.timestamp, "SELL", bar.close, gap, bar_rsi))
+            armed_buy, armed_sell = buy_condition, sell_condition
     return signals
 
 
@@ -299,7 +298,7 @@ def _evaluate_signal_items(
     bars: list[Bar],
     signals: list[Signal],
     *,
-    forward_bars: int = 10,
+    forward_bars: int = 5,
     horizon_minutes: int | None = None,
 ) -> tuple[list[SignalOutcome], int]:
     if horizon_minutes is None:
@@ -340,7 +339,7 @@ def evaluate_signals(
     bars: list[Bar],
     signals: list[Signal],
     *,
-    forward_bars: int = 10,
+    forward_bars: int = 5,
     horizon_minutes: int | None = None,
 ) -> list[SignalOutcome]:
     outcomes, _incomplete = _evaluate_signal_items(
@@ -349,17 +348,31 @@ def evaluate_signals(
     return outcomes
 
 
-def summarize(outcomes: list[SignalOutcome], side: str) -> dict:
+def summarize(
+    outcomes: list[SignalOutcome],
+    side: str,
+    *,
+    round_trip_cost_bps: float = 0.0,
+) -> dict:
+    if round_trip_cost_bps < 0:
+        raise ValueError("round-trip cost cannot be negative")
     subset = [item for item in outcomes if item.signal.side == side]
     if not subset:
         return {"count": 0}
     returns = [item.forward_return_pct for item in subset]
+    cost_pct = round_trip_cost_bps / 100.0
+    net_returns = [
+        value - cost_pct if side == "BUY" else value + cost_pct
+        for value in returns
+    ]
     best = [item.best_case_pct for item in subset]
     hits = sum(1 for item in subset if item.favorable)
     return {
         "count": len(subset),
         "hit_rate_pct": round(hits / len(subset) * 100, 1),
         "avg_forward_return_pct": round(statistics.mean(returns), 3),
+        "avg_net_forward_return_pct": round(statistics.mean(net_returns), 3),
+        "avg_net_return_pct": round(statistics.mean(net_returns), 3),
         "median_forward_return_pct": round(statistics.median(returns), 3),
         "avg_best_case_pct": round(statistics.mean(best), 3),
     }
@@ -369,11 +382,14 @@ def run_backtest(
     symbol: str,
     *,
     max_pages: int = 30,
-    forward_bars: int = 10,
+    forward_bars: int = 5,
     vwap_gap_pct: float = 1.5,
     rsi_buy: float = 2.0,
     rsi_sell: float = 98.0,
+    round_trip_cost_bps: float = 0.0,
 ) -> dict:
+    if round_trip_cost_bps < 0:
+        raise ValueError("round-trip cost cannot be negative")
     broker = TossBroker()
     minute_bars = fetch_minute_candles(broker, symbol, max_pages=max_pages)
     bars = resample(minute_bars)
@@ -386,21 +402,33 @@ def run_backtest(
         "minute_candles": len(minute_bars),
         "resampled_bars": len(bars),
         "range": (bars[0].timestamp.isoformat(), bars[-1].timestamp.isoformat()) if bars else None,
-        "buy": summarize(outcomes, "BUY"),
-        "sell": summarize(outcomes, "SELL"),
+        "buy": summarize(outcomes, "BUY", round_trip_cost_bps=round_trip_cost_bps),
+        "sell": summarize(outcomes, "SELL", round_trip_cost_bps=round_trip_cost_bps),
+        "round_trip_cost_bps": round_trip_cost_bps,
         "incomplete_outcomes": incomplete_outcomes,
         "signals": outcomes,
     }
 
 
-def main() -> None:
+def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(description="VWAP 괴리 AND 스토캐스틱 RSI(14,14,3,3) 극단값 기반 3분봉 매수·매도 포인트 백테스트")
     parser.add_argument("symbol", nargs="?", default="KORU")
     parser.add_argument("--pages", type=int, default=30, help="1분봉 페이지 수 (페이지당 최대 200개, 실제 남아있는 만큼만 조회됨)")
-    parser.add_argument("--forward-bars", type=int, default=10, help="신호 이후 결과를 확인할 3분봉 개수")
+    parser.add_argument("--forward-bars", type=int, default=5, help="신호 이후 결과를 확인할 3분봉 개수 (기본 15분)")
     parser.add_argument("--vwap-gap", type=float, default=1.5, help="VWAP 대비 괴리율(%) 임계값")
     parser.add_argument("--rsi-buy", type=float, default=2.0, help="StochRSI %%K 매수 임계값 (이하)")
     parser.add_argument("--rsi-sell", type=float, default=98.0, help="StochRSI %%K 매도 임계값 (이상)")
+    parser.add_argument(
+        "--round-trip-cost-bps",
+        type=float,
+        default=float(os.getenv("MUMAE_BACKTEST_ROUND_TRIP_COST_BPS", "0") or 0),
+        help="왕복 거래비용 가정 (basis points; MUMAE_BACKTEST_ROUND_TRIP_COST_BPS로 기본값 설정)",
+    )
+    return parser
+
+
+def main() -> None:
+    parser = build_parser()
     args = parser.parse_args()
 
     result = run_backtest(
@@ -410,6 +438,7 @@ def main() -> None:
         vwap_gap_pct=args.vwap_gap,
         rsi_buy=args.rsi_buy,
         rsi_sell=args.rsi_sell,
+        round_trip_cost_bps=args.round_trip_cost_bps,
     )
 
     print(f"{result['symbol']}: 1분봉 {result['minute_candles']}개 -> {RESAMPLE_MINUTES}분봉 {result['resampled_bars']}개")
@@ -423,10 +452,13 @@ def main() -> None:
             continue
         print(
             f"{label}: {stats['count']}건 · 적중률 {stats['hit_rate_pct']}% · "
-            f"평균 결과 {stats['avg_forward_return_pct']}% · 중앙값 {stats['median_forward_return_pct']}% · "
+            f"평균 총수익 {stats['avg_forward_return_pct']}% · "
+            f"평균 순수익 {stats['avg_net_forward_return_pct']}% · "
+            f"중앙값 {stats['median_forward_return_pct']}% · "
             f"평균 최선 {stats['avg_best_case_pct']}%"
         )
     print()
+    print(f"비용 가정: 왕복 {result['round_trip_cost_bps']}bps")
     print(f"{'시각':19} {'구분':4} {'가격':>10} {'VWAP괴리%':>10} {'StochRSI':>8} {'결과%':>8}")
     for outcome in result["signals"]:
         signal = outcome.signal

@@ -11,6 +11,9 @@ from backtest_vwap_rsi import (
     evaluate_signals,
     fetch_minute_candles,
     resample,
+    Signal,
+    SignalOutcome,
+    summarize,
 )
 
 
@@ -180,6 +183,34 @@ class EvaluateSignalsTests(unittest.TestCase):
         outcomes = evaluate_signals(bars, [signal], forward_bars=5)
 
         self.assertEqual(outcomes, [])
+
+    def test_summary_reports_cost_adjusted_buy_and_sell_returns(self):
+        timestamp = _bar(0, 100.0).timestamp
+        buy = SignalOutcome(
+            Signal(0, timestamp, "BUY", 100.0, -2.0, None),
+            10.0,
+            10.0,
+            True,
+        )
+        sell = SignalOutcome(
+            Signal(0, timestamp, "SELL", 100.0, 2.0, None),
+            -10.0,
+            10.0,
+            True,
+        )
+
+        buy_stats = summarize([buy], "BUY", round_trip_cost_bps=10)
+        sell_stats = summarize([sell], "SELL", round_trip_cost_bps=10)
+
+        self.assertAlmostEqual(buy_stats["avg_net_return_pct"], 9.9)
+        self.assertAlmostEqual(sell_stats["avg_net_return_pct"], -9.9)
+
+    def test_legacy_cli_accepts_round_trip_cost_assumption(self):
+        from backtest_vwap_rsi import build_parser
+
+        args = build_parser().parse_args(["TQQQ", "--round-trip-cost-bps", "10"])
+
+        self.assertEqual(args.round_trip_cost_bps, 10.0)
 
 
 class FetchMinuteCandlesTests(unittest.TestCase):

@@ -20,12 +20,18 @@ UNIT_NAMES = (
     "mumae-candle-logger.service",
     "mumae-backtest-notify.service",
 )
+TIMER_NAMES = (
+    "mumae-candle-logger.timer",
+    "mumae-backtest-notify.timer",
+)
+INSTALL_NAMES = UNIT_NAMES + TIMER_NAMES
 REQUIRED_PROJECT_PATHS = (
     "mumae_cli.py",
     "candle_logger.py",
     "backtest_indicator_sweep.py",
     ".venv/bin/python",
     "deploy/mumae.env",
+    *tuple(f"deploy/{name}" for name in TIMER_NAMES),
 )
 CommandRunner = Callable[[Sequence[str]], object]
 OwnerSetter = Callable[[Path, str, str], object]
@@ -59,13 +65,14 @@ def render_unit(template: str, project_root: Path) -> str:
 
 def render_units(project_root: Path, template_dir: Path) -> dict[str, str]:
     resolved = project_root.expanduser().resolve(strict=True)
-    return {
+    rendered = {
         name: render_unit(
             (template_dir / f"{name}.in").read_text(encoding="utf-8"),
             resolved,
         )
         for name in UNIT_NAMES
     }
+    return rendered
 
 
 def validate_project(project_root: Path) -> Path:
@@ -134,6 +141,12 @@ def install_units(
         command_runner=command_runner,
     )
     rendered = render_units(root, root / "deploy" / "systemd")
+    rendered.update(
+        {
+            name: (root / "deploy" / name).read_text(encoding="utf-8")
+            for name in TIMER_NAMES
+        }
+    )
     with TemporaryDirectory(prefix="mumae-systemd-") as raw:
         temporary_dir = Path(raw)
         rendered_paths: list[Path] = []
@@ -168,7 +181,7 @@ def install_units(
 
     unit_dir.mkdir(parents=True, exist_ok=True)
     snapshots: dict[str, tuple[bytes, int] | None] = {}
-    for name in UNIT_NAMES:
+    for name in INSTALL_NAMES:
         destination = unit_dir / name
         if destination.exists():
             snapshots[name] = (
@@ -282,7 +295,7 @@ def main(
 
     action = "validated" if args.check else "installed"
     print(f"Project root: {root}", file=stdout)
-    print(f"Units {action}: {', '.join(UNIT_NAMES)}", file=stdout)
+    print(f"Units {action}: {', '.join(INSTALL_NAMES)}", file=stdout)
     return 0
 
 

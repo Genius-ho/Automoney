@@ -42,6 +42,12 @@ def make_complete_project_fixture(testcase: unittest.TestCase) -> Path:
         source = TEMPLATE_DIR / f"{name}.in"
         destination = root / "deploy" / "systemd" / f"{name}.in"
         destination.write_text(source.read_text(encoding="utf-8"), encoding="utf-8")
+    for name in ("mumae-candle-logger.timer", "mumae-backtest-notify.timer"):
+        destination = root / "deploy" / name
+        destination.write_text(
+            (ROOT / "deploy" / name).read_text(encoding="utf-8"),
+            encoding="utf-8",
+        )
     return root
 
 
@@ -165,6 +171,26 @@ class InstallerPreflightTests(unittest.TestCase):
 
 
 class InstallerTransactionTests(unittest.TestCase):
+    def test_install_also_updates_static_timers_without_enabling_them(self):
+        root = make_complete_project_fixture(self)
+        unit_dir = root / "installed"
+        calls: list[list[str]] = []
+
+        with patch("deploy.systemd_installer.shutil.which", return_value=None):
+            install_units(
+                root,
+                unit_dir,
+                check_only=False,
+                restart=False,
+                command_runner=lambda args: calls.append(list(args)),
+            )
+
+        self.assertEqual(
+            (unit_dir / "mumae-backtest-notify.timer").read_text(encoding="utf-8"),
+            (root / "deploy" / "mumae-backtest-notify.timer").read_text(encoding="utf-8"),
+        )
+        self.assertEqual(calls, [["systemctl", "daemon-reload"]])
+
     def test_fresh_data_directory_is_assigned_to_the_service_user(self):
         root = make_complete_project_fixture(self)
         ownership: list[tuple[Path, str, str]] = []

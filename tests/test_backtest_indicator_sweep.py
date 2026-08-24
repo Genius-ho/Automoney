@@ -5,6 +5,7 @@ from unittest.mock import patch
 
 from backtest_indicator_sweep import (
     Bar,
+    HORIZON_MINUTES,
     SweepSignal,
     above,
     below,
@@ -109,6 +110,13 @@ class EdgeTriggerTests(unittest.TestCase):
         self.assertEqual(signals[0].index, 1)
         self.assertEqual(signals[0].side, "BUY")
 
+    def test_rearms_after_a_missing_resampled_bar(self):
+        bars = [_bar(0, 100.0), _bar(3, 100.0), _bar(9, 100.0)]
+
+        signals = edge_trigger(bars, [True, True, True], [False, False, False])
+
+        self.assertEqual([signal.index for signal in signals], [0, 2])
+
 
 class EvaluateTests(unittest.TestCase):
     def test_buy_forward_return_and_hit_rate(self):
@@ -176,12 +184,22 @@ class SweepReportTests(unittest.TestCase):
 
         self.assertEqual(args.round_trip_cost_bps, 10.0)
 
+    def test_parser_uses_environment_cost_for_scheduled_reports(self):
+        with patch.dict("os.environ", {"MUMAE_BACKTEST_ROUND_TRIP_COST_BPS": "10"}):
+            args = build_parser().parse_args(["TQQQ"])
+
+        self.assertEqual(args.round_trip_cost_bps, 10.0)
+
+    def test_sweep_includes_the_default_fifteen_minute_horizon(self):
+        self.assertEqual(HORIZON_MINUTES[0], 15)
+
 
 class ScheduledReportTemplateTests(unittest.TestCase):
     def test_report_timer_runs_weekly_after_the_friday_session(self):
         timer = (Path(__file__).resolve().parents[1] / "deploy" / "mumae-backtest-notify.timer").read_text()
 
         self.assertIn("OnCalendar=Sat *-*-* 09:20:00", timer)
+        self.assertIn("Asia/Seoul", timer)
         self.assertIn("Persistent=true", timer)
 
 

@@ -1,8 +1,18 @@
 import unittest
 from datetime import date, datetime, timedelta
+from io import StringIO
+from contextlib import redirect_stdout
 from zoneinfo import ZoneInfo
 
-from backtest_indicator_sweep import Bar, SweepSignal, edge_trigger, evaluate, sample_status, sweep_report
+from backtest_indicator_sweep import (
+    Bar,
+    SweepSignal,
+    edge_trigger,
+    evaluate,
+    print_report,
+    sample_status,
+    sweep_report,
+)
 
 
 NY = ZoneInfo("America/New_York")
@@ -88,6 +98,24 @@ class ResearchStatusTests(unittest.TestCase):
         self.assertEqual(report["research_status"], "VALIDATED")
         self.assertEqual(report["discovery_session_count"], 21)
         self.assertEqual(report["validation_session_count"], 9)
+
+    def test_validated_report_labels_full_history_grid_as_reference_only(self):
+        bars = [
+            _bar(
+                datetime(2026, 1, 1, 9, 30, tzinfo=NY) + timedelta(days=offset),
+                100,
+                session=date(2026, 1, 1) + timedelta(days=offset),
+            )
+            for offset in range(30)
+        ]
+        report = sweep_report(bars, "TQQQ")
+        output = StringIO()
+
+        with redirect_stdout(output):
+            print_report(report)
+
+        self.assertEqual(report["grid_scope"], "FULL_HISTORY_EXPLORATORY")
+        self.assertIn("검증 아님", output.getvalue())
 
 
 if __name__ == "__main__":

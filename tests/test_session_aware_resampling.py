@@ -2,7 +2,7 @@ import unittest
 from datetime import datetime, timedelta
 from zoneinfo import ZoneInfo
 
-from backtest_vwap_rsi import Bar, compute_segmented_rsi, compute_vwap, resample
+from backtest_vwap_rsi import Bar, compute_segmented_rsi, compute_vwap, resample, segment_ranges
 
 
 NY = ZoneInfo("America/New_York")
@@ -67,6 +67,20 @@ class SessionAwareResamplingTests(unittest.TestCase):
 
         self.assertEqual(rsi[14], 100.0)
         self.assertIsNone(rsi[15])
+
+    def test_missing_resampled_bar_starts_a_new_indicator_segment(self):
+        start = datetime(2026, 8, 25, 9, 30, tzinfo=NY)
+        bars = [
+            Bar(start, 100, 100, 100, 100, 1),
+            Bar(start + timedelta(minutes=3), 101, 101, 101, 101, 1),
+            Bar(start + timedelta(minutes=9), 102, 102, 102, 102, 1),
+        ]
+
+        self.assertEqual(segment_ranges(bars), [(0, 2), (2, 3)])
+
+        rsi = compute_segmented_rsi(bars, period=2)
+
+        self.assertIsNone(rsi[2])
 
 
 if __name__ == "__main__":

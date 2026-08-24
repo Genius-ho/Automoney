@@ -2,7 +2,7 @@
 Description=Run the Mumae weekly intraday backtest sweep + Telegram notify
 
 [Timer]
-OnCalendar=Sat *-*-* 09:20:00
+OnCalendar=Sat *-*-* 09:20:00 Asia/Seoul
 Persistent=true
 
 [Install]

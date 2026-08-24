@@ -9,6 +9,7 @@ evaluation so the results are directly comparable.
 """
 from __future__ import annotations
 
+import os
 import statistics
 from dataclasses import dataclass
 from datetime import date, datetime, timedelta
@@ -27,14 +28,15 @@ from backtest_vwap_rsi import (
     compute_vwap,
     fetch_minute_candles,
     resample,
+    segment_ranges,
 )
 from telegram_bot import TelegramNotifier
 
-FORWARD_BARS = 10  # 10 * 3m = 30 minutes
+FORWARD_BARS = 5  # 5 * 3m = 15 minutes
 # A single-horizon check undersells slow reversions: a manually-spotted BUY
 # point on 2026-08-07 was underwater at 30-60min but +2.5% by 90min. Sweep
 # several horizons per signal instead of judging on one fixed window.
-HORIZON_MINUTES = (30, 60, 90, 120, 180)
+HORIZON_MINUTES = (15, 30, 60, 90, 120, 180)
 MIN_SIGNAL_COUNT = 5
 
 
@@ -143,18 +145,15 @@ def edge_trigger(bars: list[Bar], buy_mask: list[bool], sell_mask: list[bool]) -
     """Fires once per excursion (rising edge), matching detect_signals() in
     backtest_vwap_rsi.py, so one dip/spike isn't counted on every bar it holds."""
     signals: list[SweepSignal] = []
-    armed_buy = armed_sell = False
-    previous_segment = None
-    for index, bar in enumerate(bars):
-        segment = bar.segment_key
-        if segment != previous_segment:
-            armed_buy = armed_sell = False
-            previous_segment = segment
-        if buy_mask[index] and not armed_buy:
-            signals.append(SweepSignal(index, bar.timestamp, "BUY", bar.close))
-        if sell_mask[index] and not armed_sell:
-            signals.append(SweepSignal(index, bar.timestamp, "SELL", bar.close))
-        armed_buy, armed_sell = buy_mask[index], sell_mask[index]
+    for start, end in segment_ranges(bars):
+        armed_buy = armed_sell = False
+        for index in range(start, end):
+            bar = bars[index]
+            if buy_mask[index] and not armed_buy:
+                signals.append(SweepSignal(index, bar.timestamp, "BUY", bar.close))
+            if sell_mask[index] and not armed_sell:
+                signals.append(SweepSignal(index, bar.timestamp, "SELL", bar.close))
+            armed_buy, armed_sell = buy_mask[index], sell_mask[index]
     return signals
 
 
@@ -410,6 +409,7 @@ def sweep_report(
         "discovery_session_count": discovery_count,
         "validation_session_count": validation_count,
         "round_trip_cost_bps": round_trip_cost_bps,
+        "grid_scope": "FULL_HISTORY_EXPLORATORY",
         "incomplete_outcomes": sum(
             buy.get("incomplete_outcomes", 0)
             for _name, _minutes, buy, _sell in grid
@@ -443,6 +443,10 @@ def print_report(report: dict) -> None:
     if report["range"]:
         print(f"기간: {report['range'][0]} ~ {report['range'][1]}")
     print()
+    if report.get("research_status") == "VALIDATED":
+        print("[전체 기간 그리드 — 탐색 참고용, 검증 아님]")
+    else:
+        print("[전체 기간 그리드 — 탐색 결과]")
 
     header = f"{'지표 조합':32} {'창(분)':>6} {'매수n':>5} {'매수적중%':>9} {'매수평균%':>9} {'매수순수익%':>11}   {'매도n':>5} {'매도적중%':>9} {'매도평균%':>9} {'매도순수익%':>11}"
     print(header)
@@ -482,6 +486,8 @@ def telegram_summary(report: dict) -> str:
         f"상태 {report.get('research_status', 'EXPLORATORY')}",
         f"비용 왕복 {report.get('round_trip_cost_bps', 0.0)}bps · 불완전 제외 {report.get('incomplete_outcomes', 0)}건",
     ]
+    if report.get("research_status") == "VALIDATED":
+        lines.append("검증 상위 후보는 후반 세션 기준이며, 전체 기간 그리드는 탐색 참고용입니다.")
     lines.append("")
     lines.append(f"매수 상위 (표본 {MIN_SIGNAL_COUNT}건+):")
     if report["buy_top"]:
@@ -550,7 +556,12 @@ def build_parser():
     parser.add_argument("--pages", type=int, default=30, help="live 소스일 때만 의미 있음 (cache는 top-up용으로만 사용)")
     parser.add_argument("--source", choices=("cache", "live"), default="cache")
     parser.add_argument("--notify", action="store_true", help="결과 요약을 텔레그램으로 전송")
-    parser.add_argument("--round-trip-cost-bps", type=float, default=0.0, help="왕복 거래비용 가정 (basis points)")
+    parser.add_argument(
+        "--round-trip-cost-bps",
+        type=float,
+        default=float(os.getenv("MUMAE_BACKTEST_ROUND_TRIP_COST_BPS", "0") or 0),
+        help="왕복 거래비용 가정 (basis points; MUMAE_BACKTEST_ROUND_TRIP_COST_BPS로 기본값 설정)",
+    )
     return parser
 
 
