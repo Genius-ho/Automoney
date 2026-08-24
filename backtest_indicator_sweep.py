@@ -532,12 +532,7 @@ def run_sweep(
 
 def main() -> None:
     import argparse
-    parser = argparse.ArgumentParser(description="여러 지표 x 시간창 조합을 스윕해 매수/매도 신호 후보를 순위화")
-    parser.add_argument("symbol", nargs="?", default="KORU")
-    parser.add_argument("--pages", type=int, default=30, help="live 소스일 때만 의미 있음 (cache는 top-up용으로만 사용)")
-    parser.add_argument("--source", choices=("cache", "live"), default="cache")
-    parser.add_argument("--notify", action="store_true", help="결과 요약을 텔레그램으로 전송")
-    parser.add_argument("--round-trip-cost-bps", type=float, default=0.0, help="왕복 거래비용 가정 (basis points)")
+    parser = build_parser()
     args = parser.parse_args()
     run_sweep(
         args.symbol,
@@ -546,6 +541,17 @@ def main() -> None:
         notify=args.notify,
         round_trip_cost_bps=args.round_trip_cost_bps,
     )
+
+
+def build_parser():
+    import argparse
+    parser = argparse.ArgumentParser(description="여러 지표 x 시간창 조합을 스윕해 매수/매도 신호 후보를 순위화")
+    parser.add_argument("symbol", nargs="?", default="KORU")
+    parser.add_argument("--pages", type=int, default=30, help="live 소스일 때만 의미 있음 (cache는 top-up용으로만 사용)")
+    parser.add_argument("--source", choices=("cache", "live"), default="cache")
+    parser.add_argument("--notify", action="store_true", help="결과 요약을 텔레그램으로 전송")
+    parser.add_argument("--round-trip-cost-bps", type=float, default=0.0, help="왕복 거래비용 가정 (basis points)")
+    return parser
 
 
 if __name__ == "__main__":

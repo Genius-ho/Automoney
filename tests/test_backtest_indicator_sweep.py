@@ -1,5 +1,6 @@
 import unittest
 from datetime import datetime, timedelta, timezone
+from pathlib import Path
 from unittest.mock import patch
 
 from backtest_indicator_sweep import (
@@ -8,6 +9,7 @@ from backtest_indicator_sweep import (
     above,
     below,
     both,
+    build_parser,
     compute_bollinger_percent_b,
     compute_roc_pct,
     compute_sma,
@@ -168,6 +170,19 @@ class SweepReportTests(unittest.TestCase):
         self.assertIn("grid", report)
         self.assertLessEqual(len(report["buy_top"]), 5)
         self.assertLessEqual(len(report["sell_top"]), 5)
+
+    def test_parser_accepts_round_trip_cost_assumption(self):
+        args = build_parser().parse_args(["TQQQ", "--round-trip-cost-bps", "10"])
+
+        self.assertEqual(args.round_trip_cost_bps, 10.0)
+
+
+class ScheduledReportTemplateTests(unittest.TestCase):
+    def test_report_timer_runs_weekly_after_the_friday_session(self):
+        timer = (Path(__file__).resolve().parents[1] / "deploy" / "mumae-backtest-notify.timer").read_text()
+
+        self.assertIn("OnCalendar=Sat *-*-* 09:20:00", timer)
+        self.assertIn("Persistent=true", timer)
 
 
 class TelegramSummaryTests(unittest.TestCase):

@@ -1,5 +1,5 @@
 [Unit]
-Description=Mumae indicator backtest sweep + Telegram notify (one-shot)
+Description=Mumae weekly indicator backtest sweep + Telegram notify (one-shot)
 After=network-online.target
 Wants=network-online.target
 

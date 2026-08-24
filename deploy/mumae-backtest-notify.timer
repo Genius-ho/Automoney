@@ -1,8 +1,8 @@
 [Unit]
-Description=Run the Mumae backtest sweep + Telegram notify once on 2026-08-21
+Description=Run the Mumae weekly intraday backtest sweep + Telegram notify
 
 [Timer]
-OnCalendar=2026-08-21 09:00:00
+OnCalendar=Sat *-*-* 09:20:00
 Persistent=true
 
 [Install]
