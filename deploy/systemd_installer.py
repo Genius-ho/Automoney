@@ -34,7 +34,14 @@ def systemd_escape_path(path: Path) -> str:
     value = str(path)
     if any(ord(character) < 32 for character in value):
         raise ValueError("Project path contains an unsupported control character.")
-    return value.replace("\\", "\\\\").replace('"', '\\"').replace("%", "%%")
+    replacements = {
+        " ": r"\x20",
+        "\\": r"\x5c",
+        '"': r"\x22",
+        "'": r"\x27",
+        "%": "%%",
+    }
+    return "".join(replacements.get(character, character) for character in value)
 
 
 def render_unit(template: str, project_root: Path) -> str:

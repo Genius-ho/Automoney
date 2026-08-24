@@ -20,7 +20,8 @@ class LinuxDeploymentTests(unittest.TestCase):
             Path("/srv/renamed Mumae"),
         )
         self.assertIn("ExecStart=/usr/bin/python3", service)
-        self.assertIn('"/srv/renamed Mumae/mumae_cli.py" serve', service)
+        self.assertIn(r"/srv/renamed\x20Mumae/mumae_cli.py serve", service)
+        self.assertIn(r"WorkingDirectory=/srv/renamed\x20Mumae", service)
         self.assertNotIn("--open", service)
         self.assertIn("Restart=on-failure", service)
 

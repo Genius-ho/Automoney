@@ -7,9 +7,9 @@ Wants=network-online.target
 Type=simple
 User=ho
 Group=ho
-WorkingDirectory="@MUMAE_PROJECT_ROOT@"
-EnvironmentFile="@MUMAE_PROJECT_ROOT@/deploy/mumae.env"
-ExecStart=/usr/bin/python3 "@MUMAE_PROJECT_ROOT@/mumae_cli.py" serve
+WorkingDirectory=@MUMAE_PROJECT_ROOT@
+EnvironmentFile=@MUMAE_PROJECT_ROOT@/deploy/mumae.env
+ExecStart=/usr/bin/python3 @MUMAE_PROJECT_ROOT@/mumae_cli.py serve
 Restart=on-failure
 RestartSec=5
 UMask=0077
@@ -17,7 +17,7 @@ NoNewPrivileges=true
 PrivateTmp=true
 ProtectSystem=strict
 ProtectHome=read-only
-ReadWritePaths="@MUMAE_PROJECT_ROOT@/data"
+ReadWritePaths=@MUMAE_PROJECT_ROOT@/data
 
 [Install]
 WantedBy=multi-user.target

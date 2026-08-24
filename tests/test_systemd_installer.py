@@ -55,13 +55,13 @@ class SystemdRenderingTests(unittest.TestCase):
         root = Path("/srv/Mumae Live 100%")
 
         rendered = render_unit(
-            'WorkingDirectory="@MUMAE_PROJECT_ROOT@"\n'
-            'ExecStart=/usr/bin/python3 "@MUMAE_PROJECT_ROOT@/mumae_cli.py" serve\n',
+            "WorkingDirectory=@MUMAE_PROJECT_ROOT@\n"
+            "ExecStart=/usr/bin/python3 @MUMAE_PROJECT_ROOT@/mumae_cli.py serve\n",
             root,
         )
 
-        self.assertIn('WorkingDirectory="/srv/Mumae Live 100%%"', rendered)
-        self.assertIn('"/srv/Mumae Live 100%%/mumae_cli.py"', rendered)
+        self.assertIn(r"WorkingDirectory=/srv/Mumae\x20Live\x20100%%", rendered)
+        self.assertIn(r"/srv/Mumae\x20Live\x20100%%/mumae_cli.py", rendered)
         self.assertNotIn(PROJECT_ROOT_TOKEN, rendered)
 
     def test_render_unit_rejects_a_template_without_the_project_root_token(self):
@@ -84,10 +84,12 @@ class SystemdRenderingTests(unittest.TestCase):
             second = render_units(second_root, TEMPLATE_DIR)
 
         self.assertEqual(set(first), set(UNIT_NAMES))
+        first_rendered_root = f"{parent}/first\\x20checkout"
+        second_rendered_root = f"{parent}/renamed\\x20checkout"
         for name in UNIT_NAMES:
-            self.assertIn(str(first_root), first[name])
-            self.assertNotIn(str(first_root), second[name])
-            self.assertIn(str(second_root), second[name])
+            self.assertIn(first_rendered_root, first[name])
+            self.assertNotIn(first_rendered_root, second[name])
+            self.assertIn(second_rendered_root, second[name])
 
 
 class InstallerPreflightTests(unittest.TestCase):
@@ -155,9 +157,10 @@ class InstallerTransactionTests(unittest.TestCase):
             (unit_dir / "mumae.service.previous").read_text(encoding="utf-8"),
             "old-main",
         )
+        rendered_root = f"{root.parent}/renamed\\x20project"
         for name in UNIT_NAMES:
             installed = unit_dir / name
-            self.assertIn(str(root), installed.read_text(encoding="utf-8"))
+            self.assertIn(rendered_root, installed.read_text(encoding="utf-8"))
             self.assertEqual(installed.stat().st_mode & 0o777, 0o644)
         self.assertTrue((root / "data").is_dir())
         self.assertEqual(
