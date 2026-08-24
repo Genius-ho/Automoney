@@ -437,6 +437,18 @@ class SettingsCommandHttpTests(unittest.TestCase):
     LIVE requires MUMAE_WEB_LIVE_ACTIONS (403 when off, not the 401 used by
     login/CSRF failures)."""
 
+    def setUp(self):
+        self.environment = patch.dict(os.environ, {}, clear=False)
+        self.environment.start()
+        for name in (
+            "TOSS_CLIENT_ID",
+            "TOSS_CLIENT_SECRET",
+            "TOSS_ACCOUNT_SEQ",
+            "MUMAE_MODE",
+            "MUMAE_WEB_LIVE_ACTIONS",
+        ):
+            os.environ.pop(name, None)
+
     def _server_for(self, broker_factory):
         self.temp = tempfile.TemporaryDirectory()
         self.engine = ApplicationEngine(self.temp.name, broker_factory=broker_factory)
@@ -448,10 +460,13 @@ class SettingsCommandHttpTests(unittest.TestCase):
         self.base = f"http://127.0.0.1:{self.server.server_port}"
 
     def tearDown(self):
-        self.server.shutdown()
-        self.server.server_close()
-        self.thread.join(timeout=2)
-        self.temp.cleanup()
+        try:
+            self.server.shutdown()
+            self.server.server_close()
+            self.thread.join(timeout=2)
+            self.temp.cleanup()
+        finally:
+            self.environment.stop()
 
     def _post(self, path, body, headers=None):
         request = Request(

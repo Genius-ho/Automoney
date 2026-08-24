@@ -48,6 +48,7 @@ sudo systemctl stop mumae.service
 cd <new-project-root>
 sudo ./deploy/install-systemd.sh --check
 sudo ./deploy/install-systemd.sh
+sudo systemctl status mumae.service --no-pager -l
 curl -fsS http://127.0.0.1:8765/api/health
 ```
 

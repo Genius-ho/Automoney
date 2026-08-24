@@ -12,6 +12,7 @@ from deploy.systemd_installer import (
     main,
     render_unit,
     render_units,
+    validate_service_access,
     validate_project,
 )
 
@@ -34,6 +35,8 @@ def make_complete_project_fixture(testcase: unittest.TestCase) -> Path:
     ):
         path = root / relative
         path.write_text("# fixture\n", encoding="utf-8")
+        if relative == ".venv/bin/python":
+            path.chmod(0o755)
     (root / "deploy" / "mumae.env").write_text("MUMAE_MODE=DRY_RUN\n", encoding="utf-8")
     for name in UNIT_NAMES:
         source = TEMPLATE_DIR / f"{name}.in"
@@ -69,8 +72,13 @@ class SystemdRenderingTests(unittest.TestCase):
             render_unit("[Service]\nType=simple\n", Path("/srv/mumae"))
 
     def test_render_unit_rejects_control_characters_in_the_project_path(self):
-        with self.assertRaisesRegex(ValueError, "control character"):
-            render_unit(PROJECT_ROOT_TOKEN, Path("/srv/mumae\nother"))
+        for control_character in ("\n", "\x7f", "\x85"):
+            with self.subTest(codepoint=ord(control_character)):
+                with self.assertRaisesRegex(ValueError, "control character"):
+                    render_unit(
+                        PROJECT_ROOT_TOKEN,
+                        Path(f"/srv/mumae{control_character}other"),
+                    )
 
     def test_all_templates_render_for_unrelated_roots(self):
         with TemporaryDirectory() as raw:
@@ -116,6 +124,26 @@ class InstallerPreflightTests(unittest.TestCase):
 
         self.assertEqual(validate_project(root / "deploy" / ".."), root.resolve())
 
+    def test_root_preflight_checks_access_as_the_service_user(self):
+        root = make_complete_project_fixture(self)
+        calls: list[list[str]] = []
+
+        def deny_environment_file(args):
+            command = list(args)
+            calls.append(command)
+            if command[-2:] == ["-r", str(root / "deploy" / "mumae.env")]:
+                raise subprocess.CalledProcessError(1, command)
+
+        with self.assertRaisesRegex(PermissionError, "service user ho"):
+            validate_service_access(
+                root,
+                include_data=False,
+                geteuid=lambda: 0,
+                command_runner=deny_environment_file,
+            )
+
+        self.assertTrue(all(call[:3] == ["runuser", "--user", "ho"] for call in calls))
+
     def test_check_mode_verifies_units_without_persistent_writes_or_systemctl(self):
         root = make_complete_project_fixture(self)
         unit_dir = root / "not-created"
@@ -137,6 +165,23 @@ class InstallerPreflightTests(unittest.TestCase):
 
 
 class InstallerTransactionTests(unittest.TestCase):
+    def test_fresh_data_directory_is_assigned_to_the_service_user(self):
+        root = make_complete_project_fixture(self)
+        ownership: list[tuple[Path, str, str]] = []
+
+        with patch("deploy.systemd_installer.shutil.which", return_value=None):
+            install_units(
+                root,
+                root / "installed",
+                check_only=False,
+                restart=False,
+                command_runner=lambda args: None,
+                owner_setter=lambda path, user, group: ownership.append((path, user, group)),
+            )
+
+        self.assertEqual(ownership, [(root / "data", "ho", "ho")])
+        self.assertTrue((root / "data").is_dir())
+
     def test_success_backs_up_units_reloads_and_restarts(self):
         root = make_complete_project_fixture(self)
         unit_dir = root / "installed"
@@ -166,6 +211,7 @@ class InstallerTransactionTests(unittest.TestCase):
         self.assertEqual(
             calls,
             [
+                ["systemctl", "is-active", "--quiet", "mumae.service"],
                 ["systemctl", "daemon-reload"],
                 ["systemctl", "restart", "mumae.service"],
                 ["systemctl", "is-active", "--quiet", "mumae.service"],
@@ -193,12 +239,16 @@ class InstallerTransactionTests(unittest.TestCase):
         unit_dir = make_existing_unit_fixture(self, root)
         before = {name: (unit_dir / name).read_bytes() for name in UNIT_NAMES}
         calls: list[list[str]] = []
+        restart_count = 0
 
         def fail_restart(args):
+            nonlocal restart_count
             command = list(args)
             calls.append(command)
             if command == ["systemctl", "restart", "mumae.service"]:
-                raise subprocess.CalledProcessError(1, command)
+                restart_count += 1
+                if restart_count == 1:
+                    raise subprocess.CalledProcessError(1, command)
 
         with patch("deploy.systemd_installer.shutil.which", return_value=None):
             with self.assertRaises(subprocess.CalledProcessError):
@@ -212,7 +262,60 @@ class InstallerTransactionTests(unittest.TestCase):
 
         after = {name: (unit_dir / name).read_bytes() for name in UNIT_NAMES}
         self.assertEqual(before, after)
-        self.assertEqual(calls[-1], ["systemctl", "daemon-reload"])
+        self.assertEqual(calls[-1], ["systemctl", "restart", "mumae.service"])
+
+    def test_restart_failure_restores_a_previously_active_service(self):
+        root = make_complete_project_fixture(self)
+        unit_dir = make_existing_unit_fixture(self, root)
+        calls: list[list[str]] = []
+        restart_count = 0
+
+        def fail_first_restart(args):
+            nonlocal restart_count
+            command = list(args)
+            calls.append(command)
+            if command == ["systemctl", "restart", "mumae.service"]:
+                restart_count += 1
+                if restart_count == 1:
+                    raise subprocess.CalledProcessError(1, command)
+
+        with patch("deploy.systemd_installer.shutil.which", return_value=None):
+            with self.assertRaises(subprocess.CalledProcessError):
+                install_units(
+                    root,
+                    unit_dir,
+                    check_only=False,
+                    restart=True,
+                    command_runner=fail_first_restart,
+                )
+
+        self.assertEqual(restart_count, 2)
+        self.assertEqual(calls[-1], ["systemctl", "restart", "mumae.service"])
+
+    def test_rollback_reload_failure_reports_the_original_and_rollback_errors(self):
+        root = make_complete_project_fixture(self)
+        unit_dir = make_existing_unit_fixture(self, root)
+        reload_count = 0
+
+        def fail_install_and_rollback(args):
+            nonlocal reload_count
+            command = list(args)
+            if command == ["systemctl", "daemon-reload"]:
+                reload_count += 1
+                if reload_count == 2:
+                    raise subprocess.CalledProcessError(2, command, stderr="rollback reload failed")
+            if command == ["systemctl", "restart", "mumae.service"]:
+                raise subprocess.CalledProcessError(1, command, stderr="restart failed")
+
+        with patch("deploy.systemd_installer.shutil.which", return_value=None):
+            with self.assertRaisesRegex(RuntimeError, "restart failed.*rollback reload failed"):
+                install_units(
+                    root,
+                    unit_dir,
+                    check_only=False,
+                    restart=True,
+                    command_runner=fail_install_and_rollback,
+                )
 
     def test_failure_removes_units_that_did_not_exist_before_install(self):
         root = make_complete_project_fixture(self)
@@ -224,7 +327,7 @@ class InstallerTransactionTests(unittest.TestCase):
             raise subprocess.CalledProcessError(1, list(args))
 
         with patch("deploy.systemd_installer.shutil.which", return_value=None):
-            with self.assertRaises(subprocess.CalledProcessError):
+            with self.assertRaises(RuntimeError):
                 install_units(
                     root,
                     unit_dir,
@@ -239,6 +342,30 @@ class InstallerTransactionTests(unittest.TestCase):
 
 
 class InstallerCliTests(unittest.TestCase):
+    def test_command_failure_prints_diagnostics_and_status_hint(self):
+        root = make_complete_project_fixture(self)
+        stderr = StringIO()
+
+        def fail_restart(args):
+            command = list(args)
+            if command == ["systemctl", "restart", "mumae.service"]:
+                raise subprocess.CalledProcessError(1, command, stderr="unit start failed")
+
+        with patch("deploy.systemd_installer.shutil.which", return_value=None):
+            exit_code = main(
+                ["--project-root", str(root)],
+                unit_dir=root / "installed",
+                command_runner=fail_restart,
+                geteuid=lambda: 0,
+                stdout=StringIO(),
+                stderr=stderr,
+                owner_setter=lambda path, user, group: None,
+            )
+
+        self.assertEqual(exit_code, 1)
+        self.assertIn("unit start failed", stderr.getvalue())
+        self.assertIn("systemctl status mumae.service --no-pager -l", stderr.getvalue())
+
     def test_check_mode_succeeds_without_root_and_never_prints_env_contents(self):
         root = make_complete_project_fixture(self)
         secret_marker = "SECRET-MUST-NOT-BE-PRINTED"
