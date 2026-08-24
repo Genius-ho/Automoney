@@ -1,4 +1,11 @@
-import { runClaudeTextPrompt } from './claude-cli-client.mjs';
+import { mkdtemp, rm } from 'node:fs/promises';
+import { tmpdir } from 'node:os';
+import { join, resolve } from 'node:path';
+import { randomUUID } from 'node:crypto';
+
+import { runCodexAnalysis } from './codex-client.mjs';
+
+const KEYWORD_SCHEMA_PATH = 'schemas/keyword-extraction.schema.json';
 
 // Mirrors the manual workflow: look only at product *titles* (never price or
 // image) from a Coupang 추천순 listing and pull out the core product-type
@@ -58,7 +65,7 @@ export function dedupeKeywords(keywords) {
   return result;
 }
 
-export async function extractKeywordsFromTitles({ titles, config, spawnImpl } = {}) {
+export async function extractKeywordsFromTitles({ titles, config, rootDir = process.cwd(), runAnalysisImpl = runCodexAnalysis } = {}) {
   if (!Array.isArray(titles) || titles.length === 0) {
     const error = new Error('extractKeywordsFromTitles requires at least one title');
     error.code = 'NO_TITLES';
@@ -66,8 +73,27 @@ export async function extractKeywordsFromTitles({ titles, config, spawnImpl } = 
   }
 
   const prompt = buildKeywordExtractionPrompt(titles);
-  const { rawText } = await runClaudeTextPrompt({ config, prompt, spawnImpl });
-  return parseKeywordExtractionResponse(rawText);
+  const tempRoot = await mkdtemp(join(tmpdir(), `automoney-codex-keywords-${randomUUID()}-`));
+  const outputPath = join(tempRoot, 'result.json');
+  try {
+    const result = await runAnalysisImpl({
+      config,
+      cwd: tempRoot,
+      images: [],
+      schemaPath: resolve(rootDir, KEYWORD_SCHEMA_PATH),
+      outputPath,
+      prompt,
+    });
+    if (!result.success) {
+      throw Object.assign(new Error(result.log || 'Codex keyword extraction failed'), { code: 'CODEX_ANALYSIS_ERROR' });
+    }
+    if (!Array.isArray(result.analysis?.keywords)) {
+      throw Object.assign(new Error('Codex keyword extraction returned an invalid keywords array'), { code: 'CODEX_INVALID_OUTPUT' });
+    }
+    return dedupeKeywords(result.analysis.keywords.map((keyword) => String(keyword).trim()).filter(Boolean));
+  } finally {
+    await rm(tempRoot, { recursive: true, force: true });
+  }
 }
 
 // Merges keyword batches collected across multiple category dives and picks

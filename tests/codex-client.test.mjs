@@ -275,7 +275,7 @@ test('runCodexImagePrompt attaches every image via -i and writes the prompt to s
     return child;
   };
   const result = await runCodexImagePrompt({
-    config: { executable: 'codex', concurrency: 1 },
+    config: { executable: 'codex', concurrency: 1, model: 'gpt-5.6-luna', reasoningEffort: 'xhigh' },
     cwd: tmpdir(),
     images: ['/tmp/a.jpg', '/tmp/b.jpg'],
     prompt: 'generate a product photo; do not leak this text into argv',
@@ -285,6 +285,8 @@ test('runCodexImagePrompt attaches every image via -i and writes the prompt to s
   assert.equal(result.success, true);
   assert.equal(receivedStdin, 'generate a product photo; do not leak this text into argv');
   assert.deepEqual(receivedArgs.filter((a, i) => receivedArgs[i - 1] === '-i'), ['/tmp/a.jpg', '/tmp/b.jpg']);
+  assert.equal(receivedArgs[receivedArgs.indexOf('-m') + 1], 'gpt-5.6-luna');
+  assert.equal(receivedArgs[receivedArgs.indexOf('-c') + 1], 'model_reasoning_effort=xhigh');
   assert.ok(!receivedArgs.includes('--output-schema'), 'image generation has no structured-output schema, unlike runCodexAnalysis');
 });
 

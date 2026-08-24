@@ -50,6 +50,20 @@ test('scoreImageQualityWithAi downloads at most 3 images, runs Codex with the fi
   assert.deepEqual(cleanedUp, images.slice(0, 3));
 });
 
+test('scoreImageQualityWithAi preserves an explicit shared Codex model and reasoning override', async () => {
+  let receivedConfig;
+  await scoreImageQualityWithAi(['https://a.test/1.jpg'], {
+    config: { executable: 'codex', model: 'gpt-5.6-terra', reasoningEffort: 'high' },
+    loadRemoteImageForVisionImpl: async () => ({ filePath: '/tmp/a.jpg', cleanup: async () => {} }),
+    runCodexAnalysisImpl: async ({ config }) => {
+      receivedConfig = config;
+      return { success: true, analysis: { score: 50, reason: 'ok' } };
+    },
+  });
+  assert.equal(receivedConfig.model, 'gpt-5.6-terra');
+  assert.equal(receivedConfig.reasoningEffort, 'high');
+});
+
 test('scoreImageQualityWithAi propagates a Codex failure (the caller, computeAiScoringContext, is what falls back to the proxy) but still cleans up the downloaded temp files', async () => {
   const cleanedUp = [];
   await assert.rejects(

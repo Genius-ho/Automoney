@@ -76,7 +76,7 @@ export async function runDueProductAutomationStage(db, deps = {}, {
       }
     }
     const outcome = outcomes[outcomes.length - 1];
-    // An infra hiccup (e.g. a transient Claude CLI availability blip) is not
+    // An infra hiccup (e.g. a transient Codex CLI availability blip) is not
     // "nothing to do today" -- advancing next_run_at by a full day here would
     // strand a draft that's otherwise ready until tomorrow's slot for a
     // problem that may already be gone by the next 5-minute tick. Leave the
@@ -84,7 +84,7 @@ export async function runDueProductAutomationStage(db, deps = {}, {
     // selectOldestDueStage sees the same stage as still due next tick and
     // retries on its own -- same no-backoff-needed reasoning as the existing
     // ALREADY_RUNNING/NOT_DUE early returns above.
-    if (due.stage !== 'discovery' && outcome?.reason === 'CLAUDE_CLI_UNAVAILABLE') {
+    if (due.stage !== 'discovery' && ['CODEX_CLI_UNAVAILABLE', 'CLAUDE_CLI_UNAVAILABLE'].includes(outcome?.reason)) {
       await releaseLockOnlyImpl(db);
       return { stage: due.stage, outcome, outcomes, processedCount: 0 };
     }

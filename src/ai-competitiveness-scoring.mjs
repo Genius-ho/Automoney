@@ -19,9 +19,9 @@
 // link analysis -- same resilience posture as generated-image-qa.mjs.
 //
 // 2026-08-22 사용자 요청: 전부 Codex(ChatGPT 로그인 기반, Claude 사용량과
-// 무관한 별도 토큰 풀)로 돌리고, model=gpt-5.6-luna / reasoning effort=xhigh
-// 고정. (이전에는 이미지 품질만 Codex, 반품/중복 위험은 Claude였는데 이제
-// 셋 다 Codex.) runCodexAnalysis는 자유 텍스트 프롬프트가 아니라 실제 JSON
+// 무관한 별도 토큰 풀)로 돌리고, 기본 model=gpt-5.6-luna /
+// reasoning effort=xhigh. (이전에는 이미지 품질만 Codex, 반품/중복 위험은
+// Claude였는데 이제 셋 다 Codex.) runCodexAnalysis는 자유 텍스트 프롬프트가 아니라 실제 JSON
 // Schema 파일로 응답 형태를 구조적으로 강제하고, cwd 안의 이미지만 읽을 수
 // 있다 (다운로드한 임시 이미지를 cwd 자체로 쓰면 됨 -- 실제 상품으로 검증
 // 완료).
@@ -47,7 +47,7 @@ const RISK_JUDGMENT_SCHEMA_PATH = 'schemas/return-duplicate-risk-score.schema.js
 // generation, product analysis) is unaffected and keeps using its own
 // configured/default model.
 export function withScoringModel(config) {
-  return { ...config, model: 'gpt-5.6-luna', reasoningEffort: 'xhigh' };
+  return { ...config, model: config?.model || 'gpt-5.6-luna', reasoningEffort: config?.reasoningEffort || 'xhigh' };
 }
 
 function toPoints(score0to100, weight) {

@@ -2,7 +2,7 @@ import assert from 'node:assert/strict';
 import test from 'node:test';
 
 import { encryptCredential } from '../src/ai/credential-crypto.mjs';
-import { resolveProviderCredential } from '../src/ai/provider-settings-store.mjs';
+import { listProviderSettings, resolveProviderCredential } from '../src/ai/provider-settings-store.mjs';
 
 const MASTER_KEY = '11'.repeat(32);
 
@@ -11,6 +11,17 @@ function fakeDb(row = null) {
     async query(sql, params) {
       assert.match(sql, /select \* from ai_provider_configs where provider_code=\$1/);
       assert.deepEqual(params, ['anthropic']);
+      return { rows: row ? [row] : [] };
+    },
+  };
+}
+
+function fakeCodexSettingsDb(row) {
+  return {
+    async query(sql, params) {
+      if (/select \* from ai_provider_configs order by provider_code/.test(sql)) return { rows: row ? [row] : [] };
+      assert.match(sql, /select \* from ai_provider_configs where provider_code=\$1/);
+      assert.deepEqual(params, ['codex']);
       return { rows: row ? [row] : [] };
     },
   };
@@ -52,4 +63,17 @@ test('resolveProviderCredential rejects an unsupported provider code the same wa
     () => resolveProviderCredential(fakeDb(null), 'not-a-real-provider', {}),
     (error) => error.code === 'UNKNOWN_PROVIDER',
   );
+});
+
+test('listProviderSettings reports Codex as a local login provider without an API key', async () => {
+  const result = await listProviderSettings(fakeCodexSettingsDb({
+    provider_code: 'codex', display_name: 'OpenAI Codex', enabled: true,
+    default_text_model: 'gpt-5.6-luna', default_vision_model: 'gpt-5.6-luna', default_image_model: 'gpt-5.6-luna',
+    capabilities: ['text_generation', 'vision_analysis', 'image_generation', 'image_edit'],
+  }));
+  const codex = result.providers.find((provider) => provider.providerCode === 'codex');
+  assert.equal(codex.configured, true);
+  assert.equal(codex.credentialSource, 'codex_login');
+  assert.equal(codex.maskedApiKey, null);
+  assert.deepEqual(codex.models, { text: 'gpt-5.6-luna', vision: 'gpt-5.6-luna', image: 'gpt-5.6-luna' });
 });

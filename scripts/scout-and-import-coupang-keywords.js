@@ -14,7 +14,7 @@
 // AI-extracted from scraped titles with no per-keyword human review (same
 // unsupervised risk profile as the 3-day discovery cycle), so it applies the
 // category_policy safe-segment whitelist itself, here, before sourcing.
-import { loadClaudeCliConfig, loadDatabaseUrl, loadEnvConfig, loadPricingRules } from '../src/config.mjs';
+import { loadCodexConfig, loadDatabaseUrl, loadEnvConfig, loadPricingRules } from '../src/config.mjs';
 import { DomemeClient } from '../src/domeme-client.mjs';
 import { createPgPool, runSchema } from '../src/postgres-store.mjs';
 import { matchCategoryPolicyForKeyword } from '../src/category-policy-matcher.mjs';
@@ -32,7 +32,7 @@ const marginRate = Number(options.marginRate ?? 0.5);
 const headful = options.headful === 'true';
 
 const config = await loadEnvConfig(root);
-const claudeCliConfig = await loadClaudeCliConfig(root);
+const codexConfig = await loadCodexConfig(root);
 const databaseUrl = await loadDatabaseUrl(root);
 const basePricingRules = await loadPricingRules(options.pricingPath || `${root}/pricing-rules.json`);
 
@@ -58,7 +58,7 @@ try {
     summary.scoutedTitleCount += dive.titles.length;
     console.log(`category=${dive.categoryPath.join(' > ')} titles=${dive.titles.length}`);
     if (dive.titles.length === 0) continue;
-    const keywords = await extractKeywordsFromTitles({ titles: dive.titles, config: claudeCliConfig });
+    const keywords = await extractKeywordsFromTitles({ titles: dive.titles, config: codexConfig, rootDir: root });
     console.log(`category=${dive.categoryPath.join(' > ')} extractedKeywords=${keywords.join(',')}`);
     keywordBatches.push(keywords);
   }

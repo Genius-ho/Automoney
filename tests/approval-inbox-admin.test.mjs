@@ -92,17 +92,20 @@ test('admin HTML defaults to the 링크 입력 tab, with the approval inbox pres
   assert.match(html, /data-dismiss-queue-id/);
 });
 
-test('admin HTML includes the three active tabs (링크 입력/점수/이미지 개선) wired to their view loaders and APIs', () => {
+test('admin HTML combines link analysis and scores in the 링크 입력 view', () => {
   const html = adminHtml();
 
   assert.match(html, /id="viewLinkInputButton" class="primary"[^>]*>링크 입력</);
-  assert.match(html, /id="viewScoreButton"[^>]*>점수</);
   assert.match(html, /id="viewImageImprovementButton"[^>]*>이미지 개선</);
+  assert.match(html, /id="viewHistoryButton"[^>]*>히스토리</);
+  assert.doesNotMatch(html, /id="viewScoreButton"/);
+  assert.doesNotMatch(html, /linkAnalysisStatusViewButton/);
   assert.match(html, /view==='linkInput'\)loadLinkInputView\(\)/);
-  assert.match(html, /view==='score'\)loadScoreView\(\)/);
+  assert.doesNotMatch(html, /view==='score'\)loadScoreView\(\)/);
   assert.match(html, /view==='imageImprovement'\)loadImageImprovementView\(\)/);
   assert.match(html, /function loadLinkInputView\(\)/);
-  assert.match(html, /function loadScoreView\(\)/);
+  assert.match(html, /id="linkInputScoreResults"/);
+  assert.match(html, /function renderLinkAnalysisResults\(/);
   assert.match(html, /function loadImageImprovementView\(\)/);
   assert.match(html, /api\('\/api\/product-drafts\/analyze-links',\{method:'POST',body:JSON\.stringify\(\{text:value,keyword:lastSearchedKeyword\}\)\}\)/);
   assert.match(html, /api\('\/api\/product-drafts\?pageSize=100'\)/);
@@ -266,7 +269,7 @@ test('admin HTML forces .toolbar (and #paginationToolbar, which shares that clas
 
   // Regression: .toolbar{display:flex} otherwise wins over the browser's
   // default [hidden]{display:none} UA rule by cascade order/specificity, so
-  // every non-'all' view (링크 입력/점수/이미지 개선/etc.) kept rendering the
+  // every non-'all' view (링크 입력/이미지 개선/etc.) kept rendering the
   // status-filter dropdown and pagination bar even though .hidden was set
   // true in JS -- confirmed live in a headless browser (computed
   // display:flex despite the hidden attribute) before this rule was added.

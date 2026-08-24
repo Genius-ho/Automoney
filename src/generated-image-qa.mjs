@@ -11,8 +11,8 @@ import { getImageGenerationJobPaths } from './product-job-folder.mjs';
 import { approveInboxImages } from './approval-inbox-service.mjs';
 import { listTaskRouting } from './ai/provider-settings-store.mjs';
 import { getProvider } from './ai/provider-registry.mjs';
-import { checkClaudeCliAvailability } from './claude-cli-client.mjs';
-import { loadClaudeCliConfig, loadCodexConfig, loadJobPathsConfig, loadNaverCommerceConfig } from './config.mjs';
+import { checkCodexAvailability } from './codex-client.mjs';
+import { loadCodexConfig, loadJobPathsConfig, loadNaverCommerceConfig } from './config.mjs';
 import { insertImageQaReview } from './image-qa-store.mjs';
 import { runSpeedgoNaverRegistration } from './speedgo-registration.mjs';
 
@@ -137,9 +137,8 @@ export async function reviewGeneratedImages(db, rootDir, draftId, {
   listManualMainImagesImpl = listManualMainImages,
   listManualDetailSetsImpl = listManualDetailSets,
   listTaskRoutingImpl = listTaskRouting,
-  loadClaudeCliConfigImpl = loadClaudeCliConfig,
-  checkClaudeCliAvailabilityImpl = checkClaudeCliAvailability,
   loadCodexConfigImpl = loadCodexConfig,
+  checkCodexAvailabilityImpl = checkCodexAvailability,
   loadJobPathsConfigImpl = loadJobPathsConfig,
   getProviderImpl = getProvider,
   approveInboxImagesImpl = approveInboxImages,
@@ -158,15 +157,16 @@ export async function reviewGeneratedImages(db, rootDir, draftId, {
   const draft = await getProductDraftImpl(db, draftId);
   if (!draft) return { skipped: true, reason: 'DRAFT_NOT_FOUND' };
 
-  const claudeCliConfig = await loadClaudeCliConfigImpl(rootDir);
-  const availability = await checkClaudeCliAvailabilityImpl({ config: claudeCliConfig });
+  const codexCliConfig = await loadCodexConfigImpl(rootDir);
+  const availability = await checkCodexAvailabilityImpl({ config: codexCliConfig });
   if (!availability.available || !availability.loggedIn) {
-    return { skipped: true, reason: 'CLAUDE_CLI_UNAVAILABLE', message: availability.message };
+    return { skipped: true, reason: 'CODEX_CLI_UNAVAILABLE', message: availability.message };
   }
 
   const research = await getMarketResearchImpl(db, draftId, 'naver');
   const competitor = extractBestCompetitor(research);
-  const provider = getProviderImpl(route.providerCode);
+  const providerCode = 'codex';
+  const provider = getProviderImpl(providerCode);
 
   let lastResult = null;
   for (let attempt = 1; attempt <= maxAttempts; attempt += 1) {
@@ -190,19 +190,27 @@ export async function reviewGeneratedImages(db, rootDir, draftId, {
     const prompt = buildPrompt(draft, competitor);
 
     let result;
+    const outputPath = join(tmpdir(), `automoney-codex-generated-image-review-${randomUUID()}.json`);
     try {
       result = await provider.analyzeImages(
-        { ...claudeCliConfig, model: route.model || claudeCliConfig.model },
-        { images, prompt },
+        { ...codexCliConfig, model: route.model || codexCliConfig.model },
+        {
+          images,
+          prompt,
+          cwd: tmpdir(),
+          outputPath,
+          schemaPath: resolve(rootDir, 'schemas/generated-image-review.schema.json'),
+        },
       );
     } catch (error) {
       await insertImageQaReviewImpl(db, {
         productDraftId: draftId, verdict: 'error',
         issues: [{ severity: 'high', description: error.message }],
-        providerCode: route.providerCode, model: route.model,
+        providerCode, model: route.model || codexCliConfig.model,
       });
       return { verdict: 'error', error: error.message, attempt };
     } finally {
+      await rm(outputPath, { force: true });
       // Only the downloaded competitor thumbnail has a real cleanup -- local
       // generated-image paths never had bytes written to a temp location.
       await Promise.all(images.map((image) => image.cleanup?.()));
@@ -215,7 +223,7 @@ export async function reviewGeneratedImages(db, rootDir, draftId, {
       await insertImageQaReviewImpl(db, {
         productDraftId: draftId, verdict: 'error',
         issues: [{ severity: 'high', description: error.message }],
-        providerCode: route.providerCode, model: result.model, rawResponse: result,
+        providerCode, model: result.model, rawResponse: result,
       });
       return { verdict: 'error', error: error.message, attempt };
     }
@@ -224,7 +232,7 @@ export async function reviewGeneratedImages(db, rootDir, draftId, {
       productDraftId: draftId,
       verdict: verdict.pass ? 'pass' : 'fail',
       issues: verdict.issues,
-      providerCode: route.providerCode,
+      providerCode,
       model: result.model,
       rawResponse: result,
     });

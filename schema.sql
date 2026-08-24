@@ -304,7 +304,7 @@ create table if not exists product_image_generation_request_revisions (
 
 create table if not exists ai_provider_configs (
   id bigserial primary key,
-  provider_code text not null unique check (provider_code in ('openai','google','anthropic','custom')),
+  provider_code text not null unique check (provider_code in ('openai','google','anthropic','custom','codex')),
   display_name text not null,
   enabled boolean not null default false,
   api_key_ciphertext text,
@@ -327,7 +327,7 @@ create table if not exists ai_provider_configs (
 
 create table if not exists ai_task_routing (
   task_type text primary key,
-  provider_code text not null check (provider_code in ('openai','google','anthropic','custom')),
+  provider_code text not null check (provider_code in ('openai','google','anthropic','custom','codex')),
   model text,
   enabled boolean not null default false,
   quality text,

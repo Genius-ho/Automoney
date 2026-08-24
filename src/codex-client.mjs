@@ -170,6 +170,8 @@ export async function runCodexImagePrompt({ config, cwd, images = [], prompt, ti
   await acquireSlot(limit);
   try {
     const args = ['exec', '--skip-git-repo-check', '-s', sandbox, '-C', cwd];
+    if (config?.model) args.push('-m', config.model);
+    if (config?.reasoningEffort) args.push('-c', `model_reasoning_effort=${config.reasoningEffort}`);
     for (const imagePath of images) args.push('-i', imagePath);
     args.push('-');
 

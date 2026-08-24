@@ -142,6 +142,9 @@ export async function loadCodexConfig(rootDir = process.cwd()) {
     sandbox,
     concurrency: Number.isInteger(concurrency) && concurrency > 0 ? concurrency : 1,
     timeoutMs: Number(pick('CODEX_TIMEOUT_MS')) || 180_000,
+    imageTimeoutMs: Number(pick('CODEX_IMAGE_TIMEOUT_MS')) || 600_000,
+    model: pick('CODEX_MODEL') || 'gpt-5.6-luna',
+    reasoningEffort: pick('CODEX_REASONING_EFFORT') || 'xhigh',
   };
 }
 

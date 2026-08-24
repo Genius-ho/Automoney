@@ -20,15 +20,15 @@ function fakeDetailSet(overrides = {}) {
 }
 
 function enabledRoute(overrides = {}) {
-  return { taskType: 'generated_image_review', providerCode: 'anthropic', model: null, enabled: true, ...overrides };
+  return { taskType: 'generated_image_review', providerCode: 'codex', model: null, enabled: true, ...overrides };
 }
 
 function passResult() {
-  return { model: 'sonnet', rawText: '{"pass": true, "issues": []}' };
+  return { model: 'gpt-5.6-luna', rawText: '{"pass": true, "issues": []}' };
 }
 
 function failResult(description = 'issue found') {
-  return { model: 'sonnet', rawText: `{"pass": false, "issues": [{"severity":"high","description":"${description}"}]}` };
+  return { model: 'gpt-5.6-luna', rawText: `{"pass": false, "issues": [{"severity":"high","description":"${description}"}]}` };
 }
 
 function commonDeps(overrides = {}) {
@@ -38,9 +38,8 @@ function commonDeps(overrides = {}) {
     listManualMainImagesImpl: async () => [fakeMainImage()],
     listManualDetailSetsImpl: async () => [fakeDetailSet()],
     listTaskRoutingImpl: async () => ({ routes: [enabledRoute()] }),
-    loadClaudeCliConfigImpl: async () => ({ executable: 'claude', model: 'sonnet' }),
-    checkClaudeCliAvailabilityImpl: async () => ({ available: true, loggedIn: true, message: 'Logged in (pro)' }),
-    loadCodexConfigImpl: async () => ({}),
+    loadCodexConfigImpl: async () => ({ executable: 'codex', model: 'gpt-5.6-luna', reasoningEffort: 'xhigh' }),
+    checkCodexAvailabilityImpl: async () => ({ available: true, loggedIn: true, message: 'Logged in using ChatGPT' }),
     loadJobPathsConfigImpl: async () => ({ jobDir: '/tmp/jobs' }),
     loadImageForVisionImpl: async (rootDir, url) => ({ filePath: `/repo/public${url}`, cleanup: null }),
     loadRemoteImageForVisionImpl: async () => ({ filePath: '/tmp/automoney-qa-competitor-fake.jpg', cleanup: async () => {} }),
@@ -67,16 +66,16 @@ test('reviewGeneratedImages skips when the draft does not exist', async () => {
   assert.deepEqual(result, { skipped: true, reason: 'DRAFT_NOT_FOUND' });
 });
 
-test('reviewGeneratedImages skips when the Claude CLI is not available or not logged in', async () => {
+test('reviewGeneratedImages skips when the Codex CLI is not available or not logged in', async () => {
   const result = await reviewGeneratedImages({}, '/repo', 8, commonDeps({
-    checkClaudeCliAvailabilityImpl: async () => ({ available: false, loggedIn: false, message: 'claude --version exited with code 127' }),
+    checkCodexAvailabilityImpl: async () => ({ available: false, loggedIn: false, message: 'codex --version exited with code 127' }),
   }));
-  assert.deepEqual(result, { skipped: true, reason: 'CLAUDE_CLI_UNAVAILABLE', message: 'claude --version exited with code 127' });
+  assert.deepEqual(result, { skipped: true, reason: 'CODEX_CLI_UNAVAILABLE', message: 'codex --version exited with code 127' });
 
   const result2 = await reviewGeneratedImages({}, '/repo', 8, commonDeps({
-    checkClaudeCliAvailabilityImpl: async () => ({ available: true, loggedIn: false, message: 'Not logged in' }),
+    checkCodexAvailabilityImpl: async () => ({ available: true, loggedIn: false, message: 'Not logged in' }),
   }));
-  assert.deepEqual(result2, { skipped: true, reason: 'CLAUDE_CLI_UNAVAILABLE', message: 'Not logged in' });
+  assert.deepEqual(result2, { skipped: true, reason: 'CODEX_CLI_UNAVAILABLE', message: 'Not logged in' });
 });
 
 test('reviewGeneratedImages skips when no uploaded/approved main image or detail set exists yet', async () => {
@@ -199,7 +198,7 @@ test('reviewGeneratedImages records an error review (and never approves) when th
   let approveCalled = false;
   let recordedReview;
   const result = await reviewGeneratedImages({}, '/repo', 8, commonDeps({
-    getProviderImpl: () => ({ analyzeImages: async () => { throw Object.assign(new Error('rate limited'), { code: 'ANTHROPIC_API_ERROR' }); } }),
+    getProviderImpl: () => ({ analyzeImages: async () => { throw Object.assign(new Error('rate limited'), { code: 'CODEX_ANALYSIS_ERROR' }); } }),
     approveInboxImagesImpl: async () => { approveCalled = true; },
     insertImageQaReviewImpl: async (db, input) => { recordedReview = input; },
   }));
@@ -212,7 +211,7 @@ test('reviewGeneratedImages records an error review (and never approves) when th
 test('reviewGeneratedImages records an error review when the model response is not parseable JSON', async () => {
   let recordedReview;
   const result = await reviewGeneratedImages({}, '/repo', 8, commonDeps({
-    getProviderImpl: () => ({ analyzeImages: async () => ({ model: 'sonnet', rawText: 'sorry, I cannot help with that' }) }),
+    getProviderImpl: () => ({ analyzeImages: async () => ({ model: 'gpt-5.6-luna', rawText: 'sorry, I cannot help with that' }) }),
     insertImageQaReviewImpl: async (db, input) => { recordedReview = input; },
   }));
   assert.equal(result.verdict, 'error');
@@ -230,11 +229,14 @@ test('reviewGeneratedImages instructs the reviewer not to flag decorative rating
 
 test('reviewGeneratedImages sends the main image plus every detail image (as local file paths) to the provider, and includes options/price in the prompt', async () => {
   let capturedCall;
+  let capturedConfig;
   await reviewGeneratedImages({}, '/repo', 8, commonDeps({
     getProviderImpl: () => ({
-      analyzeImages: async (config, args) => { capturedCall = args; return passResult(); },
+      analyzeImages: async (config, args) => { capturedConfig = config; capturedCall = args; return passResult(); },
     }),
   }));
+  assert.equal(capturedConfig.model, 'gpt-5.6-luna');
+  assert.equal(capturedConfig.reasoningEffort, 'xhigh');
   assert.equal(capturedCall.images.length, 2);
   assert.equal(capturedCall.images[0].filePath, '/repo/public/generated-ai-images/drafts/8/main/manual/manual-r1-v1-coupang-1000x1000.jpg');
   assert.match(capturedCall.prompt, /폴딩 차량뒷좌석 멀티트레이/);

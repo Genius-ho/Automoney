@@ -291,11 +291,11 @@ async function handleRequest({ request, response, db, aiSecrets, rootDir }) {
   }
   const providerOptions={environment:aiSecrets,masterKey:aiSecrets.AUTOMONEY_CREDENTIAL_MASTER_KEY};
   if(url.pathname==='/api/settings/ai-providers'&&request.method==='GET'){sendJson(response,200,await listProviderSettings(db,providerOptions));return;}
-  const providerMatch=url.pathname.match(/^\/api\/settings\/ai-providers\/(openai|google|anthropic|custom)$/);
+  const providerMatch=url.pathname.match(/^\/api\/settings\/ai-providers\/(openai|google|anthropic|custom|codex)$/);
   if(providerMatch&&request.method==='POST'){try{sendJson(response,200,{provider:await saveProviderSetting(db,providerMatch[1],await readJson(request),providerOptions)});}catch(error){sendJson(response,error.code==='CREDENTIAL_CONFIGURATION_ERROR'?422:400,{error:error.message,code:error.code});}return;}
-  const credentialMatch=url.pathname.match(/^\/api\/settings\/ai-providers\/(openai|google|anthropic|custom)\/credential$/);
+  const credentialMatch=url.pathname.match(/^\/api\/settings\/ai-providers\/(openai|google|anthropic|custom|codex)\/credential$/);
   if(credentialMatch&&request.method==='DELETE'){if(url.searchParams.get('confirm')!=='true'){sendJson(response,409,{error:'confirm=true is required'});return;}await clearProviderCredential(db,credentialMatch[1]);sendJson(response,200,{cleared:true});return;}
-  const providerTestMatch=url.pathname.match(/^\/api\/settings\/ai-providers\/(openai|google|anthropic|custom)\/test$/);
+  const providerTestMatch=url.pathname.match(/^\/api\/settings\/ai-providers\/(openai|google|anthropic|custom|codex)\/test$/);
   if(providerTestMatch&&request.method==='POST'){sendJson(response,409,{error:'Provider connection tests are disabled while the manual external AI workflow is active',code:'MANUAL_WORKFLOW_ACTIVE'});return;}
   if(url.pathname==='/api/settings/ai-task-routing'&&request.method==='GET'){sendJson(response,200,await listTaskRouting(db));return;}
   if(url.pathname==='/api/settings/ai-task-routing'&&request.method==='POST'){try{sendJson(response,200,await saveTaskRouting(db,await readJson(request)));}catch(error){sendJson(response,422,{error:error.message,code:error.code});}return;}
@@ -1479,7 +1479,6 @@ export function adminHtml() {
     <section class="list">
       <div class="viewNav">
         <button id="viewLinkInputButton" class="primary" type="button">링크 입력</button>
-        <button id="viewScoreButton" type="button">점수</button>
         <button id="viewImageImprovementButton" type="button">이미지 개선</button>
         <button id="viewHistoryButton" type="button">히스토리</button>
         <!-- 2026-08-22 사용자 요청: 우선 위 3개 탭만 쓰기로 하고 나머지는 숨김
@@ -1507,7 +1506,6 @@ export function adminHtml() {
            둬서 뷰를 옮겨도 사라지지 않는다. -->
       <div id="linkAnalysisStatusBar" hidden>
         <span id="linkAnalysisStatusText" class="muted"></span>
-        <button id="linkAnalysisStatusViewButton" type="button" hidden>점수 보기</button>
       </div>
       <div class="toolbar" hidden>
         <select id="statusFilter"><option value="">all</option><option value="draft">draft</option><option value="needs_review">needs_review</option><option value="blocked">blocked</option><option value="approved">approved</option></select>
@@ -1567,11 +1565,9 @@ export function adminHtml() {
     let linkAnalysisJob=null;
     const linkAnalysisStatusBar=document.getElementById('linkAnalysisStatusBar');
     const linkAnalysisStatusText=document.getElementById('linkAnalysisStatusText');
-    const linkAnalysisStatusViewButton=document.getElementById('linkAnalysisStatusViewButton');
     function renderLinkAnalysisStatus(){
       if(!linkAnalysisJob){linkAnalysisStatusBar.hidden=true;return;}
       linkAnalysisStatusBar.hidden=false;
-      linkAnalysisStatusViewButton.hidden=linkAnalysisJob.status!=='done';
       if(linkAnalysisJob.status==='running')linkAnalysisStatusText.textContent='링크 분석 중... ('+linkAnalysisJob.total+'건, 완료되면 여기 표시가 바뀝니다)';
       else if(linkAnalysisJob.status==='done')linkAnalysisStatusText.textContent='링크 분석 완료 ('+linkAnalysisJob.resultsCount+'건)';
       else linkAnalysisStatusText.textContent='링크 분석 실패: '+linkAnalysisJob.error;
@@ -1580,9 +1576,8 @@ export function adminHtml() {
       const linkInputSubmitButton=document.getElementById('linkInputSubmitButton');
       if(linkInputSubmitButton)linkInputSubmitButton.disabled=linkAnalysisJob.status==='running';
     }
-    linkAnalysisStatusViewButton.addEventListener('click',()=>{switchView('score');linkAnalysisJob=null;renderLinkAnalysisStatus();});
     let currentView='linkInput';
-    const viewButtons={linkInput:document.getElementById('viewLinkInputButton'),score:document.getElementById('viewScoreButton'),imageImprovement:document.getElementById('viewImageImprovementButton'),history:document.getElementById('viewHistoryButton'),approvalInbox:document.getElementById('viewApprovalInboxButton'),dashboard:document.getElementById('viewDashboardButton'),all:document.getElementById('viewAllButton'),recommend:document.getElementById('viewRecommendButton'),registrations:document.getElementById('viewRegistrationsButton'),autoBatch:document.getElementById('viewAutoBatchButton'),keywordSourcing:document.getElementById('viewKeywordSourcingButton'),urlImport:document.getElementById('viewUrlImportButton'),channelOrders:document.getElementById('viewChannelOrdersButton'),domemePrecheck:document.getElementById('viewDomemePrecheckButton'),purchaseOrders:document.getElementById('viewPurchaseOrdersButton'),orderExceptions:document.getElementById('viewOrderExceptionsButton')};
+    const viewButtons={linkInput:document.getElementById('viewLinkInputButton'),imageImprovement:document.getElementById('viewImageImprovementButton'),history:document.getElementById('viewHistoryButton'),approvalInbox:document.getElementById('viewApprovalInboxButton'),dashboard:document.getElementById('viewDashboardButton'),all:document.getElementById('viewAllButton'),recommend:document.getElementById('viewRecommendButton'),registrations:document.getElementById('viewRegistrationsButton'),autoBatch:document.getElementById('viewAutoBatchButton'),keywordSourcing:document.getElementById('viewKeywordSourcingButton'),urlImport:document.getElementById('viewUrlImportButton'),channelOrders:document.getElementById('viewChannelOrdersButton'),domemePrecheck:document.getElementById('viewDomemePrecheckButton'),purchaseOrders:document.getElementById('viewPurchaseOrdersButton'),orderExceptions:document.getElementById('viewOrderExceptionsButton')};
     for(const [view,button] of Object.entries(viewButtons))button.addEventListener('click',()=>switchView(view));
     // 'detailOnly' is not a nav tab (no button in viewButtons) -- it's what a
     // draftId deep link (e.g. the Telegram "이미지 1차 가공 완료" notification)
@@ -1601,7 +1596,6 @@ export function adminHtml() {
       document.querySelector('main').classList.toggle('singleView',view!=='all'&&view!=='detailOnly');
       document.querySelector('main').classList.toggle('detailOnly',view==='detailOnly');
       if(view==='linkInput')loadLinkInputView();
-      else if(view==='score')loadScoreView();
       else if(view==='imageImprovement')loadImageImprovementView();
       else if(view==='history')loadHistoryView();
       else if(view==='approvalInbox')loadApprovalInbox();
@@ -1900,13 +1894,15 @@ export function adminHtml() {
       const el=document.getElementById('specialView');
       el.innerHTML='<div style="padding:12px">'
         +'<div class="section"><h3>링크 입력</h3>'
-        +'<p class="muted">도매매/도매꾹에서 직접 찾은 후보 상품 링크(또는 상품번호)를 한 줄에 하나씩 붙여넣으세요. 저장/등록은 하지 않고 점수만 매겨서 "점수" 탭에 보여줍니다.</p>'
+        +'<p class="muted">도매매/도매꾹에서 직접 찾은 후보 상품 링크(또는 상품번호)를 한 줄에 하나씩 붙여넣으세요. 저장/등록은 하지 않고 점수만 매겨서 이 아래에 보여줍니다.</p>'
         +'<textarea id="linkInputTextarea" style="width:100%;max-width:600px;height:160px" placeholder="https://domeggook.com/main/item/itemView.php?no=... / 49168397 (한 줄에 하나씩)"></textarea>'
         +'<p><button id="linkInputSubmitButton" type="button">분석하기</button></p>'
         +'<div id="linkInputResult" class="muted"></div>'
+        +'<div id="linkInputScoreResults"></div>'
         +'</div>'
         +'</div>';
       renderLinkAnalysisStatus();
+      renderLinkAnalysisResults(lastLinkAnalysisResults,document.getElementById('linkInputScoreResults'));
       document.getElementById('linkInputSubmitButton').onclick=()=>{
         const resultEl=document.getElementById('linkInputResult');
         const textarea=document.getElementById('linkInputTextarea');
@@ -1918,11 +1914,14 @@ export function adminHtml() {
         // 추출)이 껴서 20~30초씩 걸리므로, 이 탭에 머물러 기다릴 필요 없이
         // 다른 탭으로 옮겨도 linkAnalysisStatusBar가 계속 진행 상황을 보여준다.
         linkAnalysisJob={status:'running',total:lineCount};
+        lastLinkAnalysisResults=null;
         renderLinkAnalysisStatus();
+        renderLinkAnalysisResults(null,document.getElementById('linkInputScoreResults'));
         textarea.value='';
         api('/api/product-drafts/analyze-links',{method:'POST',body:JSON.stringify({text:value,keyword:lastSearchedKeyword})})
           .then((data)=>{
             lastLinkAnalysisResults=data.results;
+            renderLinkAnalysisResults(lastLinkAnalysisResults,document.getElementById('linkInputScoreResults'));
             linkAnalysisJob={status:'done',resultsCount:data.results.length};
             renderLinkAnalysisStatus();
           })
@@ -1942,18 +1941,18 @@ export function adminHtml() {
         }).join('')
         +'</tbody></table>';
     }
-    function loadScoreView(){
-      const el=document.getElementById('specialView');
-      if(!lastLinkAnalysisResults||!lastLinkAnalysisResults.length){
-        el.innerHTML='<div style="padding:12px"><p class="muted">아직 분석한 링크가 없습니다. "링크 입력" 탭에서 먼저 분석해주세요.</p></div>';
+    function renderLinkAnalysisResults(results,el){
+      if(!el)return;
+      if(!results||!results.length){
+        el.innerHTML='<p class="muted">분석이 완료되면 이 아래에 점수 결과가 표시됩니다.</p>';
         return;
       }
-      el.innerHTML='<div style="padding:12px"><div class="section"><h3>점수 (높은 순)</h3><p class="muted">마음에 드는 상품의 "등록" 버튼을 누르면 초안이 만들어집니다 (이미지 생성은 자동으로 시작되지 않음) -- "이미지 개선" 탭에서 이미지 생성을 직접 시작하세요. "산출 과정"을 누르면 9개 항목별 점수와, AI가 실제로 판단한 항목(이미지품질/반품리스크/중복위험, "[AI]" 표시)을 볼 수 있습니다.</p><table><thead><tr><th>점수</th><th>상품명</th><th>마켓</th><th>필터상태</th><th>판매가</th><th>예상마진</th><th>상품번호</th><th>등록</th><th>산출 과정</th></tr></thead><tbody>'
-        +lastLinkAnalysisResults.map(r=>r.status==='error'
+      el.innerHTML='<div class="section"><h3>분석 결과 (점수 높은 순)</h3><p class="muted">마음에 드는 상품의 "등록" 버튼을 누르면 초안이 만들어집니다 (이미지 생성은 자동으로 시작되지 않음) -- "이미지 개선" 탭에서 이미지 생성을 직접 시작하세요. "산출 과정"을 누르면 9개 항목별 점수와, AI가 실제로 판단한 항목(이미지품질/반품리스크/중복위험, "[AI]" 표시)을 볼 수 있습니다.</p><table><thead><tr><th>점수</th><th>상품명</th><th>마켓</th><th>필터상태</th><th>판매가</th><th>예상마진</th><th>상품번호</th><th>등록</th><th>산출 과정</th></tr></thead><tbody>'
+        +results.map(r=>r.status==='error'
           ?'<tr><td colspan="8">⚠️ 조회 실패: '+escapeHtml(r.error||'')+'</td><td>'+escapeHtml(r.productNo)+'</td></tr>'
           :'<tr><td>'+r.score+'</td><td>'+escapeHtml(r.name||'-')+'</td><td>'+escapeHtml(r.sourceMarket||'-')+'</td><td>'+escapeHtml(r.filterStatus||'-')+'</td><td>'+money(r.coupangSalePrice)+'</td><td>'+money(r.coupangExpectedProfit)+'</td><td>'+escapeHtml(r.productNo)+'</td><td><button type="button" data-score-import-product-no="'+attr(r.productNo)+'">등록</button><span class="muted" data-score-import-result="'+attr(r.productNo)+'"></span></td><td><button type="button" data-score-detail-toggle="'+attr(r.productNo)+'">산출 과정</button></td></tr>'
             +'<tr hidden data-score-detail-row="'+attr(r.productNo)+'"><td colspan="9">'+scoreBreakdownHtml(r.breakdown)+'</td></tr>').join('')
-        +'</tbody></table></div></div>';
+        +'</tbody></table></div>';
       el.querySelectorAll('[data-score-detail-toggle]').forEach(button=>button.onclick=()=>{
         const row=el.querySelector('[data-score-detail-row="'+CSS.escape(button.dataset.scoreDetailToggle)+'"]');
         row.hidden=!row.hidden;
@@ -1995,7 +1994,7 @@ export function adminHtml() {
         }));
         const sorted=sortByField(withState,imageImprovementSortBy,imageImprovementSortDir,d=>d.updatedAt,d=>d.sellingTitle||d.originalProductName||d.supplierProductNo);
         el.innerHTML='<div style="padding:12px"><div class="section"><h3>이미지 개선 (등록된 초안)</h3>'
-          +'<p class="muted">"점수"/"URL 등록" 탭이나 텔레그램으로 등록한 상품이 여기 나옵니다. 아직 이미지가 없으면 "이미지 생성 시작"을 눌러야 대표/상세 이미지가 만들어집니다 (완료되면 텔레그램으로도 알려드려요). 이미 생성된 건 열어서 재생성하거나 직접 업로드로 교체할 수 있습니다.</p>'
+          +'<p class="muted">"링크 입력"/"URL 등록"에서 등록하거나 텔레그램으로 등록한 상품이 여기 나옵니다. 아직 이미지가 없으면 "이미지 생성 시작"을 눌러야 대표/상세 이미지가 만들어집니다 (완료되면 텔레그램으로도 알려드려요). 이미 생성된 건 열어서 재생성하거나 직접 업로드로 교체할 수 있습니다.</p>'
           +sortControlsHtml('imageImprovement',imageImprovementSortBy,imageImprovementSortDir)
           +(sorted.length?'<table><thead><tr><th>상품</th><th>등록/수정일시</th><th>상태</th><th>이미지</th><th>작업</th></tr></thead><tbody>'
             +sorted.map(d=>'<tr><td>'+escapeHtml(d.sellingTitle||d.originalProductName||d.supplierProductNo)+'</td><td>'+escapeHtml(formatDateTime(d.updatedAt))+'</td><td>'+escapeHtml(d.status)+'</td><td>'+(d.generatedAiImageCount>0?'생성됨 ('+d.generatedAiImageCount+'개)':'없음')+'</td><td>'
@@ -2933,7 +2932,7 @@ export function adminHtml() {
     function renderJsonExportSectionV1(id){const panel=document.querySelector('#detail [data-panel="export"]');if(!panel)return;panel.innerHTML='<div class="section" data-json-export-section><h2>등록 및 디버그 JSON</h2><p><button data-json-path="export/coupang" data-json-label="쿠팡 등록 JSON">쿠팡 등록 JSON</button> <button data-json-path="export/naver" data-json-label="네이버 등록 JSON">네이버 등록 JSON</button> <button data-json-path="debug-export" data-json-label="내부 디버그 JSON">내부 디버그 JSON</button> <button data-json-copy>복사</button></p><div data-json-selected class="muted">선택 없음</div><pre id="exportPreview"></pre></div>';panel.querySelectorAll('[data-json-path]').forEach(b=>b.onclick=async()=>{try{const value=await api('/api/product-drafts/'+id+'/'+b.dataset.jsonPath);panel.querySelector('[data-json-selected]').textContent=b.dataset.jsonLabel;panel.querySelector('#exportPreview').textContent=JSON.stringify(value,null,2)}catch(error){panel.querySelector('#exportPreview').textContent='HTTP 오류: '+error.message}});panel.querySelector('[data-json-copy]').onclick=()=>copyText(panel.querySelector('#exportPreview').textContent);}
     function collapseImageTechnicalDetailsV1(){document.querySelectorAll('#detail [data-panel="source"] img').forEach(img=>{const card=img.closest('div[style*="display:inline-block"]');if(!card||card.querySelector('details[data-image-technical]'))return;const rows=[...card.querySelectorAll(':scope > .muted')];if(!rows.length)return;const details=document.createElement('details');details.dataset.imageTechnical='true';details.innerHTML='<summary>기술정보 보기</summary>';rows.forEach(row=>details.appendChild(row));card.appendChild(details);});window.__adminUiDiagnostics.imageTechnicalDetailsCollapsed=true;}
     const AI_TASK_LABELS={product_text_generation:'상품 텍스트 생성',product_image_analysis:'상품 이미지 분석',main_image_generation:'대표이미지 생성',main_image_edit:'대표이미지 편집',detail_image_generation:'상세페이지 이미지 생성',generated_image_review:'생성 이미지 검수'};
-    function providerCardV1(p){const caps=p.capabilities.map(x=>'<span class="badge">'+escapeHtml(x)+'</span>').join('');const claude=p.providerCode==='anthropic'?'<p class="muted">현재 이미지 생성 공급자로 사용할 수 없습니다. 텍스트 생성, 이미지 분석, 생성 이미지 검수에 사용할 수 있습니다.</p>':'';return '<form class="section" data-provider-card="'+p.providerCode+'"><h2>'+escapeHtml(p.displayName)+'</h2><div>credential: '+p.credentialSource+' / '+escapeHtml(p.maskedApiKey||'미등록')+' / test: '+escapeHtml(p.lastTestStatus)+'</div>'+claude+'<label><input type="checkbox" name="enabled" style="width:auto" '+(p.enabled?'checked':'')+'> 활성화</label><label>API 키 등록/변경</label><input type="password" name="apiKey" autocomplete="new-password" '+(p.credentialStorageAvailable?'':'disabled placeholder="master key 미설정"')+'><label>Base URL</label><input name="baseUrl" value="'+attr(p.baseUrl||'')+'"><label>기본 text model</label><input name="defaultTextModel" value="'+attr(p.models.text||'')+'"><label>기본 vision model</label><input name="defaultVisionModel" value="'+attr(p.models.vision||'')+'"><label>기본 image model</label><input name="defaultImageModel" value="'+attr(p.models.image||'')+'"><div>'+caps+'</div><p><button type="submit">설정 저장</button> <button type="button" data-provider-test disabled title="반수동 workflow 단계에서는 연결 테스트를 사용하지 않습니다">연결 테스트</button> <button type="button" data-provider-clear>API 키 삭제</button></p><div data-provider-message class="muted"></div></form>';}
+    function providerCardV1(p){const caps=p.capabilities.map(x=>'<span class="badge">'+escapeHtml(x)+'</span>').join('');const providerNote=p.providerCode==='anthropic'?'<p class="muted">현재 이미지 생성 공급자로 사용할 수 없습니다. 텍스트 생성, 이미지 분석, 생성 이미지 검수에 사용할 수 있습니다.</p>':p.providerCode==='codex'?'<p class="muted">Codex CLI의 ChatGPT 로그인 세션을 사용합니다. 별도 API 키가 필요하지 않습니다.</p>':'';const localOnly=p.providerCode==='codex';return '<form class="section" data-provider-card="'+p.providerCode+'"><h2>'+escapeHtml(p.displayName)+'</h2><div>credential: '+p.credentialSource+' / '+escapeHtml(p.maskedApiKey||'미등록')+' / test: '+escapeHtml(p.lastTestStatus)+'</div>'+providerNote+'<label><input type="checkbox" name="enabled" style="width:auto" '+(p.enabled?'checked':'')+'> 활성화</label><label>API 키 등록/변경</label><input type="password" name="apiKey" autocomplete="new-password" '+(localOnly?'disabled title="Codex는 로컬 로그인 사용"':p.credentialStorageAvailable?'':'disabled placeholder="master key 미설정"')+'><label>Base URL</label><input name="baseUrl" value="'+attr(p.baseUrl||'')+'" '+(localOnly?'disabled':'')+'><label>기본 text model</label><input name="defaultTextModel" value="'+attr(p.models.text||'')+'"><label>기본 vision model</label><input name="defaultVisionModel" value="'+attr(p.models.vision||'')+'"><label>기본 image model</label><input name="defaultImageModel" value="'+attr(p.models.image||'')+'"><div>'+caps+'</div><p><button type="submit">설정 저장</button> <button type="button" data-provider-test disabled title="반수동 workflow 단계에서는 연결 테스트를 사용하지 않습니다">연결 테스트</button> <button type="button" data-provider-clear>API 키 삭제</button></p><div data-provider-message class="muted"></div></form>';}
     async function loadAiSettingsV1(){const [providerData,routingData]=await Promise.all([api('/api/settings/ai-providers'),api('/api/settings/ai-task-routing')]);aiProviderCards.innerHTML=providerData.providers.map(providerCardV1).join('');const taskCapabilities=routingData.taskCapabilities;const existing=new Map(routingData.routes.map(x=>[x.taskType,x]));aiTaskRouting.innerHTML=Object.keys(taskCapabilities).map(task=>{const route=existing.get(task)||{};const options=providerData.providers.map(p=>{const disabled=!p.capabilities.includes(taskCapabilities[task]);return '<option value="'+p.providerCode+'" '+(route.providerCode===p.providerCode?'selected':'')+' '+(disabled?'disabled':'')+'>'+escapeHtml(p.displayName)+'</option>';}).join('');return '<form class="section" data-task-route="'+task+'"><h2>'+AI_TASK_LABELS[task]+'</h2><label>공급자</label><select name="providerCode">'+options+'</select><label>모델</label><input name="model" value="'+attr(route.model||'')+'"><div class="grid"><label>quality<input name="quality" value="'+attr(route.quality||'')+'"></label><label>size<input name="size" value="'+attr(route.size||'')+'"></label><label>최대 장수<input type="number" name="maxImagesPerRequest" value="'+(route.maxImagesPerRequest||1)+'"></label><label>자동 재시도<input type="number" name="maxRetries" value="'+(route.maxRetries||0)+'"></label></div><label><input type="checkbox" name="enabled" style="width:auto" '+(route.enabled?'checked':'')+'> 활성화</label><label><input type="checkbox" name="fallbackEnabled" style="width:auto" '+(route.fallbackEnabled?'checked':'')+'> 자동 fallback (기본 꺼짐)</label><button type="submit">라우팅 저장</button><span data-route-message class="muted"></span></form>';}).join('');
       aiProviderCards.querySelectorAll('[data-provider-card]').forEach(form=>{const code=form.dataset.providerCard;form.onsubmit=async event=>{event.preventDefault();const fd=new FormData(form);const body={enabled:fd.get('enabled')==='on',apiKey:fd.get('apiKey')||undefined,baseUrl:fd.get('baseUrl')||null,defaultTextModel:fd.get('defaultTextModel')||null,defaultVisionModel:fd.get('defaultVisionModel')||null,defaultImageModel:fd.get('defaultImageModel')||null};try{await api('/api/settings/ai-providers/'+code,{method:'POST',body:JSON.stringify(body)});await loadAiSettingsV1()}catch(error){form.querySelector('[data-provider-message]').textContent=error.message}};form.querySelector('[data-provider-test]').onclick=async()=>{const result=await api('/api/settings/ai-providers/'+code+'/test',{method:'POST',body:'{}'});form.querySelector('[data-provider-message]').textContent=result.status+': '+result.message};form.querySelector('[data-provider-clear]').onclick=async()=>{if(!confirm('API 키만 삭제하시겠습니까?'))return;await api('/api/settings/ai-providers/'+code+'/credential?confirm=true',{method:'DELETE'});await loadAiSettingsV1()};});
       aiTaskRouting.querySelectorAll('[data-task-route]').forEach(form=>form.onsubmit=async event=>{event.preventDefault();const fd=new FormData(form);try{await api('/api/settings/ai-task-routing',{method:'POST',body:JSON.stringify({taskType:form.dataset.taskRoute,providerCode:fd.get('providerCode'),model:fd.get('model')||null,quality:fd.get('quality')||null,size:fd.get('size')||null,maxImagesPerRequest:Number(fd.get('maxImagesPerRequest')||1),maxRetries:Number(fd.get('maxRetries')||0),enabled:fd.get('enabled')==='on',fallbackEnabled:fd.get('fallbackEnabled')==='on'})});form.querySelector('[data-route-message]').textContent=' 저장됨'}catch(error){form.querySelector('[data-route-message]').textContent=' '+error.message}});

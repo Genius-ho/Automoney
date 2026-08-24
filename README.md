@@ -26,6 +26,25 @@ The loader reads `.env` first and falls back to `env` for the current workspace.
 - `DOMEME_API_KEY`: Domeme Open API key
 - `DOMEME_PRODUCT_DETAIL_ENDPOINT`: optional product-detail API endpoint override
 
+### Automatic AI provider
+
+Automatic product analysis, keyword extraction, image analysis, generated-image review, and Codex image generation use the local Codex CLI session.
+
+```text
+codex login
+CODEX_MODEL=gpt-5.6-luna
+CODEX_REASONING_EFFORT=xhigh
+```
+
+No Claude usage or OpenAI API key is required for these automatic tasks. The
+admin AI settings page identifies this provider as `OpenAI Codex`; manually
+uploaded images may still retain their original external-provider metadata.
+
+For an existing PostgreSQL database, apply
+`migrations/2026-08-24-codex-provider-routing.sql` once before starting the
+automatic scheduler. A new database receives the Codex constraint from
+`schema.sql`.
+
 Coupang and Smartstore listing APIs are not called by this MVP.
 
 ## Windows 수동 실행
