@@ -33,12 +33,12 @@ class ResampleTests(unittest.TestCase):
         self.assertEqual(bucket.close, 9.0)
         self.assertEqual(bucket.volume, 3.0)
 
-    def test_wall_clock_boundary_starts_a_new_bucket(self):
+    def test_incomplete_wall_clock_buckets_are_dropped(self):
         bars = [_bar(2, 10.0), _bar(3, 11.0)]
 
         resampled = resample(bars, minutes=3)
 
-        self.assertEqual(len(resampled), 2)
+        self.assertEqual(resampled, [])
 
 
 class VwapTests(unittest.TestCase):

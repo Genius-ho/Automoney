@@ -12,8 +12,10 @@ import argparse
 import statistics
 import time
 from dataclasses import dataclass
-from datetime import datetime
+from datetime import date, datetime, timedelta
+from typing import Callable, TypeVar
 
+from intraday_sessions import session_phase_key
 from toss_api import TossBroker
 
 RESAMPLE_MINUTES = 3
@@ -28,6 +30,42 @@ class Bar:
     low: float
     close: float
     volume: float
+    session_date: date | None = None
+    phase: str | None = None
+
+    @property
+    def segment_key(self) -> tuple[date, str]:
+        if self.session_date is not None and self.phase is not None:
+            return self.session_date, self.phase
+        return session_phase_key(self.timestamp)
+
+
+T = TypeVar("T")
+
+
+def segment_ranges(bars: list[Bar]) -> list[tuple[int, int]]:
+    """Return contiguous ranges sharing one US session and market phase."""
+    if not bars:
+        return []
+    ranges: list[tuple[int, int]] = []
+    start = 0
+    previous = bars[0].segment_key
+    for index in range(1, len(bars)):
+        current = bars[index].segment_key
+        if current != previous:
+            ranges.append((start, index))
+            start = index
+            previous = current
+    ranges.append((start, len(bars)))
+    return ranges
+
+
+def apply_segmented(bars: list[Bar], calculator: Callable[[list[Bar]], list[T]]) -> list[T]:
+    """Apply an aligned indicator calculator independently per session phase."""
+    result: list[T] = []
+    for start, end in segment_ranges(bars):
+        result.extend(calculator(bars[start:end]))
+    return result
 
 
 def fetch_minute_candles(broker: TossBroker, symbol: str, max_pages: int = 30, page_size: int = 200) -> list[Bar]:
@@ -63,35 +101,44 @@ def fetch_minute_candles(broker: TossBroker, symbol: str, max_pages: int = 30, p
 
 
 def resample(bars: list[Bar], minutes: int = RESAMPLE_MINUTES) -> list[Bar]:
-    """Group consecutive 1-minute bars into wall-clock-aligned N-minute bars."""
-    buckets: dict[datetime, list[Bar]] = {}
+    """Group complete consecutive candles into phase-aware N-minute bars."""
+    if minutes <= 0:
+        raise ValueError("resample minutes must be positive")
+    buckets: dict[tuple[datetime, date, str], list[Bar]] = {}
     for bar in bars:
+        session_date, phase = session_phase_key(bar.timestamp)
         floor_minute = bar.timestamp.minute - bar.timestamp.minute % minutes
         key = bar.timestamp.replace(minute=floor_minute, second=0, microsecond=0)
-        buckets.setdefault(key, []).append(bar)
+        buckets.setdefault((key, session_date, phase), []).append(bar)
     result = []
-    for key in sorted(buckets):
-        group = buckets[key]
+    for key, group in sorted(buckets.items()):
+        bucket_start, session_date, phase = key
+        expected = [bucket_start + timedelta(minutes=offset) for offset in range(minutes)]
+        if [item.timestamp for item in sorted(group, key=lambda item: item.timestamp)] != expected:
+            continue
+        group = sorted(group, key=lambda item: item.timestamp)
         result.append(Bar(
-            timestamp=key,
+            timestamp=bucket_start,
             open=group[0].open,
             high=max(item.high for item in group),
             low=min(item.low for item in group),
             close=group[-1].close,
             volume=sum(item.volume for item in group),
+            session_date=session_date,
+            phase=phase,
         ))
     return result
 
 
 def compute_vwap(bars: list[Bar]) -> list[float]:
-    """Intraday VWAP, resetting the cumulative sums at each new calendar date."""
+    """VWAP reset at each US session and market-phase boundary."""
     vwap: list[float] = []
     cum_pv = cum_vol = 0.0
-    current_date = None
+    current_segment = None
     for bar in bars:
-        bar_date = bar.timestamp.date()
-        if bar_date != current_date:
-            current_date = bar_date
+        segment = bar.segment_key
+        if segment != current_segment:
+            current_segment = segment
             cum_pv = cum_vol = 0.0
         typical_price = (bar.high + bar.low + bar.close) / 3
         cum_pv += typical_price * bar.volume
@@ -121,6 +168,10 @@ def compute_rsi(closes: list[float], period: int = RSI_PERIOD) -> list[float | N
         avg_loss = (avg_loss * (period - 1) + loss) / period
         rsi[index] = 100.0 if avg_loss == 0 else 100.0 - 100.0 / (1 + avg_gain / avg_loss)
     return rsi
+
+
+def compute_segmented_rsi(bars: list[Bar], period: int = RSI_PERIOD) -> list[float | None]:
+    return apply_segmented(bars, lambda segment: compute_rsi([bar.close for bar in segment], period=period))
 
 
 def compute_stoch_rsi(
