@@ -24,7 +24,7 @@
 ## Debian 실행
 
 ```sh
-cd /home/ho/apps/automoney/web_gui
+cd <project-root>/web_gui
 chmod +x run_web.sh
 ./run_web.sh
 ```
@@ -36,3 +36,20 @@ chmod +x run_web.sh
 웹 로그인 세션은 HttpOnly·SameSite 쿠키와 CSRF 확인값으로 보호됩니다. Windows 실행기는 `MUMAE_WEB_PASSWORD`와 `MUMAE_WEB_LIVE_ACTIONS`를 해당 서버 프로세스에만 임시 설정합니다. Debian 서비스에서는 두 값을 서비스 환경변수로 직접 설정해야 합니다.
 
 실주문·취소·자동매수는 로그인만으로 실행되지 않습니다. 토스 `LIVE` 모드, 토스 실주문 확인값, 토스 주문현황 동기화, 계획과 다른 OPEN 주문 없음, 화면의 `SUBMIT 종목 건수` 또는 `CANCEL 종목 건수` 확인 문구가 모두 통과해야 합니다.
+
+## 프로젝트 폴더 이동
+
+데이터와 `deploy/mumae.env`를 포함한 프로젝트 폴더 전체를 옮긴 다음,
+새 위치에서 systemd 설정을 다시 생성합니다.
+
+```sh
+sudo systemctl stop mumae.service
+# 프로젝트 폴더 전체를 새 위치로 이동
+cd <new-project-root>
+sudo ./deploy/install-systemd.sh --check
+sudo ./deploy/install-systemd.sh
+curl -fsS http://127.0.0.1:8765/api/health
+```
+
+설치 스크립트는 자신의 위치에서 프로젝트 루트를 계산하므로 폴더명이나
+상위 경로가 바뀌어도 서비스 3개의 경로를 현재 위치로 다시 생성합니다.
