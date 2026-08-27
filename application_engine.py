@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import os
 import threading
+import time
 from dataclasses import asdict
 from datetime import date, timedelta
 from decimal import Decimal
@@ -15,7 +16,7 @@ from mumae_core import ETF_UNIVERSE, normalize_down_ladder_levels
 from runtime_store import get_strategy_type, normalize_delay_minutes
 from secure_credentials import SecureCredentialStore, TossCredentials
 from toss_api import TossBroker
-from web_gui.web_service import _collect_symbol_rows, _json_value
+from web_gui.web_service import _collect_symbol_rows, _find_decimal, _json_value
 from web_gui.trading_service import TradingWebService
 
 # Real index-level data exists only for domestic (KR) indices, via Toss's
@@ -286,6 +287,48 @@ class ApplicationEngine(TradingWebService):
             })
         return results
 
+    def overseas_holdings(self) -> list[dict[str, Any]]:
+        """Every Toss holding, not just the bot-managed ETF_UNIVERSE tickers --
+        lets the dashboard show the account's other overseas securities
+        (bought manually, outside the bot) with the same columns as the main
+        holdings table, minus the bot-only T/strategy fields. Read-only;
+        never touches strategy state."""
+        broker = self.broker()
+        holding_rows = _collect_symbol_rows(broker.get_holdings_raw())
+        symbols = sorted(
+            ticker
+            for ticker, row in holding_rows.items()
+            if not ticker.isdigit()  # domestic KR tickers are 6-digit codes (e.g. 000660); overseas ones aren't
+            and _find_decimal(row, ("quantity", "holdingQuantity", "holdingQty", "availableQuantity", "sellableQuantity")) > 0
+        )
+        if not symbols:
+            return []
+        price_rows = _collect_symbol_rows(broker.get_prices_raw(symbols))
+        results: list[dict[str, Any]] = []
+        for ticker in symbols:
+            row = holding_rows[ticker]
+            quote = price_rows.get(ticker, {})
+            quantity = _find_decimal(row, ("quantity", "holdingQuantity", "holdingQty", "availableQuantity", "sellableQuantity"))
+            average = _find_decimal(row, ("averagePrice", "avgPrice", "averagePurchasePrice", "purchaseAveragePrice", "averageCost"))
+            candles = fetch_unadjusted_daily_candles(broker, ticker)
+            time.sleep(0.25)
+            resolved = resolve_day_quote(quote, candles)
+            price = resolved.current_price
+            value = quantity * price
+            cost = quantity * average
+            pnl = value - cost
+            results.append(_json_value({
+                "symbol": ticker,
+                "quantity": quantity,
+                "average_price": average,
+                "current_price": price,
+                "day_change_pct": resolved.day_change_pct,
+                "total_value": value,
+                "pnl": pnl,
+                "pnl_pct": pnl / cost * 100 if cost else Decimal("0"),
+            }))
+        return results
+
     def etf_overview(self) -> list[dict[str, Any]]:
         """Per-ETF status row for the web GUI table: run state, last new-order
         attempt/error, open order count, and Down Ladder level selection."""
@@ -467,6 +510,8 @@ class ApplicationEngine(TradingWebService):
             return self.vr_snapshot(symbol)
         if command == "market.indices":
             return {"indices": self.market_indices()}
+        if command == "account.overseas_holdings":
+            return {"holdings": self.overseas_holdings()}
         if command == "strategy.set_type":
             return self._strategy_set_type(payload)
         raise ValueError(f"지원하지 않는 엔진 명령입니다: {command}")

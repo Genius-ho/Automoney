@@ -98,9 +98,15 @@ class WebDashboardLoginUiTests(unittest.TestCase):
             self.assertIn(identifier, self.html)
         for label in ('매수/매도', '수량', '지정가', '주문 방식', '사유', '상태'):
             self.assertIn(label, self.html)
-        self.assertLess(self.html.index('전체 계좌 보유종목'), self.html.index('class="metrics"'))
-        self.assertLess(self.html.index('class="card order-plan-card"'), self.html.index('class="card emergency-card mumae-only"'))
+        self.assertLess(self.html.index('전체 계좌 보유종목'), self.html.index('class="card order-plan-card"'))
         self.assertIn('order.status', self.javascript)
+
+    def test_emergency_editor_lives_inside_etf_auto_trading_so_edits_are_visible_together(self):
+        etf_control_index = self.html.index('class="card etf-control-card')
+        emergency_index = self.html.index('class="card emergency-card mumae-only"')
+        etf_control_section_end = self.html.index('</article>', etf_control_index)
+        self.assertLess(etf_control_index, emergency_index)
+        self.assertLess(emergency_index, etf_control_section_end)
 
     def test_etf_control_table_has_status_start_stop_and_ladder_checkboxes(self):
         for identifier in ('etfOverviewBody', 'autoOrderDelay', 'saveAutoOrderDelay'):
