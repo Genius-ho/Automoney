@@ -1,6 +1,8 @@
 import unittest
 from datetime import date, datetime, timezone
+from unittest.mock import patch
 
+import smoke_window_watcher
 from smoke_window_watcher import run, wait_for_closed_session
 
 
@@ -96,6 +98,28 @@ class RunTests(unittest.TestCase):
         empty_broker = FakeCalendarBroker()
         run("tqqq", "deploy/mumae.env", broker=empty_broker, notifier=notifier, wait=True)
         self.assertEqual(len(notifier.messages), 2)
+
+    def test_does_not_load_the_real_env_file_when_fakes_are_already_supplied(self):
+        """Regression: run() used to call load_env(env_file) unconditionally,
+        even when the caller (e.g. a test) already injected fake broker/
+        notifier. load_env() sets real env vars process-wide via
+        os.environ.setdefault(), so every *other* test in the same
+        unittest-discover run that later constructs a bare TelegramNotifier()
+        (e.g. auto_tick's default self.telegram) picked up the real, enabled
+        bot token/chat id -- turning fake-broker auto_tick tests into live
+        sends of real Telegram messages with real-looking order IDs."""
+        broker = FakeCalendarBroker()
+        notifier = FakeNotifier()
+        with patch.object(smoke_window_watcher, "load_env") as loader:
+            run("tqqq", "deploy/mumae.env", broker=broker, notifier=notifier, wait=False)
+        loader.assert_not_called()
+
+    def test_still_loads_the_real_env_file_when_the_caller_wants_real_dependencies(self):
+        with patch.object(smoke_window_watcher, "load_env") as loader, \
+             patch.object(smoke_window_watcher, "TossBroker", return_value=FakeCalendarBroker()), \
+             patch.object(smoke_window_watcher, "TelegramNotifier", return_value=FakeNotifier()):
+            run("tqqq", "deploy/mumae.env", wait=False)
+        loader.assert_called_once_with("deploy/mumae.env")
 
 
 if __name__ == "__main__":

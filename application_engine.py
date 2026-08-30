@@ -1,9 +1,11 @@
 """Single process owner for Mumae state, broker access, and trading commands."""
 from __future__ import annotations
 
+import json
 import os
 import threading
 import time
+import urllib.request
 from dataclasses import asdict
 from datetime import date, timedelta
 from decimal import Decimal
@@ -38,6 +40,22 @@ INDEX_PROXIES: tuple[tuple[str, str], ...] = (
 )
 
 
+def fetch_btc_quote_from_binance() -> dict[str, str] | None:
+    """Best-effort live BTC/USDT quote. Toss's API has no crypto price feed
+    at all (see REAL_INDEX_SYMBOLS above), so this is the one index-strip
+    entry that reaches an external source instead of Toss. Returns None on
+    any network/parse failure so a flaky external call never breaks the
+    rest of the dashboard."""
+    try:
+        with urllib.request.urlopen(
+            "https://api.binance.com/api/v3/ticker/24hr?symbol=BTCUSDT", timeout=5
+        ) as response:
+            payload = json.loads(response.read())
+        return {"price": payload["lastPrice"], "day_change_pct": payload["priceChangePercent"]}
+    except (OSError, ValueError, KeyError):
+        return None
+
+
 class LiveActionsRequiredError(PermissionError):
     """A settings-changing command needs the live-actions gate but it is off.
 
@@ -53,10 +71,12 @@ class ApplicationEngine(TradingWebService):
         self,
         data_dir: str | Path,
         broker_factory: Callable[[], TossBroker] = TossBroker,
+        btc_quote_fetcher: Callable[[], dict[str, str] | None] = fetch_btc_quote_from_binance,
     ) -> None:
         self.command_lock = threading.RLock()
         super().__init__(data_dir, broker_factory=broker_factory)
         self.audit = AuditLog(self.data_dir / "audit.jsonl")
+        self.btc_quote_fetcher = btc_quote_fetcher
 
     def _stored_credentials(self) -> TossCredentials | None:
         if os.name == "nt":
@@ -249,8 +269,9 @@ class ApplicationEngine(TradingWebService):
         """Top-of-dashboard index strip. 코스피 is a real index value (Toss's
         Market Indicators endpoint); 나스닥100/S&P500/반도체 have no official
         raw index feed and are shown via their tracking ETF, flagged
-        is_proxy=True -- see REAL_INDEX_SYMBOLS/INDEX_PROXIES. Read-only;
-        never touches strategy state."""
+        is_proxy=True -- see REAL_INDEX_SYMBOLS/INDEX_PROXIES. 비트코인 is a
+        live external quote (Binance; Toss has no crypto feed) shown last,
+        rightmost in the strip. Read-only; never touches strategy state."""
         broker = self.broker()
         results: list[dict[str, Any]] = []
 
@@ -282,8 +303,20 @@ class ApplicationEngine(TradingWebService):
                 "symbol": symbol,
                 "label": label,
                 "is_proxy": True,
+                "currency": "USD",
                 "price": str(resolved.current_price),
                 "day_change_pct": str(resolved.day_change_pct) if resolved.day_change_pct is not None else None,
+            })
+
+        btc_quote = self.btc_quote_fetcher()
+        if btc_quote is not None:
+            results.append({
+                "symbol": "BTC",
+                "label": "비트코인",
+                "is_proxy": False,
+                "currency": "USD",
+                "price": btc_quote["price"],
+                "day_change_pct": btc_quote["day_change_pct"],
             })
         return results
 

@@ -127,19 +127,22 @@ class TelegramCommandLoop:
             return None
         if self._thread and self._thread.is_alive():
             return self._thread
-        if self._offset == 0:
-            # Do not execute a stale /retry message that was sent before the
-            # bot was enabled or while the service was stopped. Commands must
-            # be sent after the current process has started.
-            try:
-                backlog = self.notifier.get_updates(offset=None, timeout=0)
-                update_ids = [item.get("update_id") for item in backlog if isinstance(item.get("update_id"), int)]
-                if update_ids:
-                    self._offset = max(update_ids) + 1
-                    self.engine.runtime.telegram_update_offset = self._offset
-                    self.engine.runtime_store.save(self.engine.runtime)
-            except TelegramApiError as error:
-                print(f"Telegram 초기화 실패: {error}", file=sys.stderr)
+        # Do not execute a stale /retry message (or an old inline-button tap
+        # left over from a prior failure notification) that arrived while the
+        # service was stopped or restarting. This must run on every start(),
+        # not just the very first one -- self._offset is persisted across
+        # restarts, so an offset != 0 does not mean "no backlog"; it only
+        # means this process has run before. Skipping it re-executes whatever
+        # queued up during the downtime window as if freshly sent.
+        try:
+            backlog = self.notifier.get_updates(offset=None, timeout=0)
+            update_ids = [item.get("update_id") for item in backlog if isinstance(item.get("update_id"), int)]
+            if update_ids:
+                self._offset = max(update_ids) + 1
+                self.engine.runtime.telegram_update_offset = self._offset
+                self.engine.runtime_store.save(self.engine.runtime)
+        except TelegramApiError as error:
+            print(f"Telegram 초기화 실패: {error}", file=sys.stderr)
         self._stopped.clear()
         self._thread = threading.Thread(target=self.run, name="mumae-telegram", daemon=True)
         self._thread.start()

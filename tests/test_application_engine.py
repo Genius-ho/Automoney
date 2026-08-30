@@ -479,29 +479,54 @@ class NoDuplicateSubmissionUnderConcurrencyTests(unittest.TestCase):
 
 
 class MarketIndicesTests(unittest.TestCase):
-    def test_market_indices_returns_kospi_as_a_real_index_then_proxy_etfs(self):
+    @staticmethod
+    def _stub_btc_quote():
+        return {"price": "77984.51", "day_change_pct": "0.348"}
+
+    def test_market_indices_returns_kospi_then_proxy_etfs_then_btc_last(self):
         with tempfile.TemporaryDirectory() as temp:
             broker = MixedAccountBroker()
-            engine = ApplicationEngine(Path(temp), broker_factory=lambda: broker)
+            engine = ApplicationEngine(
+                Path(temp), broker_factory=lambda: broker, btc_quote_fetcher=self._stub_btc_quote
+            )
+
+            rows = engine.market_indices()
+
+            self.assertEqual([row["symbol"] for row in rows], ["KOSPI", "QQQ", "SPY", "SOXX", "BTC"])
+            self.assertEqual(rows[0]["label"], "코스피")
+            self.assertFalse(rows[0]["is_proxy"])
+            self.assertNotIn("currency", rows[0])
+            self.assertEqual(rows[0]["price"], "2812.45")
+            for row in rows[1:4]:
+                self.assertTrue(row["is_proxy"])
+                self.assertEqual(row["currency"], "USD")
+                self.assertEqual(row["price"], "84.5")
+            self.assertFalse(rows[4]["is_proxy"])
+            self.assertEqual(rows[4]["currency"], "USD")
+            self.assertEqual(rows[4]["price"], "77984.51")
+            self.assertEqual(rows[4]["day_change_pct"], "0.348")
+
+    def test_market_indices_omits_btc_when_the_external_quote_is_unavailable(self):
+        with tempfile.TemporaryDirectory() as temp:
+            broker = MixedAccountBroker()
+            engine = ApplicationEngine(
+                Path(temp), broker_factory=lambda: broker, btc_quote_fetcher=lambda: None
+            )
 
             rows = engine.market_indices()
 
             self.assertEqual([row["symbol"] for row in rows], ["KOSPI", "QQQ", "SPY", "SOXX"])
-            self.assertEqual(rows[0]["label"], "코스피")
-            self.assertFalse(rows[0]["is_proxy"])
-            self.assertEqual(rows[0]["price"], "2812.45")
-            for row in rows[1:]:
-                self.assertTrue(row["is_proxy"])
-                self.assertEqual(row["price"], "84.5")
 
     def test_market_indices_reachable_via_dispatch(self):
         with tempfile.TemporaryDirectory() as temp:
             broker = MixedAccountBroker()
-            engine = ApplicationEngine(Path(temp), broker_factory=lambda: broker)
+            engine = ApplicationEngine(
+                Path(temp), broker_factory=lambda: broker, btc_quote_fetcher=self._stub_btc_quote
+            )
 
             result = engine.execute("market.indices", {}, source="TEST", actor="tester")
 
-            self.assertEqual(len(result["indices"]), 4)
+            self.assertEqual(len(result["indices"]), 5)
 
 
 if __name__ == "__main__":

@@ -43,7 +43,15 @@ def wait_for_closed_session(
 
 def run(symbol: str, env_file: str, *, broker: Any = None, notifier: TelegramNotifier | None = None, wait: bool = True) -> None:
     symbol = symbol.upper()
-    load_env(env_file)
+    # Only touch the real credentials file when a caller hasn't already
+    # supplied both dependencies (e.g. a test injecting fakes) -- loading it
+    # unconditionally leaks real bot-token/chat-id env vars via
+    # os.environ.setdefault() into the rest of the process for the lifetime
+    # of the interpreter, which every *other* unittest-discover test that
+    # constructs a bare TelegramNotifier() (auto_tick's default
+    # self.telegram) would then silently pick up as live and enabled.
+    if broker is None or notifier is None:
+        load_env(env_file)
     broker = broker or TossBroker()
     notifier = notifier or TelegramNotifier()
     if not notifier.enabled:

@@ -1153,6 +1153,11 @@ class TradingWebService(VRWebServiceMixin, WebService):
                 break
         if not session_key:
             return
+        print(
+            f"Auto-tick session active: key={session_key} now={now.isoformat()} "
+            f"broker_mode={self.broker().mode} live_ack={self.broker().live_ack}",
+            file=sys.stderr,
+        )
         known_symbols = sorted(set(self.runtime.known_symbols) | set(self.runtime.active_symbols))
         for symbol in known_symbols:
             # strategy_type == MUMAE (the default for every pre-VR symbol)
@@ -1213,6 +1218,11 @@ class TradingWebService(VRWebServiceMixin, WebService):
             if day_sell_ready and day_sell_ids and self.runtime.auto_day_sell_attempt_keys.get(symbol) != session_key:
                 self.runtime.auto_day_sell_attempt_keys[symbol] = session_key
                 self.runtime_store.save(self.runtime)
+                print(
+                    f"Auto-tick DAY sell submitting: symbol={symbol} ids={day_sell_ids} "
+                    f"broker_mode={self.broker().mode}",
+                    file=sys.stderr,
+                )
                 try:
                     self.submit_orders(
                         symbol,
@@ -1226,6 +1236,11 @@ class TradingWebService(VRWebServiceMixin, WebService):
             if cls_sell_ready and cls_sell_ids and self.runtime.auto_sell_attempt_keys.get(symbol) != session_key:
                 self.runtime.auto_sell_attempt_keys[symbol] = session_key
                 self.runtime_store.save(self.runtime)
+                print(
+                    f"Auto-tick CLS sell submitting: symbol={symbol} ids={cls_sell_ids} "
+                    f"broker_mode={self.broker().mode}",
+                    file=sys.stderr,
+                )
                 try:
                     self.submit_orders(
                         symbol,
@@ -1239,6 +1254,11 @@ class TradingWebService(VRWebServiceMixin, WebService):
             if buy_ready and buy_ids and self.runtime.auto_attempt_keys.get(symbol) != session_key:
                 self.runtime.auto_attempt_keys[symbol] = session_key
                 self.runtime_store.save(self.runtime)
+                print(
+                    f"Auto-tick BUY submitting: symbol={symbol} ids={buy_ids} "
+                    f"broker_mode={self.broker().mode}",
+                    file=sys.stderr,
+                )
                 try:
                     self.submit_orders(symbol, buy_ids, f"SUBMIT {symbol} {len(buy_ids)}", notify=True)
                 except (TossApiError, PermissionError, ValueError) as error:

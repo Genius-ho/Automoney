@@ -324,6 +324,45 @@ class TelegramNotifierTests(unittest.TestCase):
         self.assertEqual(engine.runtime.telegram_update_offset, 12)
         self.assertEqual(engine.runtime_store.saved_offsets, [11, 12])
 
+    def test_start_discards_backlog_on_a_restart_not_just_the_first_ever_run(self):
+        """A restart must never replay whatever queued up on Telegram's side
+        while the service was stopped (e.g. an old inline retry-button tap on
+        a days-old failure notice). self._offset already being non-zero only
+        means this process has run before -- it does not mean there is no
+        backlog waiting, so the drain must not be gated behind offset == 0."""
+
+        class Store:
+            def save(self, runtime):
+                pass
+
+        engine = SimpleNamespace(
+            runtime=SimpleNamespace(telegram_update_offset=830093863),
+            runtime_store=Store(),
+        )
+
+        class Notifier:
+            chat_id = "12345"
+            enabled = True
+
+            def __init__(self):
+                self.get_updates_calls = []
+
+            def get_updates(self, offset=None, timeout=20):
+                self.get_updates_calls.append(offset)
+                return [{"update_id": 830093865}, {"update_id": 830093866}]
+
+        notifier = Notifier()
+        loop = TelegramCommandLoop(engine, notifier)
+        loop.handle_update = Mock()
+        loop.run = Mock()
+
+        loop.start()
+
+        self.assertEqual(notifier.get_updates_calls, [None])
+        loop.handle_update.assert_not_called()
+        self.assertEqual(loop._offset, 830093867)
+        self.assertEqual(engine.runtime.telegram_update_offset, 830093867)
+
 
 if __name__ == "__main__":
     unittest.main()
