@@ -243,7 +243,7 @@ class Handler(BaseHTTPRequestHandler):
         sys.stderr.write("%s - %s\n" % (self.address_string(), format % args))
 
 
-def _auto_loop(engine: ApplicationEngine, stopped: threading.Event, interval: float = 60.0) -> None:
+def _auto_loop(engine: ApplicationEngine, stopped: threading.Event, interval: float = 30.0) -> None:
     while not stopped.wait(interval):
         try:
             engine.auto_tick()
