@@ -1,13 +1,18 @@
-import gzip
-import io
 import json
 from decimal import Decimal
 import unittest
 from unittest.mock import MagicMock, patch
-from urllib.error import HTTPError
 
 from mumae_core import OrderIntent, OrderKind
 from toss_api import TossApiError, TossBroker, order_time_in_force
+
+
+def _fake_response(status_code, body, headers=None):
+    response = MagicMock()
+    response.status_code = status_code
+    response.content = body if isinstance(body, bytes) else body.encode("utf-8")
+    response.headers = headers or {}
+    return response
 
 
 class TossRateLimitTests(unittest.TestCase):
@@ -110,72 +115,57 @@ class TossRateLimitTests(unittest.TestCase):
         self.assertEqual(first['timeInForce'], 'CLS')
         self.assertEqual(second['timeInForce'], 'CLS')
         self.assertEqual(mocked_sleep.call_count, 2)
-    @patch("toss_api.urlopen")
-    def test_gzip_encoded_error_body_is_decompressed_not_garbled(self, mocked_urlopen):
+    @patch("requests.Session.request")
+    def test_error_body_decodes_korean_text_not_garbled(self, mocked_request):
+        # requests/urllib3 already undoes gzip transport-encoding for us; this
+        # only needs to confirm our UTF-8 decoding of the resulting body
+        # doesn't mangle non-ASCII error text.
         payload = json.dumps({"error": {"code": "price-out-of-range", "message": "가격 범위를 벗어난 주문입니다."}})
-        compressed = HTTPError(
-            "https://example.test",
-            422,
-            "unprocessable",
-            {"Content-Encoding": "gzip"},
-            io.BytesIO(gzip.compress(payload.encode("utf-8"))),
-        )
-        self.addCleanup(compressed.close)
-        mocked_urlopen.side_effect = compressed
+        mocked_request.return_value = _fake_response(422, payload)
 
         with self.assertRaises(TossApiError) as ctx:
             TossBroker()._request("GET", "/test", include_auth=False)
 
         self.assertIn("가격 범위를 벗어난 주문입니다.", str(ctx.exception))
 
-    @patch("toss_api.urlopen")
-    def test_empty_204_body_returns_empty_dict_not_a_decode_error(self, mocked_urlopen):
+    @patch("requests.Session.request")
+    def test_empty_204_body_returns_empty_dict_not_a_decode_error(self, mocked_request):
         # DELETE /api/v1/conditional-orders/{id} returns 204 No Content on
         # success -- json.loads("") would previously raise even though the
         # request succeeded.
-        response = MagicMock()
-        response.__enter__.return_value.read.return_value = b""
-        response.__enter__.return_value.headers = {}
-        mocked_urlopen.return_value = response
+        mocked_request.return_value = _fake_response(204, b"")
 
         result = TossBroker()._request("DELETE", "/api/v1/conditional-orders/co-1", include_auth=False)
 
         self.assertEqual(result, {})
 
     @patch("toss_api.time.sleep")
-    @patch("toss_api.urlopen")
-    def test_retries_429_using_retry_after(self, mocked_urlopen, mocked_sleep):
-        limited = HTTPError(
-            "https://example.test",
-            429,
-            "rate limited",
-            {"Retry-After": "0.5"},
-            io.BytesIO(b'{"error":{"code":"rate-limit-exceeded"}}'),
-        )
-        response = MagicMock()
-        response.__enter__.return_value.read.return_value = b'{"result":"ok"}'
-        mocked_urlopen.side_effect = [limited, response]
+    @patch("requests.Session.request")
+    def test_retries_429_using_retry_after(self, mocked_request, mocked_sleep):
+        limited = _fake_response(429, '{"error":{"code":"rate-limit-exceeded"}}', {"Retry-After": "0.5"})
+        ok = _fake_response(200, '{"result":"ok"}')
+        mocked_request.side_effect = [limited, ok]
 
         result = TossBroker()._request("GET", "/test", include_auth=False)
 
         self.assertEqual(result, {"result": "ok"})
         mocked_sleep.assert_called_once_with(0.5)
-        self.assertTrue(limited.closed, "handled HTTPError response must be closed")
 
+    @patch("requests.Session.request")
+    def test_refreshes_token_once_when_toss_rejects_cached_token(self, mocked_request):
+        rejected = _fake_response(401, '{"error":{"code":"invalid-token"}}')
+        ok = _fake_response(200, '{"result":"ok"}')
+        responses = [rejected, ok]
+        # _request mutates the same headers dict across retries, so a
+        # snapshot must be taken per call rather than read back from
+        # call_args_list afterwards (which would only see the final state).
+        seen_headers: list[dict] = []
 
-    @patch("toss_api.urlopen")
-    def test_refreshes_token_once_when_toss_rejects_cached_token(self, mocked_urlopen):
-        rejected = HTTPError(
-            "https://example.test",
-            401,
-            "unauthorized",
-            {},
-            io.BytesIO(b'{"error":{"code":"invalid-token"}}'),
-        )
-        self.addCleanup(rejected.close)
-        response = MagicMock()
-        response.__enter__.return_value.read.return_value = b'{"result":"ok"}'
-        mocked_urlopen.side_effect = [rejected, response]
+        def fake_request(method, url, headers=None, **kwargs):
+            seen_headers.append(dict(headers or {}))
+            return responses.pop(0)
+
+        mocked_request.side_effect = fake_request
         broker = TossBroker()
         broker._token = MagicMock(side_effect=["cached-token", "refreshed-token"])
 
@@ -183,10 +173,8 @@ class TossRateLimitTests(unittest.TestCase):
 
         self.assertEqual(result, {"result": "ok"})
         self.assertEqual(broker._token.call_count, 2)
-        first_request = mocked_urlopen.call_args_list[0].args[0]
-        second_request = mocked_urlopen.call_args_list[1].args[0]
-        self.assertEqual(first_request.get_header("Authorization"), "Bearer cached-token")
-        self.assertEqual(second_request.get_header("Authorization"), "Bearer refreshed-token")
+        self.assertEqual(seen_headers[0]["Authorization"], "Bearer cached-token")
+        self.assertEqual(seen_headers[1]["Authorization"], "Bearer refreshed-token")
 
 
 if __name__ == "__main__":

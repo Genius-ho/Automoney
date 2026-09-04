@@ -1,7 +1,6 @@
 """Toss Securities Open API connector for local planning and explicitly confirmed live orders."""
 from __future__ import annotations
 
-import gzip
 import json
 import os
 import re
@@ -10,9 +9,9 @@ import uuid
 from datetime import datetime, timedelta
 from dataclasses import dataclass
 from decimal import Decimal
-from urllib.error import HTTPError, URLError
 from urllib.parse import urlencode
-from urllib.request import Request, urlopen
+
+import requests
 
 from local_env import load_env
 from mumae_core import ETF_UNIVERSE, OrderIntent, OrderKind, StrategyState
@@ -98,6 +97,11 @@ class TossBroker:
         self.live_ack = secure.live_trading if secure is not None else os.getenv("MUMAE_LIVE_TRADING_ACK") == LIVE_ACKNOWLEDGEMENT
         self._access_token: str | None = None
         self._token_expires_at = 0.0
+        # A shared Session reuses one TCP+TLS connection to openapi.tossinvest.com
+        # across calls instead of paying a fresh handshake per request -- this
+        # instance lives for the process lifetime (see application_engine.py's
+        # broker() caching), so the saving compounds across every dashboard action.
+        self._session = requests.Session()
 
     def _require_credentials(self) -> None:
         if not self.client_id or not self.client_secret:
@@ -116,60 +120,44 @@ class TossBroker:
         self._token_expires_at = time.time() + int(payload.get("expires_in", 300))
         return token
 
-    @staticmethod
-    def _decode_body(raw: bytes, headers) -> str:
-        """Undo gzip transport-encoding before decoding text.
-
-        urllib (unlike requests) never auto-decompresses responses, so a
-        gzip-compressed body decoded straight as UTF-8 turns into garbled
-        text (and gets persisted that way into runtime.last_auto_error).
-        """
-        content_encoding = (headers.get("Content-Encoding") or "").lower() if headers else ""
-        if content_encoding == "gzip":
-            try:
-                raw = gzip.decompress(raw)
-            except OSError:
-                pass
-        return raw.decode("utf-8", errors="replace")
-
     def _request(self, method: str, path: str, data: bytes | None = None, headers: dict[str, str] | None = None, include_auth: bool = True) -> dict:
         request_headers = {"Accept": "application/json", **(headers or {})}
         if include_auth:
             request_headers["Authorization"] = f"Bearer {self._token()}"
         auth_retry_used = False
         for attempt in range(4):
-            request = Request(f"{BASE_URL}{path}", data=data, method=method, headers=request_headers)
             try:
-                with urlopen(request, timeout=15) as response:
-                    body = self._decode_body(response.read(), response.headers)
-                    # A 204 No Content (e.g. DELETE /conditional-orders/{id})
-                    # has no body at all; json.loads("") would raise even
-                    # though the request succeeded.
-                    return json.loads(body) if body.strip() else {}
-            except HTTPError as error:
+                response = self._session.request(
+                    method, f"{BASE_URL}{path}", data=data, headers=request_headers, timeout=15,
+                )
+            except requests.exceptions.RequestException as error:
+                raise TossApiError(f"Cannot reach Toss API: {error}") from error
+            # requests/urllib3 already undoes gzip transport-encoding; decode
+            # explicitly as UTF-8 rather than trusting response.encoding
+            # (guessed from headers), which can misdetect Korean error text.
+            body = response.content.decode("utf-8", errors="replace")
+            if response.status_code < 400:
+                # A 204 No Content (e.g. DELETE /conditional-orders/{id}) has
+                # no body at all; json.loads("") would raise even though the
+                # request succeeded.
+                return json.loads(body) if body.strip() else {}
+            if response.status_code == 401 and include_auth and not auth_retry_used:
                 try:
-                    body = self._decode_body(error.read(), error.headers)
-                finally:
-                    error.close()
-                if error.code == 401 and include_auth and not auth_retry_used:
-                    try:
-                        error_code = json.loads(body).get("error", {}).get("code")
-                    except json.JSONDecodeError:
-                        error_code = None
-                    if error_code in {"invalid-token", "expired-token"}:
-                        self._access_token = None
-                        self._token_expires_at = 0.0
-                        request_headers["Authorization"] = f"Bearer {self._token()}"
-                        auth_retry_used = True
-                        continue
-                if error.code == 429 and attempt < 3:
-                    retry_after = error.headers.get("Retry-After") if error.headers else None
-                    delay = float(retry_after) if retry_after else float(2**attempt)
-                    time.sleep(max(delay, 0.25))
+                    error_code = json.loads(body).get("error", {}).get("code")
+                except json.JSONDecodeError:
+                    error_code = None
+                if error_code in {"invalid-token", "expired-token"}:
+                    self._access_token = None
+                    self._token_expires_at = 0.0
+                    request_headers["Authorization"] = f"Bearer {self._token()}"
+                    auth_retry_used = True
                     continue
-                raise TossApiError(f"Toss API HTTP {error.code}: {body}") from error
-            except URLError as error:
-                raise TossApiError(f"Cannot reach Toss API: {error.reason}") from error
+            if response.status_code == 429 and attempt < 3:
+                retry_after = response.headers.get("Retry-After")
+                delay = float(retry_after) if retry_after else float(2**attempt)
+                time.sleep(max(delay, 0.25))
+                continue
+            raise TossApiError(f"Toss API HTTP {response.status_code}: {body}") from None
         raise TossApiError("Toss API request retry limit exceeded.")
     def list_accounts(self) -> dict:
         return self._request("GET", "/api/v1/accounts")

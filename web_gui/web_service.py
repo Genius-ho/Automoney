@@ -324,7 +324,10 @@ class WebService:
             quantity = _find_decimal(row, ("quantity", "holdingQuantity", "holdingQty", "availableQuantity", "sellableQuantity"))
             average = _find_decimal(row, ("averagePrice", "avgPrice", "averagePurchasePrice", "purchaseAveragePrice", "averageCost"))
             candles = fetch_unadjusted_daily_candles(broker, ticker)
-            time.sleep(0.25)
+            # Defensive pacing between per-symbol candle calls -- kept short
+            # rather than removed since Toss's exact rate limit isn't
+            # documented; _request()'s own 429 backoff is the real safety net.
+            time.sleep(0.1)
             resolved = resolve_day_quote(quote, candles)
             price = resolved.current_price
             value = quantity * price
