@@ -1,10 +1,26 @@
 import unittest
 from decimal import Decimal
 
-from market_quote import resolve_day_quote
+from market_quote import KOREA, resolve_day_quote
 
 
 class ResolveDayQuoteTests(unittest.TestCase):
+    def test_krx_morning_quote_uses_yesterdays_close_not_two_sessions_back(self):
+        """10:00 KST is still the previous calendar day in US Eastern, which
+        used to make the previous close two sessions old."""
+        candles = [
+            {"timestamp": "2026-09-21T00:00:00+09:00", "closePrice": "100000"},
+            {"timestamp": "2026-09-18T00:00:00+09:00", "closePrice": "90000"},
+        ]
+        quote = {"lastPrice": "101000", "timestamp": "2026-09-22T10:00:00+09:00"}
+
+        resolved = resolve_day_quote(quote, candles, KOREA)
+
+        self.assertEqual(resolved.previous_close, Decimal("100000"))
+        self.assertEqual(resolved.day_change_pct, Decimal("1"))
+        # Same quote in the default US zone reproduces the old wrong pick.
+        self.assertEqual(resolve_day_quote(quote, candles).previous_close, Decimal("90000"))
+
     def test_uses_previous_session_when_current_daily_candle_exists(self):
         resolved = resolve_day_quote(
             {"lastPrice": "105", "timestamp": "2026-08-12T23:30:00+09:00"},

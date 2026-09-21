@@ -13,7 +13,7 @@ from pathlib import Path
 from typing import Any, Callable
 
 from audit_log import AuditLog
-from market_quote import fetch_unadjusted_daily_candles, resolve_day_quote
+from market_quote import KOREA, US_EASTERN, fetch_unadjusted_daily_candles, resolve_day_quote
 from mumae_core import ETF_UNIVERSE, normalize_down_ladder_levels
 from runtime_store import get_strategy_type, normalize_delay_minutes
 from secure_credentials import SecureCredentialStore, TossCredentials
@@ -359,7 +359,7 @@ class ApplicationEngine(TradingWebService):
             # rather than removed since Toss's exact rate limit isn't
             # documented; _request()'s own 429 backoff is the real safety net.
             time.sleep(0.1)
-            resolved = resolve_day_quote(quote, candles)
+            resolved = resolve_day_quote(quote, candles, KOREA if domestic else US_EASTERN)
             price = resolved.current_price
             value = quantity * price
             cost = quantity * average
