@@ -30,6 +30,9 @@ from web_gui.trading_service import TradingWebService
 # Those three are therefore shown via their most common tracking ETF and
 # explicitly flagged is_proxy=True rather than presented as the literal
 # index value.
+_QUANTITY_KEYS = ("quantity", "holdingQuantity", "holdingQty", "availableQuantity", "sellableQuantity")
+_NAME_KEYS = ("name", "stockName", "symbolName", "koreanName", "productName")
+
 REAL_INDEX_SYMBOLS: tuple[tuple[str, str], ...] = (
     ("KOSPI", "코스피"),
 )
@@ -321,18 +324,26 @@ class ApplicationEngine(TradingWebService):
         return results
 
     def overseas_holdings(self) -> list[dict[str, Any]]:
-        """Every Toss holding, not just the bot-managed ETF_UNIVERSE tickers --
-        lets the dashboard show the account's other overseas securities
-        (bought manually, outside the bot) with the same columns as the main
-        holdings table, minus the bot-only T/strategy fields. Read-only;
-        never touches strategy state."""
+        """Every overseas Toss holding, not just the bot-managed ETF_UNIVERSE
+        tickers -- lets the dashboard show the account's other overseas
+        securities (bought manually, outside the bot) with the same columns
+        as the main holdings table, minus the bot-only T/strategy fields.
+        Read-only; never touches strategy state."""
+        return self._account_holdings(domestic=False)
+
+    def domestic_holdings(self) -> list[dict[str, Any]]:
+        """Same as overseas_holdings() but for KRX-listed holdings (KRW
+        prices). Display only -- the bot never trades these."""
+        return self._account_holdings(domestic=True)
+
+    def _account_holdings(self, *, domestic: bool) -> list[dict[str, Any]]:
         broker = self.broker()
         holding_rows = _collect_symbol_rows(broker.get_holdings_raw())
         symbols = sorted(
             ticker
             for ticker, row in holding_rows.items()
-            if not is_domestic_kr_code(ticker)  # KRX codes (000660, and alphanumeric ones like 0126Z0) are KRW, not overseas
-            and _find_decimal(row, ("quantity", "holdingQuantity", "holdingQty", "availableQuantity", "sellableQuantity")) > 0
+            if is_domestic_kr_code(ticker) == domestic
+            and _find_decimal(row, _QUANTITY_KEYS) > 0
         )
         if not symbols:
             return []
@@ -341,7 +352,7 @@ class ApplicationEngine(TradingWebService):
         for ticker in symbols:
             row = holding_rows[ticker]
             quote = price_rows.get(ticker, {})
-            quantity = _find_decimal(row, ("quantity", "holdingQuantity", "holdingQty", "availableQuantity", "sellableQuantity"))
+            quantity = _find_decimal(row, _QUANTITY_KEYS)
             average = _find_decimal(row, ("averagePrice", "avgPrice", "averagePurchasePrice", "purchaseAveragePrice", "averageCost"))
             candles = fetch_unadjusted_daily_candles(broker, ticker)
             # Defensive pacing between per-symbol candle calls -- kept short
@@ -353,7 +364,7 @@ class ApplicationEngine(TradingWebService):
             value = quantity * price
             cost = quantity * average
             pnl = value - cost
-            results.append(_json_value({
+            item: dict[str, Any] = {
                 "symbol": ticker,
                 "quantity": quantity,
                 "average_price": average,
@@ -362,7 +373,14 @@ class ApplicationEngine(TradingWebService):
                 "total_value": value,
                 "pnl": pnl,
                 "pnl_pct": pnl / cost * 100 if cost else Decimal("0"),
-            }))
+            }
+            if domestic:
+                # Alphanumeric KRX codes (0126Z0) are unreadable on their own,
+                # so pass the product name along when Toss supplies one.
+                name = next((str(row[key]) for key in _NAME_KEYS if row.get(key)), "")
+                if name:
+                    item["name"] = name
+            results.append(_json_value(item))
         return results
 
     def etf_overview(self) -> list[dict[str, Any]]:
@@ -548,6 +566,8 @@ class ApplicationEngine(TradingWebService):
             return {"indices": self.market_indices()}
         if command == "account.overseas_holdings":
             return {"holdings": self.overseas_holdings()}
+        if command == "account.domestic_holdings":
+            return {"holdings": self.domestic_holdings()}
         if command == "strategy.set_type":
             return self._strategy_set_type(payload)
         raise ValueError(f"지원하지 않는 엔진 명령입니다: {command}")

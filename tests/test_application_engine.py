@@ -529,5 +529,41 @@ class MarketIndicesTests(unittest.TestCase):
             self.assertEqual(len(result["indices"]), 5)
 
 
+class DomesticHoldingsTests(unittest.TestCase):
+    class KrMixedBroker(MixedAccountBroker):
+        def get_holdings_raw(self):
+            return {"result": {"holdings": [
+                {"symbol": "TQQQ", "quantity": "8", "averagePrice": "75"},
+                {"symbol": "BITX", "quantity": "733", "averagePrice": "29.14"},
+                {"symbol": "0126Z0", "quantity": "1", "averagePrice": "331000", "name": "테스트 ETF"},
+                {"symbol": "000660", "quantity": "2", "averagePrice": "200000"},
+                {"symbol": "005930", "quantity": "0", "averagePrice": "70000"},
+            ]}}
+
+    def _engine(self, temp):
+        return ApplicationEngine(Path(temp), broker_factory=lambda: self.KrMixedBroker())
+
+    def test_domestic_holdings_lists_only_held_krx_codes_including_alphanumeric(self):
+        with tempfile.TemporaryDirectory() as temp:
+            rows = self._engine(temp).domestic_holdings()
+
+            self.assertEqual([row["symbol"] for row in rows], ["000660", "0126Z0"])
+            self.assertEqual(rows[1]["name"], "테스트 ETF")
+            self.assertNotIn("name", rows[0])
+            self.assertEqual(rows[1]["average_price"], "331000")
+
+    def test_overseas_holdings_excludes_krx_codes(self):
+        with tempfile.TemporaryDirectory() as temp:
+            rows = self._engine(temp).overseas_holdings()
+
+            self.assertEqual([row["symbol"] for row in rows], ["BITX", "TQQQ"])
+
+    def test_domestic_holdings_reachable_via_dispatch(self):
+        with tempfile.TemporaryDirectory() as temp:
+            result = self._engine(temp).execute("account.domestic_holdings", {}, source="TEST", actor="tester")
+
+            self.assertEqual(len(result["holdings"]), 2)
+
+
 if __name__ == "__main__":
     unittest.main()

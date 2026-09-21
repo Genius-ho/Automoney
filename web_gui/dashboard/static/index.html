@@ -6,6 +6,14 @@
   <main id="app" hidden>
     <p id="sessionWarning" class="warning session-warning" role="status" hidden></p>
     <section class="card index-strip" id="indexStrip" aria-label="주요 지수"></section>
+    <article class="card holdings-card domestic-holdings-card" id="domesticHoldingsCard" hidden>
+      <div class="section-title"><div><p class="eyebrow">TOSS ACCOUNT · 조회 전용</p><h2>토스 국내 증권 보유종목</h2></div><div class="section-title-actions"><span id="domesticHoldingsMessage" class="sync-message" role="status">-</span><button type="button" id="domesticHoldingsClose" class="toggle-btn">닫기</button></div></div>
+      <div class="card-body">
+        <div class="table-wrap"><table><thead><tr><th>종목</th><th>수량</th><th>평균단가</th><th>현재가</th><th>등락률</th><th>평가액</th><th>손익</th><th>수익률</th></tr></thead><tbody id="domesticHoldingsBody"></tbody></table></div>
+        <p id="domesticHoldingsEmpty" class="empty" hidden>보유 중인 국내 증권이 없습니다.</p>
+      </div>
+    </article>
+
     <article class="card holdings-card top-holdings collapsible-card">
       <div class="section-title"><div><p class="eyebrow">TOSS ACCOUNT</p><h2>무한매수 VR ETF 보유 종목</h2></div><div class="section-title-actions"><span id="holdingCount">0종목</span><span id="holdingsMessage" class="sync-message" role="status">-</span><button type="button" id="holdingsToggle" class="toggle-btn" aria-expanded="false" aria-controls="holdingsSection">펼치기</button></div></div>
       <div class="card-body" id="holdingsSection" hidden>
