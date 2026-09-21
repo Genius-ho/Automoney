@@ -18,7 +18,7 @@ from mumae_core import ETF_UNIVERSE, normalize_down_ladder_levels
 from runtime_store import get_strategy_type, normalize_delay_minutes
 from secure_credentials import SecureCredentialStore, TossCredentials
 from toss_api import TossBroker
-from web_gui.web_service import _collect_symbol_rows, _find_decimal, _json_value
+from web_gui.web_service import _collect_symbol_rows, _find_decimal, _json_value, is_domestic_kr_code
 from web_gui.trading_service import TradingWebService
 
 # Real index-level data exists only for domestic (KR) indices, via Toss's
@@ -331,7 +331,7 @@ class ApplicationEngine(TradingWebService):
         symbols = sorted(
             ticker
             for ticker, row in holding_rows.items()
-            if not ticker.isdigit()  # domestic KR tickers are 6-digit codes (e.g. 000660); overseas ones aren't
+            if not is_domestic_kr_code(ticker)  # KRX codes (000660, and alphanumeric ones like 0126Z0) are KRW, not overseas
             and _find_decimal(row, ("quantity", "holdingQuantity", "holdingQty", "availableQuantity", "sellableQuantity")) > 0
         )
         if not symbols:

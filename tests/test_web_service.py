@@ -136,6 +136,24 @@ class WebServiceTests(unittest.TestCase):
                 ["SOXL", "TQQQ"],
             )
 
+    def test_unheld_selected_symbol_is_not_listed_in_holdings(self):
+        with tempfile.TemporaryDirectory() as temp:
+            service = WebService(Path(temp), broker_factory=FakeEmptyBroker)
+
+            with patch("web_gui.web_service.time.sleep"):
+                result = service.refresh_account("TQQQ")
+
+            self.assertEqual(result["holdings"], [])
+            self.assertEqual(result["quote"]["current_price"], "84.5")
+
+    def test_is_domestic_kr_code_covers_legacy_and_alphanumeric_codes(self):
+        from web_gui.web_service import is_domestic_kr_code
+
+        for code in ("000660", "0126Z0", "0000D0"):
+            self.assertTrue(is_domestic_kr_code(code), code)
+        for code in ("TQQQ", "BITX", "CRCA", "BRK.B", "SOXL", "1234"):
+            self.assertFalse(is_domestic_kr_code(code), code)
+
     def test_day_change_pct_is_computed_for_every_held_symbol(self):
         with tempfile.TemporaryDirectory() as temp:
             service = WebService(Path(temp), broker_factory=FakeMixedBroker)

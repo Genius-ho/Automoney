@@ -90,6 +90,13 @@ def _collect_symbol_rows(value: Any) -> dict[str, dict[str, Any]]:
     return found
 
 
+def is_domestic_kr_code(ticker: str) -> bool:
+    """Toss lists KRX securities by 6-char code: legacy all-digit ones
+    (000660) and the newer alphanumeric ones KRX started issuing (0126Z0).
+    Both are KRW-priced; no US ticker is 6 chars starting with a digit."""
+    return len(ticker) == 6 and ticker[0].isdigit() and ticker.isalnum()
+
+
 class WebService:
     """Owns state and read-only broker access; live order endpoints are excluded."""
 
@@ -339,18 +346,21 @@ class WebService:
             if ticker == symbol:
                 selected_previous_close = previous_close
             day_change_pct = resolved.day_change_pct
-            holdings.append(_json_value({
-                "symbol": ticker,
-                "quantity": quantity,
-                "average_price": average,
-                "current_price": price,
-                "day_change_pct": day_change_pct,
-                "total_value": value,
-                "pnl": pnl,
-                "pnl_pct": rate,
-                "t_value": ticker_state.t_value,
-                "strategy_type": get_strategy_type(self.runtime, ticker),
-            }))
+            # The selected symbol is always priced (the order plan needs it)
+            # even when not held; only real positions belong in the table.
+            if quantity > 0:
+                holdings.append(_json_value({
+                    "symbol": ticker,
+                    "quantity": quantity,
+                    "average_price": average,
+                    "current_price": price,
+                    "day_change_pct": day_change_pct,
+                    "total_value": value,
+                    "pnl": pnl,
+                    "pnl_pct": rate,
+                    "t_value": ticker_state.t_value,
+                    "strategy_type": get_strategy_type(self.runtime, ticker),
+                }))
             if ticker == symbol:
                 selected.position_qty = int(quantity)
                 selected.avg_cost = average
