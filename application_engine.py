@@ -13,7 +13,10 @@ from pathlib import Path
 from typing import Any, Callable
 
 from audit_log import AuditLog
-from market_quote import KOREA, US_EASTERN, fetch_unadjusted_daily_candles, resolve_day_quote
+from market_quote import (
+    KOREA, US_EASTERN, DayQuote, fetch_krx_regular_close, fetch_unadjusted_daily_candles,
+    resolve_day_quote, with_previous_close,
+)
 from mumae_core import ETF_UNIVERSE, normalize_down_ladder_levels
 from runtime_store import get_strategy_type, normalize_delay_minutes
 from secure_credentials import SecureCredentialStore, TossCredentials
@@ -80,6 +83,9 @@ class ApplicationEngine(TradingWebService):
         super().__init__(data_dir, broker_factory=broker_factory)
         self.audit = AuditLog(self.data_dir / "audit.jsonl")
         self.btc_quote_fetcher = btc_quote_fetcher
+        # (symbol, session date) -> KRX regular-session close. A finished
+        # session's close never changes, so each is fetched at most once.
+        self._krx_close_cache: dict[tuple[str, date], Decimal] = {}
 
     def _stored_credentials(self) -> TossCredentials | None:
         if os.name == "nt":
@@ -336,6 +342,22 @@ class ApplicationEngine(TradingWebService):
         prices). Display only -- the bot never trades these."""
         return self._account_holdings(domestic=True)
 
+    def _rebase_on_krx_regular_close(self, broker: Any, ticker: str, resolved: DayQuote) -> DayQuote:
+        """Naver/HTS measure the day change against the 15:30 regular-session
+        close, but Toss's daily candle close includes the Nextrade after-market
+        (until 20:00). Swap in the regular close; keep the daily-candle value
+        if it can't be fetched."""
+        if resolved.previous_session_date is None:
+            return resolved
+        key = (ticker, resolved.previous_session_date)
+        regular = self._krx_close_cache.get(key)
+        if regular is None:
+            regular = fetch_krx_regular_close(broker, ticker, resolved.previous_session_date)
+            if regular is None:
+                return resolved
+            self._krx_close_cache[key] = regular
+        return with_previous_close(resolved, regular)
+
     def _account_holdings(self, *, domestic: bool) -> list[dict[str, Any]]:
         broker = self.broker()
         holding_rows = _collect_symbol_rows(broker.get_holdings_raw())
@@ -360,6 +382,8 @@ class ApplicationEngine(TradingWebService):
             # documented; _request()'s own 429 backoff is the real safety net.
             time.sleep(0.1)
             resolved = resolve_day_quote(quote, candles, KOREA if domestic else US_EASTERN)
+            if domestic:
+                resolved = self._rebase_on_krx_regular_close(broker, ticker, resolved)
             price = resolved.current_price
             value = quantity * price
             cost = quantity * average

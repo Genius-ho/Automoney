@@ -2,7 +2,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
-from datetime import datetime
+from datetime import date, datetime
 from decimal import Decimal, InvalidOperation
 from typing import Any, Iterable
 from zoneinfo import ZoneInfo
@@ -16,6 +16,7 @@ class DayQuote:
     current_price: Decimal
     previous_close: Decimal | None
     day_change_pct: Decimal | None
+    previous_session_date: date | None = None
 
 
 def _positive_decimal(value: Any) -> Decimal | None:
@@ -89,8 +90,8 @@ def resolve_day_quote(
     completed = [(candle_date, close) for candle_date, close in dated_candles if candle_date < session_date]
     if not completed:
         return DayQuote(current, None, None)
-    _, previous = max(completed, key=lambda item: item[0])
-    return DayQuote(current, previous, (current - previous) / previous * 100)
+    previous_date, previous = max(completed, key=lambda item: item[0])
+    return DayQuote(current, previous, (current - previous) / previous * 100, previous_date)
 
 
 def fetch_unadjusted_daily_candles(broker: Any, symbol: str, count: int = 5) -> list[dict[str, Any]]:
@@ -104,4 +105,38 @@ def fetch_unadjusted_daily_candles(broker: Any, symbol: str, count: int = 5) -> 
     return (payload.get("result") or {}).get("candles") or []
 
 
-__all__ = ["DayQuote", "KOREA", "fetch_unadjusted_daily_candles", "resolve_day_quote"]
+# KRX regular session ends 15:30 (closing auction prints in the 15:31 minute
+# candle); Nextrade's after-market only opens at 15:40. The daily candle's
+# close is the day's *last* price including that after-market, so it can
+# differ from the 종가 that Naver/HTS use as the day-change base. The minute
+# candle at 15:35 sits between the two and carries the regular-session close.
+KRX_CLOSE_PROBE = "T15:35:00+09:00"
+
+
+def fetch_krx_regular_close(broker: Any, symbol: str, session_date: date) -> Decimal | None:
+    """Regular-session (15:30) close of a KRX symbol on session_date, or None
+    when it can't be established (caller falls back to the daily close)."""
+    try:
+        payload = broker.get_minute_candles_raw(symbol, count=1, before=session_date.isoformat() + KRX_CLOSE_PROBE)
+    except Exception:
+        return None
+    candles = (payload.get("result") or {}).get("candles") or []
+    if not candles or _candle_session_date(candles[0].get("timestamp")) != session_date:
+        return None
+    return _positive_decimal(candles[0].get("closePrice"))
+
+
+def with_previous_close(quote: DayQuote, previous_close: Decimal) -> DayQuote:
+    """Same quote re-based on a different previous close."""
+    return DayQuote(
+        quote.current_price,
+        previous_close,
+        (quote.current_price - previous_close) / previous_close * 100,
+        quote.previous_session_date,
+    )
+
+
+__all__ = [
+    "DayQuote", "KOREA", "US_EASTERN", "fetch_krx_regular_close", "fetch_unadjusted_daily_candles",
+    "resolve_day_quote", "with_previous_close",
+]

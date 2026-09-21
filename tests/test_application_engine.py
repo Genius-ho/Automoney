@@ -1,4 +1,5 @@
 import tempfile
+from decimal import Decimal
 import unittest
 from datetime import date, timedelta
 from unittest.mock import patch
@@ -542,6 +543,39 @@ class DomesticHoldingsTests(unittest.TestCase):
 
     def _engine(self, temp):
         return ApplicationEngine(Path(temp), broker_factory=lambda: self.KrMixedBroker())
+
+    class NextradeBroker(KrMixedBroker):
+        """Daily candle close (260,000) includes the after-market; the 15:35
+        minute candle holds the 15:30 regular close (261,000)."""
+        minute_calls = 0
+
+        def get_holdings_raw(self):
+            return {"result": {"holdings": [{"symbol": "005930", "quantity": "1", "averagePrice": "250000"}]}}
+
+        def get_prices_raw(self, symbols):
+            return {"result": [{"symbol": s, "lastPrice": "273500", "timestamp": "2026-09-21T12:30:00+09:00"} for s in symbols]}
+
+        def get_daily_candles_raw(self, symbol, count, adjusted=True):
+            return {"result": {"candles": [
+                {"timestamp": "2026-09-21T00:00:00.000+09:00", "closePrice": "273500"},
+                {"timestamp": "2026-09-18T00:00:00.000+09:00", "closePrice": "260000"},
+            ]}}
+
+        def get_minute_candles_raw(self, symbol, count, before):
+            type(self).minute_calls += 1
+            return {"result": {"candles": [{"timestamp": "2026-09-18T15:35:00.000+09:00", "closePrice": "261000"}]}}
+
+    def test_domestic_day_change_uses_the_regular_session_close_and_caches_it(self):
+        self.NextradeBroker.minute_calls = 0
+        with tempfile.TemporaryDirectory() as temp:
+            engine = ApplicationEngine(Path(temp), broker_factory=lambda: self.NextradeBroker())
+
+            first = engine.domestic_holdings()[0]
+            second = engine.domestic_holdings()[0]
+
+            self.assertEqual(round(Decimal(first["day_change_pct"]), 2), Decimal("4.79"))  # vs 261,000, not 260,000 (5.19%)
+            self.assertEqual(second["day_change_pct"], first["day_change_pct"])
+            self.assertEqual(self.NextradeBroker.minute_calls, 1)
 
     def test_domestic_holdings_lists_only_held_krx_codes_including_alphanumeric(self):
         with tempfile.TemporaryDirectory() as temp:

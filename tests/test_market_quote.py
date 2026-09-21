@@ -1,7 +1,9 @@
 import unittest
 from decimal import Decimal
 
-from market_quote import KOREA, resolve_day_quote
+from datetime import date
+
+from market_quote import KOREA, fetch_krx_regular_close, resolve_day_quote, with_previous_close
 
 
 class ResolveDayQuoteTests(unittest.TestCase):
@@ -109,6 +111,43 @@ class ResolveDayQuoteTests(unittest.TestCase):
         self.assertIsNone(invalid_price.day_change_pct)
         self.assertIsNone(invalid_close.previous_close)
         self.assertIsNone(invalid_close.day_change_pct)
+
+
+class KrxRegularCloseTests(unittest.TestCase):
+    class Broker:
+        def __init__(self, candles=None, error=None):
+            self.candles, self.error, self.calls = candles or [], error, []
+
+        def get_minute_candles_raw(self, symbol, count, before):
+            self.calls.append((symbol, count, before))
+            if self.error:
+                raise self.error
+            return {"result": {"candles": self.candles}}
+
+    def test_reads_the_close_of_the_15_35_minute_candle(self):
+        broker = self.Broker([{"timestamp": "2026-09-18T15:35:00.000+09:00", "closePrice": "261000"}])
+
+        close = fetch_krx_regular_close(broker, "005930", date(2026, 9, 18))
+
+        self.assertEqual(close, Decimal("261000"))
+        self.assertEqual(broker.calls, [("005930", 1, "2026-09-18T15:35:00+09:00")])
+
+    def test_returns_none_on_error_empty_or_wrong_date(self):
+        d = date(2026, 9, 18)
+        self.assertIsNone(fetch_krx_regular_close(self.Broker(error=RuntimeError("429")), "005930", d))
+        self.assertIsNone(fetch_krx_regular_close(self.Broker([]), "005930", d))
+        stale = self.Broker([{"timestamp": "2026-09-17T15:35:00.000+09:00", "closePrice": "252500"}])
+        self.assertIsNone(fetch_krx_regular_close(stale, "005930", d))
+
+    def test_with_previous_close_rebases_the_day_change(self):
+        candles = [{"timestamp": "2026-09-18T00:00:00.000+09:00", "closePrice": "260000"}]
+        resolved = resolve_day_quote({"lastPrice": "274000", "timestamp": "2026-09-21T12:00:00+09:00"}, candles, KOREA)
+        self.assertEqual(resolved.previous_session_date, date(2026, 9, 18))
+
+        rebased = with_previous_close(resolved, Decimal("261000"))
+
+        self.assertEqual(round(rebased.day_change_pct, 2), Decimal("4.98"))
+        self.assertEqual(rebased.previous_close, Decimal("261000"))
 
 
 if __name__ == "__main__":
