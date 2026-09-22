@@ -344,19 +344,29 @@ class TradingWebService(VRWebServiceMixin, WebService):
             "trades": [_json_value(asdict(item)) for item in daily],
         }
 
-    def cumulative_realized_pnl(self, start_date: str | None = None) -> dict[str, Any]:
+    def cumulative_realized_pnl(self, start_date: str | None = None, end_date: str | None = None) -> dict[str, Any]:
         """Total already-realized profit (closed sells only, not open-position
-        unrealized P&L) across every ETF this account has ever auto-traded."""
+        unrealized P&L) across every ETF this account has ever auto-traded,
+        restricted to [start_date, end_date] -- callers use this both for the
+        open-ended cumulative total and for a single calendar month's cut."""
         symbols = sorted(self.runtime.known_symbols) or list(ETF_UNIVERSE)
         start = date.fromisoformat(start_date) if start_date else date.today() - timedelta(days=90)
+        end = date.fromisoformat(end_date) if end_date else date.today()
         if start > date.today():
             raise ValueError("집계 시작일은 오늘보다 늦을 수 없습니다.")
+        if end > date.today():
+            raise ValueError("집계 종료일은 오늘보다 늦을 수 없습니다.")
+        if end < start:
+            raise ValueError("집계 종료일은 시작일보다 빠를 수 없습니다.")
         total = Decimal("0")
         unknown_sales = 0
         by_symbol: list[dict[str, Any]] = []
         for index, symbol in enumerate(symbols):
-            rows = self.broker().get_all_orders_raw("CLOSED", symbol, LEDGER_ANCHOR_DATE, date.today().isoformat())
-            daily = [trade for trade in aggregate_daily_trades(rows) if trade.trade_date >= start.isoformat()]
+            rows = self.broker().get_all_orders_raw("CLOSED", symbol, LEDGER_ANCHOR_DATE, end.isoformat())
+            daily = [
+                trade for trade in aggregate_daily_trades(rows)
+                if start.isoformat() <= trade.trade_date <= end.isoformat()
+            ]
             symbol_total, symbol_unknown = summarize_realized_pnl(daily)
             sell_count = sum(1 for trade in daily if trade.side == "SELL")
             if sell_count:
@@ -372,6 +382,7 @@ class TradingWebService(VRWebServiceMixin, WebService):
                 time.sleep(0.25)
         return {
             "start_date": start.isoformat(),
+            "end_date": end.isoformat(),
             "realized_pnl": str(total),
             "unknown_sales": unknown_sales,
             "by_symbol": by_symbol,

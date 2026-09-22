@@ -13,6 +13,7 @@ from pathlib import Path
 from typing import Any, Callable
 
 from audit_log import AuditLog
+from holding_pnl import holding_pnl
 from market_quote import (
     KOREA, US_EASTERN, DayQuote, fetch_krx_regular_close, fetch_unadjusted_daily_candles,
     resolve_day_quote, with_previous_close,
@@ -387,7 +388,6 @@ class ApplicationEngine(TradingWebService):
             price = resolved.current_price
             value = quantity * price
             cost = quantity * average
-            pnl = value - cost
             item: dict[str, Any] = {
                 "symbol": ticker,
                 "quantity": quantity,
@@ -395,8 +395,7 @@ class ApplicationEngine(TradingWebService):
                 "current_price": price,
                 "day_change_pct": resolved.day_change_pct,
                 "total_value": value,
-                "pnl": pnl,
-                "pnl_pct": pnl / cost * 100 if cost else Decimal("0"),
+                **holding_pnl(row, value, cost),
             }
             if domestic:
                 # Alphanumeric KRX codes (0126Z0) are unreadable on their own,
@@ -507,7 +506,7 @@ class ApplicationEngine(TradingWebService):
         if command == "history.refresh":
             return self.trade_history(symbol or "TQQQ", str(payload.get("start_date")))
         if command == "history.cumulative_realized_pnl":
-            return self.cumulative_realized_pnl(payload.get("start_date") or None)
+            return self.cumulative_realized_pnl(payload.get("start_date") or None, payload.get("end_date") or None)
         if command == "analysis.long_term":
             return self.analyze_long_term()
         if command == "analysis.pairs":

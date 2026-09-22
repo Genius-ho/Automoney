@@ -493,6 +493,43 @@ class TradingWebServiceTests(unittest.TestCase):
             with self.assertRaises(ValueError):
                 service.cumulative_realized_pnl(future)
 
+    def test_cumulative_realized_pnl_rejects_an_end_date_before_the_start_date(self):
+        with tempfile.TemporaryDirectory() as temp:
+            service = self._service(temp, FakeTradingBroker())
+
+            with self.assertRaises(ValueError):
+                service.cumulative_realized_pnl("2026-02-01", "2026-01-01")
+
+    def test_cumulative_realized_pnl_can_be_scoped_to_a_single_month(self):
+        """The monthly-cut UI passes both start_date and end_date so a sell
+        that closed in an earlier month is excluded from a later month's total."""
+        with tempfile.TemporaryDirectory() as temp:
+            broker = FakeTradingBroker()
+            broker.closed_orders = [
+                {"symbol": "TQQQ", "side": "BUY", "status": "FILLED", "execution": {
+                    "filledQuantity": "10", "averageFilledPrice": "80", "filledAmount": "800",
+                    "commission": "0", "filledAt": "2026-01-05T00:00:00+00:00",
+                }},
+                {"symbol": "TQQQ", "side": "SELL", "status": "FILLED", "execution": {
+                    "filledQuantity": "5", "averageFilledPrice": "90", "filledAmount": "450",
+                    "commission": "0", "filledAt": "2026-01-10T00:00:00+00:00",
+                }},
+                {"symbol": "TQQQ", "side": "SELL", "status": "FILLED", "execution": {
+                    "filledQuantity": "5", "averageFilledPrice": "100", "filledAmount": "500",
+                    "commission": "0", "filledAt": "2026-02-10T00:00:00+00:00",
+                }},
+            ]
+            service = self._service(temp, broker)
+            self._activate(service, "TQQQ")
+
+            january = service.cumulative_realized_pnl("2026-01-01", "2026-01-31")
+            february = service.cumulative_realized_pnl("2026-02-01", "2026-02-28")
+
+            self.assertEqual(january["realized_pnl"], "50")
+            self.assertEqual(january["end_date"], "2026-01-31")
+            self.assertEqual(february["realized_pnl"], "100")
+            self.assertEqual(february["start_date"], "2026-02-01")
+
     def test_dry_run_broker_cannot_submit_web_orders(self):
         with tempfile.TemporaryDirectory() as temp:
             broker = FakeTradingBroker()

@@ -34,9 +34,11 @@
       <div class="section-title"><div><p class="eyebrow">REALIZED P&amp;L</p><h2>무한매수 누적 실현손익</h2></div><div class="section-title-actions"><span id="realizedPnlMessage" class="sync-message" role="status">-</span><button type="button" id="realizedPnlToggle" class="toggle-btn" aria-expanded="false" aria-controls="realizedPnlSection">펼치기</button></div></div>
       <div class="card-body" id="realizedPnlSection" hidden>
         <p class="order-help">지금 보유 중인 포지션의 평가손익(미실현)이 아니라, 이미 매도가 체결되어 확정된 손익만 누적한 값입니다.</p>
+        <div class="realized-pnl-month-chips" id="realizedPnlMonthChips"></div>
         <div class="realized-pnl-summary">
-          <div class="metric-inline"><span>누적 실현손익</span><strong id="realizedPnlTotal">-</strong></div>
+          <div class="metric-inline"><span id="realizedPnlTotalLabel">누적 실현손익</span><strong id="realizedPnlTotal">-</strong></div>
           <label>집계 시작일<input id="realizedPnlStartDate" type="date"></label>
+          <label>집계 종료일<input id="realizedPnlEndDate" type="date"></label>
           <button id="realizedPnlRefresh" type="button">새로고침</button>
         </div>
         <p id="realizedPnlUnknownWarning" class="sync-message error" hidden></p>
