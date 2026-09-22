@@ -219,9 +219,14 @@ ANALYSIS_SCHEMA = {
             "required": ["date", "broker", "title"]}},
         "events": {"type": "array", "items": {"type": "object", "properties": {
             "date": {"type": "string"}, "label": {"type": "string"}}, "required": ["date", "label"]}},
+        "competitors": {"type": "array", "minItems": 3, "maxItems": 3, "items": {"type": "object", "properties": {
+            "name": {"type": "string"}, "ticker": {"type": "string", "description": "예: 128940·KOSPI, LLY·NYSE, 비상장"},
+            "field": {"type": "string", "description": "겹치는 사업/기술 영역"},
+            "why": {"type": "string"}, "compare": {"type": "string", "description": "대상 기업 대비 강점·약점"},
+            "sources": _SRC}, "required": ["name", "ticker", "field", "why", "compare"]}},
         "sources": _SRC,
     },
-    "required": ["platform", "summary", "clinical", "pipeline", "stock", "funding", "sources"],
+    "required": ["platform", "summary", "clinical", "pipeline", "stock", "funding", "competitors", "sources"],
 }
 
 _jobs_lock = threading.Lock()
@@ -262,6 +267,7 @@ def _prompt(name: str, key: str, market: str, region: str) -> str:
 - 기술수출·파트너십·유상증자 등 자금 현황, 현금 소진 리스크
 - 증권사/애널리스트 목표주가와 의견 (국내는 최근 증권사 리포트, 해외는 컨센서스)
 - 향후 주요 일정(톱라인, 학회 발표, PDUFA 등)
+- 업계 주요 경쟁사 Top 3 (핵심 사업·기술과 직접 경쟁하는 곳, 중요도 순, 상장사 우선)
 
 작성 규칙:
 - 모든 설명은 한국어, 초보 투자자도 이해할 수 있게 짧고 명확하게.
