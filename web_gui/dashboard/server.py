@@ -17,7 +17,7 @@ from http import HTTPStatus
 from http.cookies import SimpleCookie
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
-from urllib.parse import parse_qs, urlparse
+from urllib.parse import parse_qs, unquote, urlparse
 
 WEB_ROOT = Path(__file__).resolve().parent
 PROJECT_ROOT = WEB_ROOT.parent
@@ -26,6 +26,7 @@ if str(PROJECT_ROOT) not in sys.path:
 
 from application_engine import ApplicationEngine, LiveActionsRequiredError  # noqa: E402
 from local_env import load_env  # noqa: E402
+from web_gui.dashboard import bio  # noqa: E402
 from telegram_bot import TelegramCommandLoop  # noqa: E402
 from toss_api import TossApiError  # noqa: E402
 from web_gui.dashboard.service import DashboardService, EngineDashboardService  # noqa: E402
@@ -144,11 +145,24 @@ class Handler(BaseHTTPRequestHandler):
                 self._validate()
                 self._json(HTTPStatus.OK, {"ok": True, "etf_overview": self.service.etf_overview()})
                 return
-            filename = STATIC_FILES.get(parsed.path)
-            if filename is None:
+            if parsed.path == "/bio":
+                self.send_response(HTTPStatus.MOVED_PERMANENTLY)
+                self.send_header("Location", "/bio/")
+                self.end_headers()
+                return
+            if parsed.path == "/bio/api/prices":
+                self._json(HTTPStatus.OK, bio.prices())
+                return
+            if parsed.path in {"/bio/", "/bio/index.html"}:
+                path = bio.BIO_PAGE
+            elif parsed.path.startswith("/bio/"):
+                path = bio.data_file(unquote(parsed.path[len("/bio/"):]))
+            else:
+                filename = STATIC_FILES.get(parsed.path)
+                path = self.static_dir / filename if filename else None
+            if path is None:
                 self._json(HTTPStatus.NOT_FOUND, {"ok": False, "error": "경로를 찾을 수 없습니다."})
                 return
-            path = self.static_dir / filename
             body = path.read_bytes()
             self.send_response(HTTPStatus.OK)
             content_type = mimetypes.guess_type(path.name)[0] or "application/octet-stream"
@@ -277,6 +291,7 @@ def run(
         scheduler.start()
         telegram_loop = TelegramCommandLoop(active_engine, active_engine.telegram)
         telegram_loop.start()
+    bio.start_refreshers()
     url = f"http://127.0.0.1:{port}/"
     print(f"Mumae CLI Engine + Emergency Dashboard: {url}")
     print(f"Shared data: {Handler.service.data_dir}")
