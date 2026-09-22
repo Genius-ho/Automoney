@@ -1,3 +1,4 @@
+function pnlText(formatted,costIncluded){return formatted==="-"||costIncluded===true?formatted:formatted+" (비용 미반영)"}
 const symbols=["TQQQ","SOXL","KORU","UPRO","SPXL","TECL","FNGU","LABU","TNA","FAS","UDOW"];
 const $=id=>document.getElementById(id);
 const fields={symbol:null,current_price:$("currentPrice"),previous_close:$("previousClose"),cash_usd:$("cashUsd"),position_qty:$("positionQty"),avg_cost:$("avgCost"),t_value:$("tValue"),base_buy_qty:$("baseBuyQty"),mode:$("mode")};
@@ -52,14 +53,14 @@ function renderOrders(orders=[]){
 function statusLabel(status){return{UNSENT:"미전송 · 확인 필요",SKIPPED:"주문 거부 · 재시도 필요",UNCONFIRMED:"토스 확인 필요",PENDING:"접수됨",PARTIAL_FILLED:"부분 체결",PENDING_CANCEL:"취소 처리 중",PENDING_REPLACE:"정정 처리 중",FILLED:"체결 완료",CANCELED:"취소됨 · 재주문 가능",REJECTED:"주문 거부 · 재시도 필요",REPLACED:"정정 완료"}[status]||status||"미전송 · 확인 필요"}
 function renderHoldings(holdings=[]){
   const body=$("holdingsBody");body.replaceChildren();
-  holdings.forEach(holding=>{const row=document.createElement("tr"),sign=Number(holding.pnl)>=0?"positive":"negative";cell(row,holding.symbol);cell(row,number(holding.quantity,0));cell(row,number(holding.current_price));cell(row,number(holding.total_value));cell(row,holding.t_value);cell(row,number(holding.pnl),sign);cell(row,number(holding.pnl_pct),sign);body.append(row)});
+  holdings.forEach(holding=>{const row=document.createElement("tr"),sign=Number(holding.pnl)>=0?"positive":"negative";cell(row,holding.symbol);cell(row,number(holding.quantity,0));cell(row,number(holding.current_price));cell(row,number(holding.total_value));cell(row,holding.t_value);cell(row,pnlText(number(holding.pnl),holding.pnl_cost_included),sign);cell(row,pnlText(number(holding.pnl_pct),holding.pnl_pct_cost_included),Number(holding.pnl_pct)>=0?"positive":"negative");body.append(row)});
   $("emptyHoldings").hidden=holdings.length>0;
 }
 function render(data){
   lastData=data;fillState(data.state);
   const metrics=data.metrics,quote=data.quote||{};
   if(quote.current_price!==null&&quote.current_price!==undefined){fields.current_price.value=quote.current_price;fields.previous_close.value=quote.previous_close??quote.current_price;$("quoteLine").textContent=selectedSymbol+" 현재가 $"+number(quote.current_price)+" | 전일 종가 $"+number(quote.previous_close)}
-  $("totalAsset").textContent=number(metrics.total_asset);$("cashSummary").textContent=number(metrics.cash);$("positionValue").textContent=number(metrics.position_value);$("totalPnl").textContent=number(metrics.unrealized_pnl);
+  $("totalAsset").textContent=number(metrics.total_asset);$("cashSummary").textContent=number(metrics.cash);$("positionValue").textContent=number(metrics.position_value);$("totalPnl").textContent=pnlText(number(metrics.unrealized_pnl),metrics.pnl_cost_included);
   $("starPct").textContent=(Number(metrics.star_pct)>=0?"+":"")+number(metrics.star_pct)+"%";$("starPrice").textContent=number(metrics.star_price);$("progress").textContent=number(metrics.progress_pct,1)+"%";$("progressBar").value=Number(metrics.progress_pct)||0;$("totalSeed").textContent="$"+number(metrics.total_seed);$("invested").textContent="$"+number(metrics.invested);
   const phase=data.state.mode==="GENERAL"?(Number(data.state.t_value)<20?"전반전":"후반전"):(data.state.mode==="REVERSE_FIRST_DAY"?"리버스 첫날":"리버스");$("strategyPhase").textContent=phase;
   renderOrders(data.orders||[]);renderHoldings(data.holdings||[]);

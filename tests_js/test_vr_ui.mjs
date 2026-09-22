@@ -629,6 +629,23 @@ test("fetchVrLiveValue returns null when the account cannot be reached (fail-clo
   assert.equal(value, null);
 });
 
+test("holdings and summary distinguish net P&L from fallback values", () => {
+  const { sandbox } = loadApp();
+  for (const [amountIncluded, rateIncluded] of [[false, false], [true, true], [true, false], [false, true]]) {
+    sandbox.render({
+      state: { symbol: "TQQQ" },
+      metrics: { selected_pnl: "0", pnl_cost_included: amountIncluded },
+      holdings: [{ symbol: "TQQQ", pnl: "0", pnl_pct: "-1", pnl_cost_included: amountIncluded, pnl_pct_cost_included: rateIncluded }],
+    });
+    const row = sandbox.document.getElementById("holdings")._children[0];
+    for (const element of [row._children[6], sandbox.document.getElementById("selectedPnl")]) {
+      assert.equal(element.textContent.includes("비용 미반영"), !amountIncluded);
+    }
+    assert.equal(row._children[7].textContent.includes("비용 미반영"), !rateIncluded);
+    assert.equal(row._children[7].className, "negative", "rate sign is independent of amount sign");
+  }
+});
+
 // --- summary --------------------------------------------------------------
 console.log(`\n${passed} passed, ${failed} failed`);
 process.exit(failed > 0 ? 1 : 0);

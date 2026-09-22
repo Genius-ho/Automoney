@@ -9,6 +9,7 @@ from pathlib import Path
 from typing import Any, Callable
 
 from etf_info import ETF_INFO
+from holding_pnl import holding_pnl
 from market_quote import fetch_unadjusted_daily_candles, resolve_day_quote
 from mumae_core import ETF_UNIVERSE, Mode, OrderIntent, StrategyState, attempt_amount, build_big_number_plan, build_plan, normalize_down_ladder_levels, star_price, symbol_profile
 from runtime_store import RuntimeStore, get_strategy_type, prune_order_tracking
@@ -254,6 +255,9 @@ class WebService:
         progress = invested / total_seed * 100 if total_seed else Decimal("0")
         position_value = (current_price or Decimal("0")) * state.position_qty
         unrealized_pnl = position_value - invested if current_price is not None else Decimal("0")
+        selected_holding = next((row for row in holdings or [] if row["symbol"] == state.symbol), {})
+        if selected_holding.get("pnl") is not None:
+            unrealized_pnl = _text_decimal(selected_holding["pnl"])
         base_pct, _ = symbol_profile(state.symbol)
         star_pct = base_pct * (Decimal("1") - Decimal("2") * state.t_value / state.split_count)
         return {
@@ -272,6 +276,7 @@ class WebService:
                 "position_value": str(position_value),
                 "total_asset": str(state.cash_usd + position_value),
                 "unrealized_pnl": str(unrealized_pnl),
+                "pnl_cost_included": selected_holding.get("pnl_cost_included", False),
                 "progress_pct": str(progress.quantize(Decimal("0.1"))),
             },
             "holdings": holdings or [],
@@ -339,8 +344,7 @@ class WebService:
             price = resolved.current_price
             value = quantity * price
             cost = quantity * average
-            pnl = value - cost
-            rate = pnl / cost * 100 if cost else Decimal("0")
+            profit_loss = holding_pnl(row, value, cost)
             ticker_state = selected if ticker == symbol else self.store.load(ticker)
             previous_close = resolved.previous_close
             if ticker == symbol:
@@ -356,8 +360,7 @@ class WebService:
                     "current_price": price,
                     "day_change_pct": day_change_pct,
                     "total_value": value,
-                    "pnl": pnl,
-                    "pnl_pct": rate,
+                    **profit_loss,
                     "t_value": ticker_state.t_value,
                     "strategy_type": get_strategy_type(self.runtime, ticker),
                 }))

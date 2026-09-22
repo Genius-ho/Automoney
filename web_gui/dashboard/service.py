@@ -12,6 +12,7 @@ from pathlib import Path
 from typing import Any, Callable
 
 from application_engine import ApplicationEngine
+from holding_pnl import holding_pnl
 from market_quote import fetch_unadjusted_daily_candles, resolve_day_quote
 from mumae_core import ETF_UNIVERSE, Mode, StrategyState, build_plan
 from runtime_store import RuntimeStore
@@ -345,7 +346,6 @@ class DashboardService:
                 price = resolved.current_price
                 value = quantity * price
                 cost = quantity * average
-                pnl = value - cost
                 holdings_value += value
                 ticker_state = selected if ticker == symbol else self.state_store.load(ticker)
                 holdings.append(_json({
@@ -355,8 +355,7 @@ class DashboardService:
                     "current_price": price,
                     "day_change_pct": resolved.day_change_pct,
                     "total_value": value,
-                    "pnl": pnl,
-                    "pnl_pct": pnl / cost * 100 if cost else Decimal("0"),
+                    **holding_pnl(row, value, cost),
                     "t_value": ticker_state.t_value,
                 }))
                 if ticker == symbol:
@@ -372,12 +371,14 @@ class DashboardService:
             previous = resolved_quotes[symbol].previous_close or selected_price
             invested = selected.avg_cost * selected.position_qty
             selected_value = selected_price * selected.position_qty
+            selected_holding = next((row for row in holdings if row["symbol"] == symbol), {})
             metrics = _json({
                 "cash": cash,
                 "holdings_value": holdings_value,
                 "total_asset": cash + holdings_value,
                 "selected_value": selected_value,
-                "selected_pnl": selected_value - invested,
+                "selected_pnl": selected_holding.get("pnl", selected_value - invested),
+                "pnl_cost_included": selected_holding.get("pnl_cost_included", False),
             })
             orders, plan_warnings = self._daily_plan(selected, selected_price, previous)
             orders, orders_synced, order_status_error = self._sync_order_statuses(broker, symbol, orders)
