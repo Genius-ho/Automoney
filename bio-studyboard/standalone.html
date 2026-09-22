@@ -272,6 +272,14 @@
     border:1px solid var(--line);border-radius:7px;padding:8px 10px;
   }
   .add-form textarea{resize:vertical;min-height:56px}
+  .add-search-results{display:flex;flex-direction:column;gap:6px;margin-top:6px}
+  .add-search-results button{display:flex;justify-content:space-between;gap:10px;text-align:left;padding:8px 10px;border:1px solid var(--line);border-radius:8px;background:var(--surface);color:var(--ink);font:inherit;font-size:13px;cursor:pointer}
+  .add-search-results button:hover,.add-search-results button.on{border-color:var(--accent);background:var(--accent-soft-2)}
+  .add-search-results small{color:var(--ink-faint);font-family:'IBM Plex Mono',monospace}
+  .ai-panel{display:flex;flex-direction:column;gap:8px}
+  .ai-panel .ai-row{display:flex;align-items:center;gap:10px;flex-wrap:wrap}
+  .ai-panel .ai-status{font-size:12px;color:var(--ink-soft)}
+  .ai-summary{margin:0;line-height:1.6}
   .add-form-actions{display:flex;gap:8px;margin-top:14px}
 
   .hidden-list{display:flex;flex-direction:column;gap:6px;margin-bottom:16px;padding:12px 14px;background:var(--surface-2);border-radius:10px}
@@ -682,6 +690,7 @@
     </div>
     <form class="add-form" id="add-form" hidden>
       <div class="add-form-grid">
+        <label class="full">종목 검색 (Toss 확인)<input type="search" id="add-search" autocomplete="off" placeholder="기업명 또는 티커 입력 — 예: 한미약품, RXRX"><div class="add-search-results" id="add-search-results"></div></label>
         <label>기업명<span class="req">*</span><input type="text" id="add-name" required placeholder="예: 한미약품"></label>
         <label>티커 · 거래소<input type="text" id="add-ticker" placeholder="예: 128940·KOSPI"></label>
         <label>지역<select id="add-region"><option value="kr">국내</option><option value="gl">해외</option></select></label>
@@ -758,6 +767,7 @@
       <a href="#learn-biosimilar" data-learn="learn-biosimilar">⑦ 바이오시밀러·CDMO</a>
       <a href="#learn-drugs" data-learn="learn-drugs">⑧ 요즘 뜨는 약 종류</a>
       <a href="#learn-check" data-learn="learn-check">⑨ 투자 체크리스트</a>
+      <a href="#learn-aitools" data-learn="learn-aitools">⑩ AI 신약개발 · 유전체 분석</a>
     </nav>
 
     <!-- ① stages -->
@@ -1000,6 +1010,38 @@
         <li><strong>목표주가와의 차이를 맹신하지 말자.</strong> 임상 실패 직후엔 목표주가 조정이 늦어서 '상승 여력'이 크게 보이는 착시가 생겨요.</li>
         <li><strong>매출 구조를 보자.</strong> 한 제품 비중이 너무 크면(예: 키트루다가 머크 매출의 절반 가까이) 그 약의 특허 만료가 큰 위험이에요. 기업별 상세의 '매출 구성'에서 확인할 수 있어요.</li>
       </ul>
+    </article>
+
+    <!-- ⑩ AI drug discovery / NGS tools -->
+    <article class="lcard" id="learn-aitools">
+      <h3>⑩ AI 신약개발 · 유전체 분석(NGS)</h3>
+      <p class="one">AI 신약개발은 <strong>실험 데이터를 대량으로 만들고 AI로 약 후보를 골라내는 방식</strong>이고, NGS는 <strong>DNA를 한꺼번에 빠르게 읽는 기계</strong>예요. 둘 다 '데이터로 바이오를 한다'는 점이 공통점이에요.</p>
+      <figure class="lfig">
+        <svg viewBox="0 0 400 150" role="img" aria-label="세포 실험 이미지와 유전체 데이터를 AI가 학습해 약 후보를 고르고, 임상으로 넘기는 흐름">
+          <g fill="none" stroke-width="2">
+            <rect x="10" y="45" width="100" height="56" rx="10" class="s-stroke-faint"/>
+            <rect x="150" y="45" width="100" height="56" rx="10" class="s-stroke-acc"/>
+            <rect x="290" y="45" width="100" height="56" rx="10" class="s-stroke-gl"/>
+            <path d="M112 73 L146 73 M140 67 L146 73 L140 79" class="s-stroke-faint"/>
+            <path d="M252 73 L286 73 M280 67 L286 73 L280 79" class="s-stroke-faint"/>
+          </g>
+          <text x="60" y="70" text-anchor="middle" class="t-h">로봇 실험</text>
+          <text x="60" y="88" text-anchor="middle" class="t-note">세포 사진·유전체</text>
+          <text x="200" y="70" text-anchor="middle" class="t-h">AI 분석</text>
+          <text x="200" y="88" text-anchor="middle" class="t-note">패턴 → 표적·후보</text>
+          <text x="340" y="70" text-anchor="middle" class="t-h">임상</text>
+          <text x="340" y="88" text-anchor="middle" class="t-note">결국 사람으로 검증</text>
+          <text x="200" y="135" text-anchor="middle" class="t-note">AI는 '찾는 속도'를 올리지만, 약효는 여전히 임상이 판정해요</text>
+        </svg>
+      </figure>
+      <div class="lcols">
+        <div class="lmini"><h4>🤖 리커젼 'Recursion OS'</h4><p>로봇이 매주 수백만 건의 세포 실험을 하고 현미경 사진을 찍어요. 유전자를 끄거나 약을 넣었을 때 세포 <b>모양이 어떻게 바뀌는지(현상학, phenomics)</b>를 AI가 비교해서, "이 유전자와 이 약이 비슷한 효과를 낸다"는 지도를 만들어요. 여기서 표적과 후보물질을 골라요. 가장 앞선 약은 희귀질환 FAP 치료제 REC-4881(2상)이에요.</p></div>
+        <div class="lmini"><h4>🧬 일루미나 NGS (차세대 시퀀싱)</h4><p>DNA를 잘게 잘라 수십억 조각을 <b>동시에</b> 읽고, 컴퓨터로 다시 이어 붙여요(SBS: 염기를 하나씩 붙이며 형광 색으로 읽는 방식). 사람 유전체 1명분을 하루~이틀 만에 수백 달러로 읽어요. 암 유전자 검사, 산전 검사(NIPT), 희귀질환 진단, 신약 표적 연구에 두루 쓰여요.</p></div>
+        <div class="lmini"><h4>🧪 멀티오믹스</h4><p>유전체(DNA)만 보지 않고 <b>RNA(어떤 유전자가 켜졌나)</b>, <b>단백질</b>, <b>메틸화(유전자 스위치)</b>, <b>공간 정보(조직 어디서)</b>까지 함께 보는 분석이에요. 일루미나는 SomaLogic(단백질) 인수, 공간전사체, 5-base 메틸화로 이쪽을 넓히고 있어요.</p></div>
+      </div>
+      <div class="analogy"><b>비유:</b> 일루미나는 <b>'프린터와 잉크'</b> 회사예요. 장비를 한 번 팔면 시약(소모품)을 계속 팔아서 돈을 벌어요. 리커젼은 <b>'데이터 공장 + 신약 개발사'</b>예요. AI로 후보를 빨리 찾아도 결국 임상에서 성공해야 돈이 돼요.</div>
+      <div class="analogy"><b>투자 포인트:</b> <b>AI 신약개발사</b>는 일반 바이오텍과 똑같이 봐야 해요. 임상 단계, 현금 소진 속도, 빅파마 파트너십(계약금·마일스톤)이 핵심이고, 'AI'라는 이름만으로 성공이 보장되지 않아요. <b>도구 회사(일루미나)</b>는 임상 리스크가 없어요. 대신 <b>장비 판매 대수·소모품 매출·연구 예산 경기·경쟁사(중국 MGI, 엘리먼트 등)</b>를 봐요.</div>
+      <p class="inbook">이 대시보드에서 — AI 신약개발: <a data-goto="recursion">리커젼</a> · 유전체 분석 도구: <a data-goto="illumina">일루미나</a></p>
     </article>
   </section>
 </main>
@@ -1297,6 +1339,24 @@
       pipeline:[],
       stock:{price:"54.15", currency:"$", change:-0.88, target:"60.59", targetDate:"", asOf:"26.09.18", note:"상승여력 +11.9%"},
       funding:[]
+    },
+    {
+      id:"recursion", name:"Recursion Pharmaceuticals (리커젼)", ticker:"RXRX·NASDAQ", region:"gl",
+      platform:"AI·자동화 실험 플랫폼 'Recursion OS': 세포 이미지(현상학)·유전체·화학 데이터를 대량으로 만들어 AI로 신약 표적과 후보물질을 찾는 방식",
+      clinical:{"status": "neutral", "statusLabel": "FAP 2상 효과 확인, 허가 경로 불확실", "note": "REC-4881의 효과 신호(용종 43~53% 감소)는 긍정적입니다. 다만 FAP는 허가된 전례가 거의 없어, FDA와 어떤 평가 기준(1차 평가변수)에 합의하느냐가 관건입니다. 나머지 약물은 1상 초기 단계로 아직 효과 데이터가 없습니다."},
+      pipeline:[{"name": "REC-4881 (MEK1/2 억제제)", "ind": "가족성 선종성 용종증(FAP) · 경구 저분자", "phase": 3, "phaseLabel": ["전임상", "1상", "2상", "3상/허가"], "whatItIs": "대장에 용종이 수백 개씩 생기는 희귀 유전질환 FAP의 치료제. 현재 승인된 약이 없음", "efficacy": "TUPELO 2상: 12주 투여 후 75%에서 용종 감소, 중앙값 43% 감소(n=12). 투약 중단 12주 후(25주차)에도 82%(9/11명)가 감소를 유지(중앙값 53%). 3등급 부작용 15.8%, 4등급 이상 없음", "next": "26.11 CGA-IGC 학회(대표 발표 세션)에서 2상 추가 데이터 발표 / 26년 하반기 FDA 허가 경로 업데이트 / 27년 상반기 추가 1b/2상 데이터", "note": "리커젼 OS에서 나온 첫 임상 효과 검증 사례입니다. 18세 이상 환자로 대상을 넓혔고, 용량을 최적화하는 코호트도 진행 중입니다.", "sources": [{"title": "Recursion Q4/FY2025 결과 (SEC 8-K Ex.99.1)", "url": "https://www.sec.gov/Archives/edgar/data/1601830/000160183026000038/exhibit991-10xk25.htm"}, {"title": "Recursion Q2 2026 Earnings Call Transcript (Motley Fool)", "url": "https://www.fool.com/earnings/call-transcripts/2026/08/12/recursion-rxrx-q2-2026-earnings-call-transcript/"}]}, {"name": "REC-1245 (RBM39 분해제)", "ind": "고형암·림프종 · 경구 저분자", "phase": 2, "phaseLabel": ["전임상", "1상", "2상", "3상/허가"], "whatItIs": "암세포의 RNA 가공(스플라이싱)에 관여하는 단백질 RBM39를 분해하는 약", "efficacy": "아직 효과 데이터는 공개되지 않았습니다. 회사는 초기 안전성·약동학(PK) 결과에 확신이 커지고 있다고만 밝혔습니다.", "next": "26년 하반기 종합 업데이트", "note": "1상 용량 증량 단계를 진행 중입니다.", "sources": [{"title": "Recursion Q2 2026 결과 (StockTitan)", "url": "https://www.stocktitan.net/news/RXRX/recursion-reports-second-quarter-financial-results-genentech-options-3m8y2oo0jnq4.html"}]}, {"name": "REC-617 (CDK7 억제제)", "ind": "백금 저항성 난소암 등 · 병용요법 · 경구 저분자", "phase": 2, "phaseLabel": ["전임상", "1상", "2상", "3상/허가"], "whatItIs": "세포 분열과 전사를 조절하는 CDK7을 막는 항암제", "efficacy": "병용요법 효과 데이터는 아직 없습니다.", "next": "27년 상반기 병용요법 초기 안전성·PK 데이터", "note": "1상에서 다른 항암제와 함께 쓰는 병용요법을 시험하고 있습니다.", "sources": [{"title": "Recursion Q4/FY2025 결과 (SEC 8-K Ex.99.1)", "url": "https://www.sec.gov/Archives/edgar/data/1601830/000160183026000038/exhibit991-10xk25.htm"}]}, {"name": "REC-7735 (PI3Kα H1047R 선택적 억제제)", "ind": "PIK3CA H1047R 변이 고형암(유방암 등) · 경구 저분자", "phase": 1, "phaseLabel": ["전임상", "1상", "2상", "3상/허가"], "whatItIs": "특정 PI3K 변이(H1047R)만 골라 막아, 정상 세포에 대한 부작용(고혈당 등)을 줄이려는 약", "efficacy": "전임상에서 해당 변이에 대한 선택성이 100배 이상", "next": "26년 하반기 ZINNIA 1/2상 시작 / 28년 상반기 첫 용량 증량 데이터", "note": "FDA 임상시험계획(IND) 승인을 받았습니다.", "sources": [{"title": "Recursion Q2 2026 Earnings Call Transcript (Motley Fool)", "url": "https://www.fool.com/earnings/call-transcripts/2026/08/12/recursion-rxrx-q2-2026-earnings-call-transcript/"}]}, {"name": "REC-3565 (MALT1 억제제)", "ind": "B세포 혈액암 · 경구 저분자", "phase": 2, "phaseLabel": ["전임상", "1상", "2상", "3상/허가"], "whatItIs": "림프종 성장 신호에 관여하는 MALT1을 막는 약", "efficacy": "미공개", "next": "27년 상반기 단독요법 초기 안전성·PK 데이터", "note": "1상 초기 단계입니다.", "sources": [{"title": "Recursion Q2 2026 결과 (StockTitan)", "url": "https://www.stocktitan.net/news/RXRX/recursion-reports-second-quarter-financial-results-genentech-options-3m8y2oo0jnq4.html"}]}, {"name": "REC-4539 (LSD1 억제제)", "ind": "소세포폐암 등 고형암 · 경구 저분자(뇌 투과형)", "phase": 2, "phaseLabel": ["전임상", "1상", "2상", "3상/허가"], "whatItIs": "암세포의 유전자 스위치를 조절하는 LSD1을 막는 약", "efficacy": "미공개", "next": "27년 하반기 단독요법 초기 안전성·PK 데이터", "note": "1상 초기 단계입니다. 적응증(소세포폐암)은 과거 회사 자료를 바탕으로 한 추정입니다.", "sources": [{"title": "Recursion Q4/FY2025 결과 (SEC 8-K Ex.99.1)", "url": "https://www.sec.gov/Archives/edgar/data/1601830/000160183026000038/exhibit991-10xk25.htm"}]}],
+      stock:{"price": "4.07", "currency": "$", "change": 0, "target": "7.22", "targetDate": "26.08.17", "asOf": "26.09.22", "note": "현재 주가는 약 4.07달러입니다. 애널리스트 7명의 평균 목표주가는 7.22달러(최고 10, 최저 4)이고, 다른 집계로는 평균 약 6.66달러입니다. 의견은 강력매수 1, 매수 2, 보유 4로 '보유'가 가장 많습니다. 최근 의견은 BofA 보유(26.09.21), JP모건 매수(26.09.15), 모건스탠리 보유·목표가 5.3달러(26.08.17), 니덤 매수·목표가 8달러(26.08.05)입니다."},
+      funding:[{"title": "로슈/제넨텍 파트너십", "amt": "누적 수령 2.16억 달러", "date": "26.08", "desc": "최대 40개 저분자 프로그램을 공동 연구합니다. 프로그램마다 3억 달러 이상의 마일스톤과 높은 한 자릿수 %의 로열티를 받을 수 있습니다. 26.08에 첫 신경과학 표적을 초기 연구 프로그램으로 옵션 행사했습니다."}, {"title": "사노피 파트너십", "amt": "누적 수령 1.34억 달러", "date": "26.08", "desc": "프로그램마다 최대 3.43억 달러의 마일스톤과 두 자릿수 %의 로열티를 받을 수 있습니다. 경구 염증 치료제 후보물질 지정 마일스톤을 6~12개월 안에 기대하고 있습니다."}, {"title": "템퍼스 데이터 라이선스 연장 + RNA 모델(TxFM) 라이선스", "amt": "확정 4,200만 달러(3년) + 1,200만 달러", "date": "26.09.21", "desc": "계약을 29.11까지 연장했습니다. 대신 최대 8,400만 달러였던 재량 지급 라이선스료를 3년간 확정 4,200만 달러로 바꿨습니다. 별도로 RNA 파운데이션 모델을 항암 분야에 한해 2년간 라이선스하고, 600만 달러씩 두 번 받습니다."}, {"title": "현금·소진 현황", "amt": "현금 5.568억 달러", "date": "26.06.30", "desc": "2분기 영업 현금 소진은 1.06억 달러였고, 26년 현금 영업비용 가이던스는 3.75억 달러 이하입니다. 추가 자금 조달 없이 28년 초까지 버틸 수 있다고 밝혔습니다. 26년 상반기에 새 유상증자는 없었습니다. 25년 말 현금 7.54억 달러에서 반년 만에 약 2억 달러가 줄었습니다."}],
+      reports:[{"date": "26.09.21", "broker": "Bank of America", "title": "의견 유지", "opinion": "Hold", "url": "https://stockanalysis.com/stocks/rxrx/forecast/"}, {"date": "26.09.15", "broker": "J.P. Morgan", "title": "의견 유지", "opinion": "Buy", "url": "https://stockanalysis.com/stocks/rxrx/forecast/"}, {"date": "26.08.17", "broker": "Morgan Stanley", "title": "목표가 제시", "opinion": "Hold", "target": "5.30", "url": "https://stockanalysis.com/stocks/rxrx/forecast/"}, {"date": "26.08.06", "broker": "TD Cowen", "title": "의견 유지", "opinion": "Hold", "url": "https://stockanalysis.com/stocks/rxrx/forecast/"}, {"date": "26.08.05", "broker": "Needham", "title": "2분기 실적 후 의견", "opinion": "Buy", "target": "8.00", "url": "https://stockanalysis.com/stocks/rxrx/forecast/"}]
+    },
+    {
+      id:"illumina", name:"Illumina (일루미나)", ticker:"ILMN·NASDAQ", region:"gl",
+      platform:"DNA 시퀀싱(NGS) 장비·소모품 세계 1위. SBS 기반 NovaSeq X를 중심으로 임상 시퀀싱을 넓히고, SomaLogic 단백질 분석·공간전사체·5-base 메틸화로 '멀티오믹스' 플랫폼 확장 중",
+      clinical:{"status": "good", "statusLabel": "실적 상향 모멘텀", "note": "임상 파이프라인이 있는 회사가 아님. 26.07.30 2Q 실적이 예상을 웃돌면서 연간 가이던스를 올렸고, 임상 시퀀싱 물량의 약 78%가 NovaSeq X로 넘어감(연말 80~85% 목표). 다만 연구 시장 부진, 중국 제재, 주가가 목표주가를 넘어선 고평가 부담은 남아 있음."},
+      pipeline:[{"name": "NovaSeq X 시리즈 (임상 시퀀싱)", "ind": "암 유전체·유전질환·NIPT 등 임상 진단용 고처리량 NGS 장비+소모품", "phase": 4, "phaseLabel": ["개발", "출시", "보급 확대", "주력 매출"], "note": "핵심 성장 동력. 임상 물량의 약 78%가 NovaSeq X로 전환됨(연말 80~85% 목표). 소모품 사용량이 늘면서 매출이 계속 들어오는 구조.", "efficacy": "26.2Q 매출 11.6억달러(+9.5%), 중국 제외 유기 성장률 +8.1%", "next": "26.3Q 실적(가이던스 매출 11.4~11.6억달러), 발표 시점 26.11 초 추정", "whatItIs": "DNA를 대량으로 빠르게 읽는 장비. 장비를 한 번 팔면 시약을 계속 사야 해서 프린터·잉크와 비슷한 사업 구조", "sources": [{"title": "Illumina 2Q26 실적 발표(PR Newswire)", "url": "https://www.prnewswire.com/news-releases/illumina-reports-financial-results-for-second-quarter-of-fiscal-year-2026-302839476.html"}, {"title": "TIKR: Illumina Stock Is Up 133% This Year", "url": "https://www.tikr.com/blog/illumina-stock-is-up-133-this-year-heres-where-it-could-go-further"}]}, {"name": "SomaLogic 단백체(프로테오믹스)", "ind": "혈액 단백질 대량 분석 → 멀티오믹스 연구·신약 개발", "phase": 2, "phaseLabel": ["기술 확보", "인수·통합", "상용 확대", "주력 매출"], "note": "26.01.30 Standard BioTools에서 현금 3.5억달러에 인수 완료(성과에 따라 최대 7,500만달러와 로열티 추가). 유전체 분석과 단백질 분석을 묶어서 제공하는 전략.", "efficacy": "매출 기여 규모는 따로 공개되지 않음", "next": "통합 제품 출시와 매출 기여 확인(시점 미정)", "whatItIs": "유전자(DNA)만 보던 분석을 실제 몸속 기능 물질인 단백질까지 넓혀 주는 기술", "sources": [{"title": "Illumina completes acquisition of SomaLogic", "url": "https://www.prnewswire.com/news-releases/illumina-completes-acquisition-of-somalogic-302674789.html"}]}, {"name": "Constellation 매핑 리드", "ind": "전장유전체(WGS) 구조변이 분석, NovaSeq X 호환", "phase": 1, "phaseLabel": ["개발", "출시", "보급 확대", "주력 매출"], "note": "라이브러리 준비 과정 없이 플로우셀 위에서 바로 긴 거리 정보를 얻는 기술. 25.02 공개 때 26년 상용화를 목표로 함. 실제 출시 여부는 이번 조사에서 확인하지 못함.", "efficacy": "공개 당시 희귀질환 진단 기간을 수개월에서 하루 남짓으로 줄일 수 있다고 설명", "next": "상용 출시와 초기 채택 확인", "whatItIs": "짧은 DNA 조각의 약점(구조 변이를 잘 못 봄)을 보완하는 기술", "sources": [{"title": "Illumina 멀티오믹스 신기술 발표(25.02.24)", "url": "https://www.prnewswire.com/news-releases/illumina-transforms-multiomic-research-with-new-technologies-to-unlock-deeper-understanding-of-biology-302383424.html"}]}, {"name": "5-base 메틸화 솔루션", "ind": "유전변이+DNA 메틸화 동시 검출(암·액체생검 연구)", "phase": 1, "phaseLabel": ["개발", "출시", "보급 확대", "주력 매출"], "note": "한 번의 분석으로 변이와 메틸화를 함께 읽음. 26년 출시 계획으로 발표됨. 실제 출시 여부는 확인하지 못함.", "next": "출시와 임상 연구 채택", "whatItIs": "유전자 스위치(메틸화) 정보까지 함께 읽어 암 조기진단 연구 등에 쓰는 분석", "sources": [{"title": "Illumina 멀티오믹스 신기술 발표(25.02.24)", "url": "https://www.prnewswire.com/news-releases/illumina-transforms-multiomic-research-with-new-technologies-to-unlock-deeper-understanding-of-biology-302383424.html"}]}, {"name": "공간전사체(Spatial) 플랫폼", "ind": "조직 속 유전자 발현 위치 분석(종양미세환경·신경과학)", "phase": 1, "phaseLabel": ["개발", "출시", "보급 확대", "주력 매출"], "note": "기존 기술보다 포획 면적 9배, 해상도 4배라고 발표함. 26년 상용화 계획. 10x Genomics 등과 경쟁.", "next": "상용 출시(26년 계획)", "whatItIs": "조직 사진 위에 '어느 세포에서 어떤 유전자가 켜졌는지'를 지도처럼 그리는 기술", "sources": [{"title": "Illumina 멀티오믹스 신기술 발표(25.02.24)", "url": "https://www.prnewswire.com/news-releases/illumina-transforms-multiomic-research-with-new-technologies-to-unlock-deeper-understanding-of-biology-302383424.html"}]}],
+      stock:{"price": "243.00", "currency": "$", "change": 0, "target": "199 (113~260)", "targetDate": "26.09", "asOf": "26.09.22", "note": "MarketBeat 기준 18명 컨센서스는 'Hold'(매수 10·중립 6·매도 2), 평균 목표주가 199.13달러. TIKR 집계로는 20명, 평균 203달러. UBS는 26.09 매수로 올리며 목표주가를 260달러로 제시(최고치). 26.07 Stifel·JPMorgan은 225~230달러로 상향. 주가는 약 240~246달러로 평균 목표주가보다 15~20% 높고, PER 약 45배. 이사 Keith Meister가 26.08 이후 2.55억달러 넘게 주식을 팔았음."},
+      funding:[{"title": "SomaLogic 인수(보유 현금 사용)", "amt": "3.5억달러 (+최대 0.75억달러 마일스톤)", "date": "26.01.30", "desc": "외부 자금 조달 없이 보유 현금으로 인수. 유상증자는 없었음."}, {"title": "현금·부채 현황(26.2Q 말)", "amt": "현금성자산 11.7억달러 / 부채 약 19.9억달러", "date": "26.06", "desc": "1년 안에 갚을 부채가 5억달러. 영업현금흐름으로 충분히 대응 가능한 수준이라 현금 소진 위험은 낮음."}, {"title": "잉여현금흐름(FCF)", "amt": "1.62억달러 (분기)", "date": "26.2Q", "desc": "영업현금흐름 2.01억달러에서 설비투자 0.39억달러를 뺀 값. 흑자 회사라 적자 바이오텍과 달리 증자 필요성이 낮음(전년 동기 2.04억달러보다는 감소)."}],
+      reports:[{"date": "26.09", "broker": "UBS", "title": "투자의견 매수로 상향", "opinion": "Buy", "target": "260"}, {"date": "26.09", "broker": "Zacks", "title": "Strong Buy에서 Hold로 하향", "opinion": "Hold"}, {"date": "26.07", "broker": "Stifel / JPMorgan", "title": "2Q 실적 후 목표주가 상향", "target": "225~230"}, {"date": "26.09", "broker": "MarketBeat 컨센서스(18명)", "title": "평균 목표주가 199.13달러", "opinion": "Hold", "target": "199.13", "url": "https://www.marketbeat.com/stocks/NASDAQ/ILMN/forecast"}]
     }
   ];
 
@@ -1407,7 +1467,8 @@
     {re:/이중항체|그랩바디|BBB/i, id:'learn-antibody', label:'이중항체·뇌 셔틀'},
     {re:/바이오시밀러|CDMO|CMO/i, id:'learn-biosimilar', label:'바이오시밀러·CDMO'},
     {re:/GLP-1|비만|mRNA|방사성|FcRn|EGFR|면역항암|세포유전자|CNS|뇌전증|알츠하이머/i, id:'learn-drugs', label:'약 종류 한눈에'},
-    {re:/기술수출|라이선스|마일스톤|로열티/i, id:'learn-deal', label:'기술수출 계약 읽는 법'}
+    {re:/기술수출|라이선스|마일스톤|로열티/i, id:'learn-deal', label:'기술수출 계약 읽는 법'},
+    {re:/\bAI\b|시퀀싱|NGS|유전체|멀티오믹스|Recursion OS/, id:'learn-aitools', label:'AI 신약개발·NGS'}
   ];
   function learnHints(c){
     var text = [c.platform, c.clinical && c.clinical.note].concat((c.pipeline||[]).map(function(p){ return p.name+' '+p.ind; })).join(' ');
@@ -1523,10 +1584,7 @@
 
     h += '<div class="profile-body">';
 
-    if(c.custom){
-      h += '<div class="profile-section" style="border-top:none;background:var(--accent-soft-2);border-radius:10px;padding:12px 14px">'+
-        '<p class="pi-note" style="margin:0">이 기업은 직접 추가한 항목이라 매출·임상·파이프라인·주가 데이터가 비어 있어요. Claude에게 "'+esc(c.name)+' 데이터 조사해서 채워줘"라고 요청하면 리서치해서 채워드릴 수 있습니다.</p></div>';
-    }
+    if(c.custom) h += aiPanel(c);
 
     if(!c.custom) h += revenueSection(c);
 
@@ -1541,7 +1599,7 @@
     else { h += '<p class="profile-empty">공개된 파이프라인 상세 정보가 없습니다.</p>'; }
     h += '</div>';
 
-    if(!c.custom && CAT_MAP) h += companyNewsSection(c);   // CAT_MAP is set once the news module has run
+    if((!c.custom || c.analyzed) && CAT_MAP) h += companyNewsSection(c);   // CAT_MAP is set once the news module has run
 
     // 주가 현황
     h += '<div class="profile-section"><h4>📈 주가 현황</h4>';
@@ -1559,7 +1617,7 @@
     }
     h += '</div>';
 
-    if(!c.custom) h += reportsSection(c);
+    if(!c.custom || c.analyzed) h += reportsSection(c);
 
     // 자금 현황
     h += '<div class="profile-section"><h4>💰 자금 현황</h4>';
@@ -1765,7 +1823,39 @@
     addForm.hidden = !addForm.hidden;
     if(!addForm.hidden) document.getElementById('add-name').focus();
   });
-  addCancelBtn.addEventListener('click', function(){ addForm.reset(); addForm.hidden = true; });
+  addCancelBtn.addEventListener('click', function(){ addForm.reset(); addResults.innerHTML = ''; addForm.hidden = true; });
+
+  // stock search: Naver autocomplete candidates, confirmed through the Toss API on the server
+  var addSearch = document.getElementById('add-search');
+  var addResults = document.getElementById('add-search-results');
+  var searchTimer = null, searchSeq = 0;
+  addSearch.addEventListener('keydown', function(e){ if(e.key === 'Enter') e.preventDefault(); });
+  addSearch.addEventListener('input', function(){
+    clearTimeout(searchTimer);
+    var q = addSearch.value.trim();
+    if(!q){ addResults.innerHTML = ''; return; }
+    if(!/^https?:$/.test(location.protocol)){ addResults.innerHTML = '<small>검색은 서버(hoaiserver:8765/bio/)에서 열었을 때만 동작해요.</small>'; return; }
+    searchTimer = setTimeout(function(){
+      var seq = ++searchSeq;
+      fetch('api/search?q='+encodeURIComponent(q)).then(function(r){ return r.json(); }).then(function(d){
+        if(seq !== searchSeq) return;
+        var items = (d && d.items) || [];
+        if(!items.length){ addResults.innerHTML = '<small>'+esc(d && d.error || '검색 결과가 없어요.')+'</small>'; return; }
+        addResults.innerHTML = items.map(function(x, i){
+          return '<button type="button" data-i="'+i+'"><span>'+esc(x.name)+(x.englishName && x.englishName !== x.name ? ' <small>'+esc(x.englishName)+'</small>' : '')+'</span>'+
+                 '<small>'+esc(x.code)+' · '+esc(x.market)+(x.toss ? ' · Toss ✓' : ' · Toss 미지원')+'</small></button>';
+        }).join('');
+        addResults.onclick = function(e){
+          var b = e.target.closest('button[data-i]'); if(!b) return;
+          var x = items[+b.dataset.i];
+          document.getElementById('add-name').value = x.name;
+          document.getElementById('add-ticker').value = x.code+'·'+x.market;
+          document.getElementById('add-region').value = x.region;
+          addResults.querySelectorAll('button').forEach(function(o){ o.classList.toggle('on', o === b); });
+        };
+      }).catch(function(){ if(seq === searchSeq) addResults.innerHTML = '<small>검색 요청에 실패했어요.</small>'; });
+    }, 250);
+  });
   addForm.addEventListener('submit', function(e){
     e.preventDefault();
     var name = document.getElementById('add-name').value.trim();
@@ -1778,13 +1868,16 @@
       id:id, name:name, ticker:ticker, region:region,
       platform: memo ? memo : '사용자가 직접 추가한 기업 — 상세 데이터 없음',
       clinical: memo ? {status:'neutral', statusLabel:'사용자 메모', note:memo} : null,
-      pipeline:[], stock:null, funding:[], custom:true
+      pipeline:[], funding:[], custom:true,
+      stock: /·/.test(ticker) ? {price:'—', currency:'', change:0, target:'—', targetDate:'', asOf:'', note:''} : null
     };
     customCompanies.push(c);
     saveCustom();
     refreshAll();
     addForm.reset();
+    addResults.innerHTML = '';
     addForm.hidden = true;
+    if(window.bioAfterAdd) window.bioAfterAdd(c);
     selectCompany(id);
     var detailBtn = document.querySelector('.tab-btn[data-tab="detail"]');
     if(detailBtn) detailBtn.click();
@@ -1976,6 +2069,54 @@
   });
 
 
+  /* ---------------- AI ANALYSIS (custom companies) ----------------
+     POST api/analyze starts a server-side Claude research job; results land in analysis/<key>.json */
+  var analyses = {};
+  function aiKey(c){ var k = tickerKeyOf(c).toUpperCase(); return /^[0-9A-Z][0-9A-Z.]{0,11}$/.test(k) ? k : ''; }
+  function aiPanel(c){
+    var key = aiKey(c), a = (analyses || {})[key];
+    var h = '<div class="profile-section ai-panel" style="border-top:none;background:var(--accent-soft-2);border-radius:10px;padding:12px 14px">';
+    if(a && a.status === 'done' && a.data && a.data.summary) h += '<p class="ai-summary">🤖 '+esc(a.data.summary)+'</p>';
+    var status = '', label = '🤖 AI 분석 요청', busy = false;
+    if(!key) status = '종목 검색으로 추가한 기업만 AI 분석을 할 수 있어요.';
+    else if(!/^https?:$/.test(location.protocol)) status = 'AI 분석은 서버(hoaiserver:8765/bio/)에서 열었을 때만 동작해요.';
+    else if(a && a.status === 'running'){ busy = true; label = '⏳ 분석 중…'; status = (a.startedAt||'')+' 시작 · 웹 검색으로 조사 중이라 5~15분 정도 걸려요. 창을 닫아도 계속 진행돼요.'; }
+    else if(a && a.status === 'error') status = '분석 실패: '+(a.error||'')+' — 다시 시도해보세요.';
+    else if(a && a.status === 'done'){ label = '🔄 다시 분석'; status = (a.finishedAt||'')+' AI 분석 결과 · 사실 여부는 근거 링크로 확인하세요.'; }
+    else status = '버튼을 누르면 AI가 임상·파이프라인·자금·목표주가를 웹에서 찾아 채워요.';
+    h += '<div class="ai-row">'+(key && /^https?:$/.test(location.protocol) ? '<button type="button" class="btn-add" data-ai="'+c.id+'"'+(busy?' disabled':'')+'>'+label+'</button>' : '')+
+         '<span class="ai-status">'+esc(status)+'</span></div>';
+    if(a && a.status === 'done' && a.data) h += srcLinks(a.data.sources, '근거');
+    return h + '</div>';
+  }
+  function applyAnalysis(c){
+    var a = (analyses || {})[aiKey(c)];
+    if(!a || a.status !== 'done' || !a.data) return;
+    var d = a.data;
+    c.analyzed = true;
+    if(d.platform) c.platform = d.platform;
+    if(d.clinical) c.clinical = d.clinical;
+    c.pipeline = d.pipeline || [];
+    // fundCard renders raw HTML, so escape AI text here
+    c.funding = (d.funding || []).map(function(f){ return {title:esc(f.title), amt:esc(f.amt), date:esc(f.date), desc:esc(f.desc)}; });
+    c.reports = d.reports || [];
+    if(!c.stock) c.stock = {price:'—', currency:'', change:0, target:'—', targetDate:'', asOf:'', note:''};
+    if(d.stock){ c.stock.target = d.stock.target || '—'; c.stock.targetDate = d.stock.targetDate || ''; c.stock.note = d.stock.note || ''; }
+  }
+  var aiPolls = {};
+  function loadAnalysis(c, rerenderFn){
+    var key = aiKey(c); if(!key) return;
+    fetch('analysis/'+key+'.json', {cache:'no-store'}).then(function(r){ return r.ok ? r.json() : null; }).then(function(a){
+      if(!a) return;
+      analyses[key] = a;
+      applyAnalysis(c);
+      rerenderFn();
+      if(a.status === 'running' && !aiPolls[key]){
+        aiPolls[key] = setTimeout(function(){ aiPolls[key] = null; loadAnalysis(c, rerenderFn); }, 10000);
+      }
+    }).catch(function(){});
+  }
+
   /* ---------------- SERVER DATA (hoaiserver:8765/bio/) ----------------
      Only active when served over http(s): reports/index.json, news/news.json (fetch_*.py)
      and api/prices = {items:{"196170":{price:"249,500", change:-2.16, currency:"₩", asOf:"..."}}} */
@@ -1988,7 +2129,8 @@
         if(!d || !d.items) return;
         baseCompanies().forEach(function(c){
           var q = d.items[priceKey(c)];
-          if(!q || !c.stock) return;
+          if(!q) return;
+          if(!c.stock){ if(!c.custom) return; c.stock = {price:'—', currency:'', change:0, target:'—', targetDate:'', asOf:'', note:''}; }
           c.stock.price = q.price; c.stock.currency = q.currency; c.stock.change = q.change;
           c.stock.asOf = String(q.asOf||'').slice(2,10).replace(/-/g,'.');
         });
@@ -1999,6 +2141,20 @@
     getJSON('news/news.json').then(function(d){ if(d){ liveNews = d; renderNews(); renderNewsTop(); } });
     loadPrices();
     setInterval(loadPrices, 60000);
+    customCompanies.forEach(function(c){ loadAnalysis(c, rerender); });
+    window.bioAfterAdd = function(c){ loadAnalysis(c, rerender); };
+    profileEl.addEventListener('click', function(e){
+      var b = e.target.closest('[data-ai]'); if(!b) return;
+      var c = baseCompanies().filter(function(x){ return x.id === b.dataset.ai; })[0]; if(!c) return;
+      var key = aiKey(c), done = analyses[key] && analyses[key].status === 'done';
+      b.disabled = true;
+      fetch('api/analyze', {method:'POST', headers:{'Content-Type':'application/json'},
+        body: JSON.stringify({key:key, name:c.name, market:String(c.ticker).split('·')[1]||'', region:c.region, force:done})})
+        .then(function(r){ return r.json(); }).then(function(d){
+          if(!d.ok){ alert(d.error || '분석 요청 실패'); b.disabled = false; return; }
+          loadAnalysis(c, rerender);
+        }).catch(function(){ alert('분석 요청 실패'); b.disabled = false; });
+    });
   }
 
 })();

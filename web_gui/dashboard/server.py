@@ -150,6 +150,9 @@ class Handler(BaseHTTPRequestHandler):
                 self.send_header("Location", "/bio/")
                 self.end_headers()
                 return
+            if parsed.path == "/bio/api/search":
+                self._json(HTTPStatus.OK, bio.search(parse_qs(parsed.query).get("q", [""])[0]))
+                return
             if parsed.path == "/bio/api/prices":
                 self._json(HTTPStatus.OK, bio.prices())
                 return
@@ -199,6 +202,13 @@ class Handler(BaseHTTPRequestHandler):
                     {"ok": True},
                     {"Set-Cookie": f"mumae_v2_session=; HttpOnly; SameSite=Strict; Path=/; Max-Age=0{self._cookie_flags()}"},
                 )
+                return
+            if parsed.path == "/bio/api/analyze":
+                # The board has no login of its own; accept same-origin requests only.
+                origin = self.headers.get("Origin") or ""
+                if urlparse(origin).netloc != (self.headers.get("Host") or ""):
+                    raise PermissionError("허용되지 않은 요청 출처입니다.")
+                self._json(HTTPStatus.OK, bio.start_analysis(self._body()))
                 return
             self._validate()
             if parsed.path == "/api/command":
