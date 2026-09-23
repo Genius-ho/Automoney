@@ -35,7 +35,7 @@ UA = "Mozilla/5.0"  # Yahoo 429s full browser UA strings from scripts
 SYMBOL_OVERRIDES = {"xbi": "XBI"}
 
 _price_lock = threading.Lock()
-_price_cache: tuple[float, dict[str, object]] | None = None
+_price_cache: tuple[float, dict[str, object], set[str]] | None = None
 
 
 def _get_json(url: str) -> dict:
@@ -76,12 +76,23 @@ def _gl_quote(symbol: str) -> dict[str, object]:
     return {"price": f"{price:,.2f}", "change": round(change, 2), "currency": "$", "asOf": as_of + " KST"}
 
 
-def prices() -> dict[str, object]:
+def parse_extra(raw: str) -> dict[str, str]:
+    """'068270:kr,RXRX:gl' from the page (user-added companies) -> {key: region}, capped."""
+    extra = {}
+    for part in raw.split(",")[:20]:
+        key, _, region = part.strip().upper().partition(":")
+        if KEY_RE.match(key) and region in {"KR", "GL"}:
+            extra[key] = region.lower()
+    return extra
+
+
+def prices(extra: dict[str, str] | None = None) -> dict[str, object]:
     global _price_cache
     with _price_lock:
-        if _price_cache and time.time() - _price_cache[0] < PRICE_TTL:
+        wanted = {**analyzed_symbols(), **page_symbols(), **(extra or {})}
+        if _price_cache and time.time() - _price_cache[0] < PRICE_TTL and set(wanted) <= set(_price_cache[2]):
             return _price_cache[1]
-        symbols = {**analyzed_symbols(), **page_symbols()}
+        symbols = wanted
 
         def one(item: tuple[str, str]) -> tuple[str, dict[str, object] | None]:
             key, region = item
@@ -93,7 +104,7 @@ def prices() -> dict[str, object]:
         with ThreadPoolExecutor(max_workers=8) as pool:
             items = {key: quote for key, quote in pool.map(one, symbols.items()) if quote}
         payload = {"ok": True, "generatedAt": time.strftime("%Y-%m-%d %H:%M:%S"), "items": items}
-        _price_cache = (time.time(), payload)
+        _price_cache = (time.time(), payload, set(symbols))
         return payload
 
 
@@ -139,19 +150,17 @@ def start_refreshers() -> None:
 
 
 # ---------------------------------------------------------------- search
-_toss = None
+# Set by the dashboard server to the engine's broker. Toss allows one live token per
+# client, so a second TossBroker here would revoke the trading engine's token.
+broker_provider = None
 
 
 def _toss_lookup(symbols: list[str]) -> dict[str, dict]:
     """Confirm candidates against Toss (it only looks up by symbol, it has no name search)."""
-    global _toss
-    if not symbols:
+    if not symbols or broker_provider is None:
         return {}
     try:
-        if _toss is None:
-            from toss_api import TossBroker
-            _toss = TossBroker()
-        result = _toss._request("GET", "/api/v1/stocks?symbols=" + ",".join(symbols)).get("result") or []
+        result = broker_provider()._request("GET", "/api/v1/stocks?symbols=" + ",".join(symbols)).get("result") or []
     except Exception:  # noqa: BLE001 - search still works from Naver alone
         return {}
     return {str(x.get("symbol")): x for x in result if isinstance(x, dict)}

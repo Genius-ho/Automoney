@@ -146,7 +146,7 @@ class TossBroker:
                     error_code = json.loads(body).get("error", {}).get("code")
                 except json.JSONDecodeError:
                     error_code = None
-                if error_code in {"invalid-token", "expired-token"}:
+                if error_code in {"invalid-token", "expired-token", "token-revoked"}:
                     self._access_token = None
                     self._token_expires_at = 0.0
                     request_headers["Authorization"] = f"Bearer {self._token()}"

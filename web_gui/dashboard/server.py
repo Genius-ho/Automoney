@@ -154,7 +154,7 @@ class Handler(BaseHTTPRequestHandler):
                 self._json(HTTPStatus.OK, bio.search(parse_qs(parsed.query).get("q", [""])[0]))
                 return
             if parsed.path == "/bio/api/prices":
-                self._json(HTTPStatus.OK, bio.prices())
+                self._json(HTTPStatus.OK, bio.prices(bio.parse_extra(parse_qs(parsed.query).get("extra", [""])[0])))
                 return
             if parsed.path in {"/bio/", "/bio/index.html"}:
                 path = bio.BIO_PAGE
@@ -301,6 +301,7 @@ def run(
         scheduler.start()
         telegram_loop = TelegramCommandLoop(active_engine, active_engine.telegram)
         telegram_loop.start()
+    bio.broker_provider = active_engine.broker if active_engine is not None else None
     bio.start_refreshers()
     url = f"http://127.0.0.1:{port}/"
     print(f"Mumae CLI Engine + Emergency Dashboard: {url}")

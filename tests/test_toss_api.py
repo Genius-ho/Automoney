@@ -177,5 +177,19 @@ class TossRateLimitTests(unittest.TestCase):
         self.assertEqual(seen_headers[1]["Authorization"], "Bearer refreshed-token")
 
 
+    @patch("requests.Session.request")
+    def test_refreshes_token_when_toss_reports_it_revoked(self, mocked_request):
+        # Toss revokes the previous token whenever a new one is issued for the same client.
+        revoked = _fake_response(401, '{"error":{"code":"token-revoked"}}')
+        ok = _fake_response(200, '{"result":"ok"}')
+        mocked_request.side_effect = [revoked, ok]
+        broker = TossBroker()
+        broker._token = MagicMock(side_effect=["old-token", "new-token"])
+
+        result = broker._request("GET", "/test")
+
+        self.assertEqual(result, {"result": "ok"})
+        self.assertEqual(broker._token.call_count, 2)
+
 if __name__ == "__main__":
     unittest.main()

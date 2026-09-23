@@ -2167,7 +2167,7 @@
     var h = '<div class="profile-section ai-panel" style="border-top:none;background:var(--accent-soft-2);border-radius:10px;padding:12px 14px">';
     if(a && a.status === 'done' && a.data && a.data.summary) h += '<p class="ai-summary">🤖 '+esc(a.data.summary)+'</p>';
     var status = '', label = '🤖 AI 분석 요청', busy = false;
-    if(!key) status = '종목 검색으로 추가한 기업만 AI 분석을 할 수 있어요.';
+    if(!key) status = '종목코드를 찾지 못했어요. 이 기업을 삭제한 뒤 "+ 새 기업 추가"의 종목 검색에서 결과를 눌러 다시 추가해 주세요.';
     else if(!/^https?:$/.test(location.protocol)) status = 'AI 분석은 서버(hoaiserver:8765/bio/)에서 열었을 때만 동작해요.';
     else if(a && a.status === 'running'){ busy = true; label = '⏳ 분석 중…'; status = (a.startedAt||'')+' 시작 · 웹 검색으로 조사 중이라 5~15분 정도 걸려요. 창을 닫아도 계속 진행돼요.'; }
     else if(a && a.status === 'error') status = '분석 실패: '+(a.error||'')+' — 다시 시도해보세요.';
@@ -2216,7 +2216,8 @@
     var priceKey = function(c){ return c.id === 'xbi' ? 'XBI' : tickerKeyOf(c); };
     var rerender = function(){ refreshAll(); if(currentCompanyId) selectCompany(currentCompanyId); };
     var loadPrices = function(){
-      getJSON('api/prices').then(function(d){
+      var extra = customCompanies.map(function(c){ var k = aiKey(c); return k ? k+':'+c.region : ''; }).filter(Boolean).join(',');
+      getJSON('api/prices'+(extra ? '?extra='+encodeURIComponent(extra) : '')).then(function(d){
         if(!d || !d.items) return;
         baseCompanies().forEach(function(c){
           var q = d.items[priceKey(c)];
@@ -2232,7 +2233,18 @@
     getJSON('news/news.json').then(function(d){ if(d){ liveNews = d; renderNews(); renderNewsTop(); } });
     loadPrices();
     setInterval(loadPrices, 60000);
-    customCompanies.forEach(function(c){ loadAnalysis(c, rerender); });
+    customCompanies.forEach(function(c){
+      if(aiKey(c)){ loadAnalysis(c, rerender); return; }
+      // added before stock search worked: find the code by name so the AI button can appear
+      getJSON('api/search?q='+encodeURIComponent(c.name)).then(function(d){
+        var items = (d && d.items) || [];
+        var x = items.filter(function(i){ return i.name === c.name; })[0] || (items.length === 1 ? items[0] : null);
+        if(!x) return;
+        c.ticker = x.code+'·'+x.market; c.region = x.region;
+        if(!c.stock) c.stock = {price:'—', currency:'', change:0, target:'—', targetDate:'', asOf:'', note:''};
+        saveCustom(); rerender(); loadPrices(); loadAnalysis(c, rerender);
+      });
+    });
     window.bioAfterAdd = function(c){ loadAnalysis(c, rerender); };
     profileEl.addEventListener('click', function(e){
       var b = e.target.closest('[data-ai]'); if(!b) return;
