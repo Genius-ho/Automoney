@@ -228,6 +228,13 @@ ANALYSIS_SCHEMA = {
             "required": ["date", "broker", "title"]}},
         "events": {"type": "array", "items": {"type": "object", "properties": {
             "date": {"type": "string"}, "label": {"type": "string"}}, "required": ["date", "label"]}},
+        "risk": {"type": "object", "properties": {
+            "riskLevel": {"type": "string", "enum": ["low", "medium", "high"]},
+            "summary": {"type": "string", "description": "회사 홍보와 달리 실제 약점·리스크·회의적 시각 3~5문장"},
+            "points": {"type": "array", "maxItems": 4, "items": {"type": "object", "properties": {
+                "title": {"type": "string"}, "note": {"type": "string"}}, "required": ["title", "note"]}},
+            "sources": _SRC},
+            "required": ["riskLevel", "summary", "points"]},
         "patents": {"type": "object", "properties": {
             "overview": {"type": "string", "description": "특허 절벽 위험 1~2문장"},
             "drugs": {"type": "array", "maxItems": 4, "items": {"type": "object", "properties": {
@@ -244,7 +251,7 @@ ANALYSIS_SCHEMA = {
             "sources": _SRC}, "required": ["name", "ticker", "field", "why", "compare"]}},
         "sources": _SRC,
     },
-    "required": ["platform", "summary", "clinical", "pipeline", "stock", "funding", "patents", "competitors", "sources"],
+    "required": ["platform", "summary", "clinical", "pipeline", "stock", "funding", "patents", "risk", "competitors", "sources"],
 }
 
 _jobs_lock = threading.Lock()
@@ -286,6 +293,7 @@ def _prompt(name: str, key: str, market: str, region: str) -> str:
 - 증권사/애널리스트 목표주가와 의견 (국내는 최근 증권사 리포트, 해외는 컨센서스)
 - 향후 주요 일정(톱라인, 학회 발표, PDUFA 등)
 - 주요 제품/신약/플랫폼(최대 4개)의 핵심 특허·독점권 만료 연도와 남은 기간
+- 비판적 시각: 1차 평가변수 미충족 여부, 사후분석/하위그룹 의존, 전문가의 회의적 의견, 과장된 발표 여부 (회사 홍보를 그대로 믿지 말고 비판적으로 조사)
 - 업계 주요 경쟁사 Top 3 (핵심 사업·기술과 직접 경쟁하는 곳, 중요도 순, 상장사 우선)
 
 작성 규칙:
