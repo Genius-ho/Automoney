@@ -1676,11 +1676,32 @@
     return h + '</div></div>';
   }
 
+  // per-company sticky-note memo (localStorage only, never sent anywhere)
+  var NOTES_KEY = 'bio-dash-notes-v1';
+  var notes = {};
+  try{ notes = JSON.parse(localStorage.getItem(NOTES_KEY) || '{}') || {}; }catch(e){ notes = {}; }
+  function saveNotes(){ try{ localStorage.setItem(NOTES_KEY, JSON.stringify(notes)); }catch(e){} }
+  function stickyNote(c){
+    return '<div class="sticky-note"><div class="sn-label"><span>📝 내 메모</span><span class="sn-saved" data-sn-saved>저장됨</span></div>'+
+      '<textarea data-sn="'+c.id+'" placeholder="이 기업에 대한 생각을 적어보세요…">'+esc(notes[c.id] || '')+'</textarea></div>';
+  }
+  document.addEventListener('input', function(e){
+    var ta = e.target.closest('[data-sn]'); if(!ta) return;
+    notes[ta.dataset.sn] = ta.value;
+    saveNotes();
+    var flag = ta.closest('.sticky-note').querySelector('[data-sn-saved]');
+    flag.classList.add('show');
+    clearTimeout(flag._t);
+    flag._t = setTimeout(function(){ flag.classList.remove('show'); }, 1200);
+  });
+
   function renderProfile(c){
     var h = '<div class="profile-head"><div class="card-head">';
     h += '<div class="card-title"><h3>'+esc(c.name)+'</h3><span class="ticker mono">'+esc(c.ticker)+'</span><span class="tag '+(c.region==='kr'?'kr':'gl')+'">'+(c.region==='kr'?'국내':'해외')+'</span>'+(c.custom?'<span class="tag custom">직접 추가</span>':'')+'</div>';
     h += (c.clinical ? statusBadge(c.clinical.status, esc(c.clinical.statusLabel)) : '');
-    h += '</div><div class="platform">'+esc(c.platform)+'</div>';
+    h += stickyNote(c);
+    h += '</div>';
+    h += '<div class="platform">'+esc(c.platform)+'</div>';
     h += learnHints(c);
     h += '<button type="button" class="profile-del" data-del="'+c.id+'">🗑 이 기업 목록에서 삭제</button>';
     h += '</div>';
@@ -2246,7 +2267,13 @@
   if(/^https?:$/.test(location.protocol)){
     var getJSON = function(u){ return fetch(u, {cache:'no-store'}).then(function(r){ return r.ok ? r.json() : null; }).catch(function(){ return null; }); };
     var priceKey = function(c){ return c.id === 'xbi' ? 'XBI' : tickerKeyOf(c); };
-    var rerender = function(){ refreshAll(); if(currentCompanyId) selectCompany(currentCompanyId); };
+    // Skip while the user is typing a sticky-note memo -- a full re-render would
+    // blow away focus/cursor position. The underlying data is already updated in
+    // memory, so the next rerender (next poll) picks it up.
+    var rerender = function(){
+      if(document.activeElement && document.activeElement.matches && document.activeElement.matches('[data-sn]')) return;
+      refreshAll(); if(currentCompanyId) selectCompany(currentCompanyId);
+    };
     var loadPrices = function(){
       var extra = customCompanies.map(function(c){ var k = aiKey(c); return k ? k+':'+c.region : ''; }).filter(Boolean).join(',');
       getJSON('api/prices'+(extra ? '?extra='+encodeURIComponent(extra) : '')).then(function(d){
