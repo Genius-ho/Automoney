@@ -245,6 +245,15 @@
   .chip .chip-ticker{font-family:inherit;font-variant-numeric:tabular-nums;font-size:10.5px;color:var(--ink-faint);font-weight:500}
   .chip.active{background:var(--accent);color:var(--on-accent);border-color:var(--accent)}
   .chip.active .chip-ticker{color:var(--on-accent);opacity:.75}
+  .ctag-dot{flex:0 0 auto;width:11px;height:11px;border-radius:50%;border:1.5px solid var(--line);background:transparent;padding:0;cursor:pointer;transition:.15s}
+  .ctag-dot:hover{border-color:var(--ink-faint);transform:scale(1.15)}
+  .ctag-dot[data-tag="red"]{background:#e5484d;border-color:#e5484d}
+  .ctag-dot[data-tag="yellow"]{background:#e8a100;border-color:#e8a100}
+  .ctag-dot[data-tag="black"]{background:var(--ink);border-color:var(--ink)}
+  .card-title[data-tag="red"] h3,.chip-main[data-tag="red"]{color:#e5484d!important}
+  .card-title[data-tag="yellow"] h3,.chip-main[data-tag="yellow"]{color:#b17900!important}
+  .card-title[data-tag="black"] h3,.chip-main[data-tag="black"]{color:var(--ink)!important;font-weight:800}
+  .chip.active .chip-main[data-tag]{color:var(--on-accent)!important}
   .chip-del{
     flex:0 0 auto;width:20px;height:20px;border-radius:50%;display:flex;align-items:center;justify-content:center;
     font-size:15px;line-height:1;color:var(--ink-faint);cursor:pointer;transition:.15s;
@@ -1474,9 +1483,32 @@
     return html;
   }
 
+  // per-company color tag (red/yellow/black) -- purely personal, saved to localStorage,
+  // click the small dot to cycle: 없음 → 빨강 → 노랑 → 검정 → 없음
+  var CTAG_KEY = 'bio-dash-ctags-v1';
+  var CTAG_CYCLE = [null, 'red', 'yellow', 'black'];
+  var CTAG_LABEL = {red:'관심(빨강)', yellow:'주의(노랑)', black:'중요(검정)'};
+  var ctags = {};
+  try{ ctags = JSON.parse(localStorage.getItem(CTAG_KEY) || '{}') || {}; }catch(e){ ctags = {}; }
+  function saveCtags(){ try{ localStorage.setItem(CTAG_KEY, JSON.stringify(ctags)); }catch(e){} }
+  function ctagDot(c){
+    var t = ctags[c.id] || '';
+    var next = CTAG_CYCLE[(CTAG_CYCLE.indexOf(t || null) + 1) % CTAG_CYCLE.length] || '';
+    var title = t ? '내 표시: '+CTAG_LABEL[t]+' · 클릭하면 다음 색으로' : '클릭해서 이 기업에 색 표시하기';
+    return '<button type="button" class="ctag-dot" data-tag="'+t+'" data-ctag="'+c.id+'" data-next="'+next+'" title="'+esc(title)+'" aria-label="'+esc(title)+'"></button>';
+  }
+  document.addEventListener('click', function(e){
+    var dot = e.target.closest('[data-ctag]'); if(!dot) return;
+    e.preventDefault(); e.stopPropagation();
+    var next = dot.dataset.next;
+    if(next) ctags[dot.dataset.ctag] = next; else delete ctags[dot.dataset.ctag];
+    saveCtags();
+    renderIndex(); renderPickers();
+  }, true);
+
   function indexCard(c){
     var h = '<div class="card" data-id="'+c.id+'" style="gap:8px;cursor:pointer">';
-    h += '<div class="card-head"><div class="card-title"><h3 style="font-size:15px">'+esc(c.name)+'</h3></div><span class="tag '+(c.region==='kr'?'kr':'gl')+'">'+(c.region==='kr'?'국내':'해외')+'</span></div>';
+    h += '<div class="card-head"><div class="card-title" data-tag="'+(ctags[c.id]||'')+'">'+ctagDot(c)+'<h3 style="font-size:15px">'+esc(c.name)+'</h3></div><span class="tag '+(c.region==='kr'?'kr':'gl')+'">'+(c.region==='kr'?'국내':'해외')+'</span></div>';
     h += '<div class="ticker mono">'+esc(c.ticker)+'</div>';
     h += '<div class="platform" style="font-size:12.5px">'+esc(c.platform)+'</div>';
     if(c.clinical) h += statusBadge(c.clinical.status, c.clinical.statusLabel);
@@ -1496,7 +1528,8 @@
 
   function chip(c){
     return '<div class="chip" data-id="'+c.id+'">'+
-      '<span class="chip-main" data-select="'+c.id+'"><span>'+esc(c.name)+'</span><span class="chip-ticker mono">'+esc(c.ticker)+'</span></span>'+
+      ctagDot(c)+
+      '<span class="chip-main" data-select="'+c.id+'" data-tag="'+(ctags[c.id]||'')+'"><span>'+esc(c.name)+'</span><span class="chip-ticker mono">'+esc(c.ticker)+'</span></span>'+
       '<span class="chip-del" data-del="'+c.id+'" title="목록에서 삭제">×</span>'+
     '</div>';
   }
