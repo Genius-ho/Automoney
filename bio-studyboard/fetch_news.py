@@ -57,6 +57,83 @@ CATS = [  # (category, regex on lower-cased title) — first match wins
 ]
 
 
+# 번역기가 회사명을 직역하지 않도록 보호할 고유명사 목록 (해외 바이오 전문지 헤드라인에 자주 등장)
+KNOWN_NAMES = [
+    "Eli Lilly", "Lilly", "Pfizer", "Novo Nordisk", "Merck", "Regeneron", "Moderna", "Novartis",
+    "AbbVie", "AstraZeneca", "Amgen", "Roche", "Genentech", "Recursion Pharmaceuticals", "Recursion",
+    "Illumina", "Bristol Myers Squibb", "Bristol-Myers Squibb", "Gilead Sciences", "Gilead", "Sanofi",
+    "GSK", "GlaxoSmithKline", "Johnson & Johnson", "J&J", "Vertex Pharmaceuticals", "Vertex", "Biogen",
+    "Alnylam", "Sarepta Therapeutics", "Sarepta", "BioNTech", "argenx", "Ionis Pharmaceuticals", "Ionis",
+    "Incyte", "Legend Biotech", "Genmab", "United Therapeutics", "Takeda", "Bayer", "Boehringer Ingelheim",
+    "Eisai", "Daiichi Sankyo", "Jazz Pharmaceuticals", "Jazz", "Horizon Therapeutics", "Seagen",
+    "Immunovant", "Halozyme", "Halozyme Therapeutics",
+]
+
+
+def _protect_names(title):
+    """번역 전 고유명사를 자리표시자로 바꾸고, 복원용 매핑을 돌려줍니다."""
+    mapping = {}
+    protected = title
+    for i, name in enumerate(sorted(KNOWN_NAMES, key=len, reverse=True)):
+        placeholder = f"Zzq{i}Zzq"
+        pattern = re.compile(re.escape(name), re.IGNORECASE)
+        if pattern.search(protected):
+            protected = pattern.sub(placeholder, protected)
+            mapping[placeholder] = name
+    return protected, mapping
+
+
+def _restore_names(text, mapping):
+    for placeholder, name in mapping.items():
+        # 번역기가 대소문자를 바꾸거나 공백을 넣기도 해서 느슨하게 매칭
+        text = re.sub(re.escape(placeholder), name, text, flags=re.IGNORECASE)
+    return text
+
+
+def translate_titles(items, cache_path, sleep=0.4, max_calls=200):
+    """해외(region='gl') 헤드라인 제목을 한국어로 번역해 item['titleKo']에 채웁니다.
+    MyMemory 무료 API(키 불필요, 일일 쿼터 제한)를 쓰고, 캐시 파일로 중복 번역을 피합니다."""
+    try:
+        cache = json.load(open(cache_path, encoding="utf-8"))
+    except Exception:
+        cache = {}
+    calls = 0
+    for item in items:
+        if item.get("region") != "gl":
+            continue
+        title = item["title"]
+        key = re.sub(r"[\W_]+", "", title.lower())[:80]
+        cached = cache.get(key)
+        if cached:
+            item["titleKo"] = cached
+            continue
+        if calls >= max_calls:
+            continue  # 다음 실행에서 이어서 번역 (캐시에 없는 항목만 남음)
+        try:
+            protected, mapping = _protect_names(title)
+            q = urllib.parse.quote(protected[:490])
+            resp = fetch(f"https://api.mymemory.translated.net/get?q={q}&langpair=en|ko", timeout=10)
+            data = json.loads(resp)
+            translated = (data.get("responseData") or {}).get("translatedText", "").strip()
+            # MyMemory returns the English source back on failure/quota-exceeded; skip those
+            if translated and translated.lower() != protected.lower() and "MYMEMORY WARNING" not in translated:
+                translated = _restore_names(translated, mapping)
+                item["titleKo"] = translated
+                cache[key] = translated
+        except Exception as e:
+            print(f"[번역 실패] {title[:40]}...: {e}", file=sys.stderr)
+        calls += 1
+        time.sleep(sleep)
+    # 캐시가 무한히 커지지 않도록 최근 4000건만 보관
+    if len(cache) > 4000:
+        cache = dict(list(cache.items())[-4000:])
+    try:
+        json.dump(cache, open(cache_path, "w", encoding="utf-8"), ensure_ascii=False, indent=0)
+    except Exception:
+        pass
+    return items
+
+
 def fetch(url, timeout=15):
     req = urllib.request.Request(url, headers={"User-Agent": UA, "Accept": "application/rss+xml, application/xml, text/xml, */*"})
     with urllib.request.urlopen(req, timeout=timeout) as r:
@@ -193,12 +270,15 @@ def main():
     items.sort(key=lambda x: x["date"], reverse=True)
     items = items[: a.max]
     os.makedirs(os.path.join(a.out, "news"), exist_ok=True)
+    cache_path = os.path.join(a.out, "news", "translate_cache.json")
+    items = translate_titles(items, cache_path)
+    translated = sum(1 for x in items if x.get("titleKo"))
     path = os.path.join(a.out, "news", "news.json")
     tmp = path + ".tmp"
     json.dump({"generatedAt": dt.datetime.now().strftime("%Y-%m-%d %H:%M"), "items": items},
               open(tmp, "w", encoding="utf-8"), ensure_ascii=False, indent=1)
     os.replace(tmp, path)
-    print(f"완료: 피드 {ok}개 성공 / {fail}개 실패, 헤드라인 {len(items)}개 → {path}")
+    print(f"완료: 피드 {ok}개 성공 / {fail}개 실패, 헤드라인 {len(items)}개(번역 {translated}건) → {path}")
 
 
 if __name__ == "__main__":

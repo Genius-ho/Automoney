@@ -440,6 +440,7 @@
   .ncard h3 a{color:var(--ink);text-decoration:none}
   .ncard h3 a:hover{color:var(--accent);text-decoration:underline;text-underline-offset:3px}
   .nsum{font-size:14px;color:var(--ink-soft);line-height:1.65;margin:0}
+  .ntr-orig{display:block;font-size:11.5px;font-weight:500;color:var(--ink-faint);margin-top:2px;font-style:italic}
   .nwhy{font-size:13.5px;color:var(--ink);line-height:1.55;background:var(--accent-soft-2);border-radius:8px;padding:7px 10px;margin:0}
   .nfoot{display:flex;flex-wrap:wrap;gap:6px 10px;align-items:center;font-size:11.5px;color:var(--ink-faint)}
   .nco{font-size:11.5px;font-weight:600;color:var(--accent);background:transparent;border:1px solid var(--line);border-radius:6px;padding:2px 7px;cursor:pointer;font-family:inherit}
@@ -2085,6 +2086,13 @@
     if(ids.length) return ids.map(function(id){ return '<button type="button" class="nco" data-goto="'+id+'">'+esc(companyById(id).name)+' →</button>'; }).join('');
     return x.companyLabel ? '<span class="nco plain">'+esc(x.companyLabel)+'</span>' : '';
   }
+  // foreign headlines get a rough Korean auto-translation (titleKo, from fetch_news.py);
+  // show it as the main title and keep the original as a small caption underneath
+  function newsTitleHtml(x){
+    if(!x.titleKo) return esc(x.title);
+    return esc(x.titleKo)+'<span class="ntr-orig">🌐 '+esc(x.title)+'</span>';
+  }
+
   function newsCard(x){
     var cat = CAT_MAP[x.category] || {l:x.category, i:''};
     var u = safeUrl(x.url);
@@ -2092,7 +2100,7 @@
       '<span class="ncat">'+cat.i+' '+esc(cat.l)+'</span>'+
       '<span class="tag '+(x.region==='kr'?'kr':'gl')+'">'+(x.region==='kr'?'국내':'해외')+'</span>'+
       (IMPACT[x.impact] ? '<span class="nimp '+x.impact+'">'+IMPACT[x.impact]+'</span>' : '')+'</div>';
-    h += '<h3>'+(u ? '<a href="'+u+'" target="_blank" rel="noopener">'+esc(x.title)+' ↗</a>' : esc(x.title))+'</h3>';
+    h += '<h3>'+(u ? '<a href="'+u+'" target="_blank" rel="noopener">'+newsTitleHtml(x)+' ↗</a>' : newsTitleHtml(x))+'</h3>';
     if(x.summary) h += '<p class="nsum">'+esc(x.summary)+'</p>';
     if(x.why) h += '<p class="nwhy">💡 '+esc(x.why)+'</p>';
     h += '<div class="nfoot">'+coChips(x)+'<span>'+esc(x.source||'')+' · '+fmtDay(x.date)+'</span></div>';
@@ -2132,7 +2140,7 @@
       var li = liveNews.items.filter(function(x){ return newsMatches(x); }).slice(0, 15);
       live.innerHTML = li.length ? '<div class="nlive"><h4>🔄 최신 헤드라인 — 서버 자동 수집 <small>'+esc(liveNews.generatedAt||'')+' 기준 · 요약 없이 제목만</small></h4>'+
         li.map(function(x){ var u = safeUrl(x.url); return '<div class="nline"><span class="d">'+esc((x.date||'').slice(5).replace('-','.'))+'</span><span>'+
-          (u?'<a href="'+u+'" target="_blank" rel="noopener">'+esc(x.title)+'</a>':esc(x.title))+'<small>'+esc(x.source||'')+'</small></span></div>'; }).join('')+'</div>' : '';
+          (u?'<a href="'+u+'" target="_blank" rel="noopener">'+newsTitleHtml(x)+'</a>':newsTitleHtml(x))+'<small>'+esc(x.source||'')+'</small></span></div>'; }).join('')+'</div>' : '';
     } else live.innerHTML = '';
   }
   function renderNewsTop(){
@@ -2151,12 +2159,12 @@
     h += '<div class="pnews">';
     n.cur.slice(0,5).forEach(function(x){
       var u = safeUrl(x.url), cat = CAT_MAP[x.category] || {l:'',i:''};
-      h += '<div class="row"><span class="d">'+fmtDay(x.date)+'</span><div>'+(u?'<a href="'+u+'" target="_blank" rel="noopener">':'')+cat.i+' '+esc(x.title)+(u?' ↗</a>':'')+
+      h += '<div class="row"><span class="d">'+fmtDay(x.date)+'</span><div>'+(u?'<a href="'+u+'" target="_blank" rel="noopener">':'')+cat.i+' '+newsTitleHtml(x)+(u?' ↗</a>':'')+
            (IMPACT[x.impact]?' <span class="nimp '+x.impact+'">'+IMPACT[x.impact]+'</span>':'')+'<p>'+esc(x.summary)+'</p></div></div>';
     });
     n.live.slice(0,5).forEach(function(x){
       var u = safeUrl(x.url);
-      h += '<div class="row"><span class="d">'+fmtDay(x.date)+'</span><div>'+(u?'<a href="'+u+'" target="_blank" rel="noopener">':'')+esc(x.title)+(u?' ↗</a>':'')+'<p>'+esc(x.source||'')+' · 자동 수집</p></div></div>';
+      h += '<div class="row"><span class="d">'+fmtDay(x.date)+'</span><div>'+(u?'<a href="'+u+'" target="_blank" rel="noopener">':'')+newsTitleHtml(x)+(u?' ↗</a>':'')+'<p>'+esc(x.source||'')+' · 자동 수집</p></div></div>';
     });
     return h + '</div></div>';
   }
