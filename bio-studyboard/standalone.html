@@ -443,6 +443,8 @@
   .ntr-orig{display:block;font-size:11.5px;font-weight:500;color:var(--ink-faint);margin-top:2px;font-style:italic}
   .nwhy{font-size:13.5px;color:var(--ink);line-height:1.55;background:var(--accent-soft-2);border-radius:8px;padding:7px 10px;margin:0}
   .nfoot{display:flex;flex-wrap:wrap;gap:6px 10px;align-items:center;font-size:11.5px;color:var(--ink-faint)}
+  .gtrans{color:var(--accent);text-decoration:none;font-weight:600}
+  .gtrans:hover{text-decoration:underline}
   .nco{font-size:11.5px;font-weight:600;color:var(--accent);background:transparent;border:1px solid var(--line);border-radius:6px;padding:2px 7px;cursor:pointer;font-family:inherit}
   .nco:hover{border-color:var(--accent);background:var(--accent-soft-2)}
   .nco.plain{color:var(--ink-soft);cursor:default}
@@ -2089,8 +2091,16 @@
   // foreign headlines get a rough Korean auto-translation (titleKo, from fetch_news.py);
   // show it as the main title and keep the original as a small caption underneath
   function newsTitleHtml(x){
-    if(!x.titleKo) return esc(x.title);
-    return esc(x.titleKo)+'<span class="ntr-orig">🌐 '+esc(x.title)+'</span>';
+    if(!x.titleKo) return '<span lang="en">'+esc(x.title)+'</span>';
+    return esc(x.titleKo)+'<span class="ntr-orig" lang="en">🌐 '+esc(x.title)+'</span>';
+  }
+  // opens the article through Google Translate's page-translate proxy -- full-article
+  // quality translation via the browser, not just the machine-translated headline above
+  function gtransLink(x){
+    if(x.region !== 'gl') return '';
+    var u = safeUrl(x.url); if(!u) return '';
+    var proxied = 'https://translate.google.com/translate?sl=auto&tl=ko&u=' + encodeURIComponent(u);
+    return '<a class="gtrans" href="'+esc(proxied)+'" target="_blank" rel="noopener">🌐 구글 번역으로 기사 보기</a>';
   }
 
   function newsCard(x){
@@ -2103,7 +2113,7 @@
     h += '<h3>'+(u ? '<a href="'+u+'" target="_blank" rel="noopener">'+newsTitleHtml(x)+' ↗</a>' : newsTitleHtml(x))+'</h3>';
     if(x.summary) h += '<p class="nsum">'+esc(x.summary)+'</p>';
     if(x.why) h += '<p class="nwhy">💡 '+esc(x.why)+'</p>';
-    h += '<div class="nfoot">'+coChips(x)+'<span>'+esc(x.source||'')+' · '+fmtDay(x.date)+'</span></div>';
+    h += '<div class="nfoot">'+coChips(x)+gtransLink(x)+'<span>'+esc(x.source||'')+' · '+fmtDay(x.date)+'</span></div>';
     return h + '</article>';
   }
   function newsMatches(x, ignoreCat){
@@ -2140,7 +2150,7 @@
       var li = liveNews.items.filter(function(x){ return newsMatches(x); }).slice(0, 15);
       live.innerHTML = li.length ? '<div class="nlive"><h4>🔄 최신 헤드라인 — 서버 자동 수집 <small>'+esc(liveNews.generatedAt||'')+' 기준 · 요약 없이 제목만</small></h4>'+
         li.map(function(x){ var u = safeUrl(x.url); return '<div class="nline"><span class="d">'+esc((x.date||'').slice(5).replace('-','.'))+'</span><span>'+
-          (u?'<a href="'+u+'" target="_blank" rel="noopener">'+newsTitleHtml(x)+'</a>':newsTitleHtml(x))+'<small>'+esc(x.source||'')+'</small></span></div>'; }).join('')+'</div>' : '';
+          (u?'<a href="'+u+'" target="_blank" rel="noopener">'+newsTitleHtml(x)+'</a>':newsTitleHtml(x))+'<small>'+esc(x.source||'')+'</small>'+gtransLink(x)+'</span></div>'; }).join('')+'</div>' : '';
     } else live.innerHTML = '';
   }
   function renderNewsTop(){
@@ -2164,7 +2174,7 @@
     });
     n.live.slice(0,5).forEach(function(x){
       var u = safeUrl(x.url);
-      h += '<div class="row"><span class="d">'+fmtDay(x.date)+'</span><div>'+(u?'<a href="'+u+'" target="_blank" rel="noopener">':'')+newsTitleHtml(x)+(u?' ↗</a>':'')+'<p>'+esc(x.source||'')+' · 자동 수집</p></div></div>';
+      h += '<div class="row"><span class="d">'+fmtDay(x.date)+'</span><div>'+(u?'<a href="'+u+'" target="_blank" rel="noopener">':'')+newsTitleHtml(x)+(u?' ↗</a>':'')+'<p>'+esc(x.source||'')+' · 자동 수집'+(x.region==='gl'?' · '+gtransLink(x):'')+'</p></div></div>';
     });
     return h + '</div></div>';
   }
