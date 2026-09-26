@@ -307,12 +307,21 @@
   .chart-axis{font-family:inherit;font-size:9.5px;fill:var(--ink-faint)}
   .chart-grid{stroke:var(--line-soft);stroke-width:1}
   .chart-line{fill:none;stroke:var(--accent);stroke-width:1.8;stroke-linejoin:round;stroke-linecap:round}
+  .evt-hit{stroke:transparent;stroke-width:12;cursor:pointer}
+  .evt-vline{stroke-width:1.4;stroke-dasharray:3 3;opacity:.55;pointer-events:none}
+  .evt-marker.hi .evt-vline{opacity:1;stroke-width:1.8}
+  .evt-marker.hi circle{r:6.5}
   .evt-good{fill:var(--good);stroke:var(--surface);stroke-width:1.5;cursor:pointer}
+  .evt-vline.evt-good{stroke:var(--good)}
+  .evt-vline.evt-warn{stroke:var(--warn)}
+  .evt-vline.evt-crit{stroke:var(--crit)}
+  .evt-vline.evt-neutral{stroke:var(--ink-faint)}
   .evt-warn{fill:var(--warn);stroke:var(--surface);stroke-width:1.5;cursor:pointer}
   .evt-crit{fill:var(--crit);stroke:var(--surface);stroke-width:1.5;cursor:pointer}
   .evt-neutral{fill:var(--ink-faint);stroke:var(--surface);stroke-width:1.5;cursor:pointer}
   .chart-legend{display:flex;flex-direction:column;gap:8px;margin-top:10px}
   .chart-legend-row{border-left:3px solid var(--line);padding:2px 0 2px 10px;font-size:13px}
+  .chart-legend-row.hi{background:var(--accent-soft-2);border-left-color:var(--accent);border-radius:0 6px 6px 0}
   .chart-legend-row b{font-family:inherit;font-variant-numeric:tabular-nums;margin-right:4px}
   .chart-legend-row p{margin:3px 0 0;color:var(--ink-soft);line-height:1.55}
   .evt-dot{display:inline-block;width:8px;height:8px;border-radius:50%;margin-right:6px;vertical-align:1px}
@@ -2419,27 +2428,40 @@
       }).join('');
       var hist = (c.history || []).slice().sort(function(a, b){ return a.date < b.date ? -1 : 1; });
       var markers = '', legend = '';
-      hist.forEach(function(ev){
+      hist.forEach(function(ev, i){
         var evT = Date.parse(/^\d{4}-\d{2}$/.test(ev.date) ? ev.date + '-15' : ev.date) / 1000;
-        legend += '<div class="chart-legend-row"><span class="evt-dot evt-'+(ev.impact || 'neutral')+'"></span><b>'+esc(ev.date)+'</b> '+esc(ev.label)+'<p>'+esc(ev.note)+'</p>'+srcLinks(ev.sources, '근거')+'</div>';
+        legend += '<div class="chart-legend-row" data-evt="'+i+'"><span class="evt-dot evt-'+(ev.impact || 'neutral')+'"></span><b>'+esc(ev.date)+'</b> '+esc(ev.label)+'<p>'+esc(ev.note)+'</p>'+srcLinks(ev.sources, '근거')+'</div>';
         if(!evT || evT < t0 || evT > t1) return;
         var nearest = pts[0], nd = Math.abs(pts[0].t - evT);
         pts.forEach(function(p){ var dd = Math.abs(p.t - evT); if(dd < nd){ nd = dd; nearest = p; } });
         var x = sx(nearest.t), y = sy(nearest.c);
-        markers += '<circle cx="'+x.toFixed(1)+'" cy="'+y.toFixed(1)+'" r="4.5" class="evt-'+(ev.impact || 'neutral')+'"><title>'+esc(ev.date+' · '+ev.label+' — '+ev.note)+'</title></circle>';
+        // a wide, invisible line gives an easy hover target; the thin dashed one underneath is what's seen
+        markers += '<g class="evt-marker" data-evt="'+i+'" tabindex="0">'+
+          '<line x1="'+x.toFixed(1)+'" y1="'+padT+'" x2="'+x.toFixed(1)+'" y2="'+(H - padB)+'" class="evt-hit"/>'+
+          '<line x1="'+x.toFixed(1)+'" y1="'+padT+'" x2="'+x.toFixed(1)+'" y2="'+(H - padB)+'" class="evt-vline evt-'+(ev.impact || 'neutral')+'"/>'+
+          '<circle cx="'+x.toFixed(1)+'" cy="'+y.toFixed(1)+'" r="4.5" class="evt-'+(ev.impact || 'neutral')+'"/>'+
+          '<title>'+esc(ev.date+' · '+ev.label+' — '+ev.note)+'</title></g>';
       });
       var svg = '<svg class="stock-chart" viewBox="0 0 '+W+' '+H+'" role="img" aria-label="'+esc(c.name)+' 3년 주간 종가 차트">'+
         axis + '<path d="'+path+'" class="chart-line"/>' + markers + xLabels + '</svg>';
       return '<div class="stock-chart-inner">'+svg+'</div>'+(legend ? '<div class="chart-legend">'+legend+'</div>' : '');
     }
+    // hovering an event's vertical line/dot on the chart highlights its matching legend row, and vice versa
+    function wireChartHover(container){
+      function setHi(idx, on){
+        container.querySelectorAll('[data-evt="'+idx+'"]').forEach(function(el){ el.classList.toggle('hi', on); });
+      }
+      container.addEventListener('mouseover', function(e){ var m = e.target.closest('[data-evt]'); if(m) setHi(m.dataset.evt, true); });
+      container.addEventListener('mouseout', function(e){ var m = e.target.closest('[data-evt]'); if(m) setHi(m.dataset.evt, false); });
+    }
     window.bioLoadChart = function(c){
       var km = chartKeyMarket(c); if(!km.key) return;
       var container = document.getElementById('chart-'+c.id); if(!container) return;
       var cacheKey = km.key+'|'+c.region+'|'+km.market;
-      if(histCache[cacheKey]){ container.innerHTML = buildChartHtml(histCache[cacheKey], c); return; }
+      if(histCache[cacheKey]){ container.innerHTML = buildChartHtml(histCache[cacheKey], c); wireChartHover(container); return; }
       getJSON('api/history?key='+encodeURIComponent(km.key)+'&region='+encodeURIComponent(c.region)+'&market='+encodeURIComponent(km.market)).then(function(d){
         histCache[cacheKey] = d;
-        if(currentCompanyId === c.id) container.innerHTML = buildChartHtml(d, c);
+        if(currentCompanyId === c.id){ container.innerHTML = buildChartHtml(d, c); wireChartHover(container); }
       });
     };
     if(currentCompanyId){
