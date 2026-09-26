@@ -150,6 +150,11 @@ class Handler(BaseHTTPRequestHandler):
                 self.send_header("Location", "/bio/")
                 self.end_headers()
                 return
+            if parsed.path == "/bio/api/history":
+                q = parse_qs(parsed.query)
+                self._json(HTTPStatus.OK, bio.history(
+                    q.get("key", [""])[0], q.get("region", ["gl"])[0], q.get("market", [""])[0]))
+                return
             if parsed.path == "/bio/api/search":
                 self._json(HTTPStatus.OK, bio.search(parse_qs(parsed.query).get("q", [""])[0]))
                 return

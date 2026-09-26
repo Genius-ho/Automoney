@@ -76,6 +76,48 @@ def _gl_quote(symbol: str) -> dict[str, object]:
     return {"price": f"{price:,.2f}", "change": round(change, 2), "currency": "$", "asOf": as_of + " KST"}
 
 
+HISTORY_TTL = 6 * 3600
+_history_lock = threading.Lock()
+_history_cache: dict[str, tuple[float, dict]] = {}
+
+
+def history(key: str, region: str, market: str = "") -> dict[str, object]:
+    """Weekly closes for up to 3 years, from Yahoo Finance (same source as the quote feed)."""
+    key = key.strip().upper()
+    if not KEY_RE.match(key):
+        return {"ok": False, "error": "잘못된 종목코드입니다."}
+    if region == "kr":
+        suffix = ".KS" if "KOSPI" in market.upper() else ".KQ"
+        symbol = key + suffix
+    else:
+        symbol = key
+    cache_key = f"{symbol}"
+    with _history_lock:
+        cached = _history_cache.get(cache_key)
+        if cached and time.time() - cached[0] < HISTORY_TTL:
+            return cached[1]
+    try:
+        data = _get_json(f"https://query1.finance.yahoo.com/v8/finance/chart/{symbol}?range=3y&interval=1wk")
+        result = data["chart"]["result"][0]
+        timestamps = result["timestamp"]
+        closes = result["indicators"]["quote"][0]["close"]
+        currency = result["meta"].get("currency", "")
+        points = [
+            {"t": t, "c": round(c, 4)}
+            for t, c in zip(timestamps, closes)
+            if c is not None
+        ]
+        payload = {"ok": True, "symbol": symbol, "currency": currency, "points": points}
+    except Exception as error:  # noqa: BLE001 - a bad symbol shouldn't break the page
+        payload = {"ok": False, "error": f"시세 이력을 가져오지 못했습니다: {error}"}
+    with _history_lock:
+        _history_cache[cache_key] = (time.time(), payload)
+        if len(_history_cache) > 200:
+            oldest = min(_history_cache, key=lambda k: _history_cache[k][0])
+            _history_cache.pop(oldest, None)
+    return payload
+
+
 def parse_extra(raw: str) -> dict[str, str]:
     """'068270:kr,RXRX:gl' from the page (user-added companies) -> {key: region}, capped."""
     extra = {}
@@ -228,6 +270,11 @@ ANALYSIS_SCHEMA = {
             "required": ["date", "broker", "title"]}},
         "events": {"type": "array", "items": {"type": "object", "properties": {
             "date": {"type": "string"}, "label": {"type": "string"}}, "required": ["date", "label"]}},
+        "history": {"type": "array", "minItems": 3, "maxItems": 8, "description": "지난 3년간 주가에 영향을 준 주요 사건", "items": {"type": "object", "properties": {
+            "date": {"type": "string", "description": "YYYY-MM-DD 또는 YYYY-MM"},
+            "label": {"type": "string"}, "impact": {"type": "string", "enum": ["good", "warn", "crit", "neutral"]},
+            "note": {"type": "string"}, "sources": _SRC},
+            "required": ["date", "label", "impact", "note"]}},
         "risk": {"type": "object", "properties": {
             "riskLevel": {"type": "string", "enum": ["low", "medium", "high"]},
             "summary": {"type": "string", "description": "회사 홍보와 달리 실제 약점·리스크·회의적 시각 3~5문장"},
@@ -251,7 +298,7 @@ ANALYSIS_SCHEMA = {
             "sources": _SRC}, "required": ["name", "ticker", "field", "why", "compare"]}},
         "sources": _SRC,
     },
-    "required": ["platform", "summary", "clinical", "pipeline", "stock", "funding", "patents", "risk", "competitors", "sources"],
+    "required": ["platform", "summary", "clinical", "pipeline", "stock", "funding", "patents", "risk", "history", "competitors", "sources"],
 }
 
 _jobs_lock = threading.Lock()
@@ -294,6 +341,7 @@ def _prompt(name: str, key: str, market: str, region: str) -> str:
 - 향후 주요 일정(톱라인, 학회 발표, PDUFA 등)
 - 주요 제품/신약/플랫폼(최대 4개)의 핵심 특허·독점권 만료 연도와 남은 기간
 - 비판적 시각: 1차 평가변수 미충족 여부, 사후분석/하위그룹 의존, 전문가의 회의적 의견, 과장된 발표 여부 (회사 홍보를 그대로 믿지 말고 비판적으로 조사)
+- 지난 3년간 주가에 영향을 준 주요 사건(임상 결과, 허가/CRL, 기술수출, 유상증자, 실적 등) 최대 8개, 날짜와 주가 영향(impact) 포함
 - 업계 주요 경쟁사 Top 3 (핵심 사업·기술과 직접 경쟁하는 곳, 중요도 순, 상장사 우선)
 
 작성 규칙:
