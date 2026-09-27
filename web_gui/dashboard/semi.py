@@ -1,0 +1,414 @@
+"""Semiconductor supply-chain study board: static page, collected reports/news,
+and a live price feed.
+
+Served under /semi/ on the dashboard server. Collected data lives in
+data/semistudy/ and is refreshed by background threads that run the
+semi-studyboard fetch scripts. Structurally a twin of bio.py -- same
+mechanics (search, prices, history, AI analysis), different domain wording.
+"""
+from __future__ import annotations
+
+import json
+import re
+import subprocess
+import sys
+import threading
+import time
+import urllib.parse
+import urllib.request
+from concurrent.futures import ThreadPoolExecutor
+from pathlib import Path
+
+PROJECT_ROOT = Path(__file__).resolve().parents[2]
+BIO_SRC = PROJECT_ROOT / "semi-studyboard"
+BIO_PAGE = BIO_SRC / "standalone.html"
+BIO_DATA = PROJECT_ROOT / "data" / "semistudy"
+VENV_PYTHON = PROJECT_ROOT / ".venv" / "bin" / "python"
+ANALYSIS_DIR = BIO_DATA / "analysis"
+CLAUDE_BIN = Path.home() / ".npm-global" / "bin" / "claude"
+ANALYSIS_TIMEOUT = 20 * 60
+ANALYSIS_COOLDOWN = 10 * 60
+KEY_RE = re.compile(r"^[0-9A-Z][0-9A-Z.]{0,11}$")
+
+PRICE_TTL = 60
+NEWS_INTERVAL = 3 * 3600
+REPORTS_INTERVAL = 12 * 3600
+UA = "Mozilla/5.0"  # Yahoo 429s full browser UA strings from scripts
+# Page companies whose ticker field is not a symbol
+SYMBOL_OVERRIDES = {}
+
+_price_lock = threading.Lock()
+_price_cache: tuple[float, dict[str, object], set[str]] | None = None
+
+
+def _get_json(url: str) -> dict:
+    request = urllib.request.Request(url, headers={"User-Agent": UA, "Accept": "application/json"})
+    with urllib.request.urlopen(request, timeout=8) as response:
+        return json.loads(response.read().decode("utf-8"))
+
+
+def page_symbols() -> dict[str, str]:
+    """Map price key (as the page's tickerKeyOf gives it) to region, read from the page itself."""
+    html = BIO_PAGE.read_text(encoding="utf-8")
+    symbols: dict[str, str] = {}
+    for company_id, ticker, region in re.findall(r'id:"([\w-]+)",[^\n]*?ticker:"([^"]*)",\s*region:"(kr|gl)"', html):
+        key = SYMBOL_OVERRIDES.get(company_id) or ticker.split("·")[0].strip()
+        if key:
+            symbols[key] = region
+    return symbols
+
+
+def _kr_quote(code: str) -> dict[str, object]:
+    data = _get_json(f"https://m.stock.naver.com/api/stock/{code}/basic")
+    return {
+        "price": data["closePrice"],
+        "change": float(data.get("fluctuationsRatio") or 0),
+        "currency": "₩",
+        "asOf": str(data.get("localTradedAt") or "")[:16].replace("T", " "),
+        "status": data.get("marketStatus"),
+    }
+
+
+def _gl_quote(symbol: str) -> dict[str, object]:
+    data = _get_json(f"https://query1.finance.yahoo.com/v8/finance/chart/{symbol}?range=1d&interval=1d")
+    meta = data["chart"]["result"][0]["meta"]
+    price = float(meta["regularMarketPrice"])
+    previous = float(meta.get("chartPreviousClose") or meta.get("previousClose") or 0)
+    change = (price / previous - 1) * 100 if previous else 0.0
+    as_of = time.strftime("%Y-%m-%d %H:%M", time.localtime(int(meta.get("regularMarketTime") or time.time())))
+    return {"price": f"{price:,.2f}", "change": round(change, 2), "currency": "$", "asOf": as_of + " KST"}
+
+
+HISTORY_TTL = 6 * 3600
+_history_lock = threading.Lock()
+_history_cache: dict[str, tuple[float, dict]] = {}
+
+
+def history(key: str, region: str, market: str = "") -> dict[str, object]:
+    """Weekly closes for up to 3 years, from Yahoo Finance (same source as the quote feed)."""
+    key = key.strip().upper()
+    if not KEY_RE.match(key):
+        return {"ok": False, "error": "잘못된 종목코드입니다."}
+    if region == "kr":
+        suffix = ".KS" if "KOSPI" in market.upper() else ".KQ"
+        symbol = key + suffix
+    else:
+        symbol = key
+    cache_key = f"{symbol}"
+    with _history_lock:
+        cached = _history_cache.get(cache_key)
+        if cached and time.time() - cached[0] < HISTORY_TTL:
+            return cached[1]
+    try:
+        data = _get_json(f"https://query1.finance.yahoo.com/v8/finance/chart/{symbol}?range=3y&interval=1wk")
+        result = data["chart"]["result"][0]
+        timestamps = result["timestamp"]
+        closes = result["indicators"]["quote"][0]["close"]
+        currency = result["meta"].get("currency", "")
+        points = [
+            {"t": t, "c": round(c, 4)}
+            for t, c in zip(timestamps, closes)
+            if c is not None
+        ]
+        payload = {"ok": True, "symbol": symbol, "currency": currency, "points": points}
+    except Exception as error:  # noqa: BLE001 - a bad symbol shouldn't break the page
+        payload = {"ok": False, "error": f"시세 이력을 가져오지 못했습니다: {error}"}
+    with _history_lock:
+        _history_cache[cache_key] = (time.time(), payload)
+        if len(_history_cache) > 200:
+            oldest = min(_history_cache, key=lambda k: _history_cache[k][0])
+            _history_cache.pop(oldest, None)
+    return payload
+
+
+def parse_extra(raw: str) -> dict[str, str]:
+    """'068270:kr,RXRX:gl' from the page (user-added companies) -> {key: region}, capped."""
+    extra = {}
+    for part in raw.split(",")[:20]:
+        key, _, region = part.strip().upper().partition(":")
+        if KEY_RE.match(key) and region in {"KR", "GL"}:
+            extra[key] = region.lower()
+    return extra
+
+
+def prices(extra: dict[str, str] | None = None) -> dict[str, object]:
+    global _price_cache
+    with _price_lock:
+        wanted = {**analyzed_symbols(), **page_symbols(), **(extra or {})}
+        if _price_cache and time.time() - _price_cache[0] < PRICE_TTL and set(wanted) <= set(_price_cache[2]):
+            return _price_cache[1]
+        symbols = wanted
+
+        def one(item: tuple[str, str]) -> tuple[str, dict[str, object] | None]:
+            key, region = item
+            try:
+                return key, (_kr_quote(key) if region == "kr" else _gl_quote(key))
+            except Exception:  # noqa: BLE001 - one bad symbol must not break the feed
+                return key, None
+
+        with ThreadPoolExecutor(max_workers=8) as pool:
+            items = {key: quote for key, quote in pool.map(one, symbols.items()) if quote}
+        payload = {"ok": True, "generatedAt": time.strftime("%Y-%m-%d %H:%M:%S"), "items": items}
+        _price_cache = (time.time(), payload, set(symbols))
+        return payload
+
+
+def data_file(relative: str) -> Path | None:
+    """Resolve /bio/reports/... or /bio/news/... to a file inside BIO_DATA, refusing traversal."""
+    if not relative.startswith(("reports/", "news/", "analysis/")):
+        return None
+    root = BIO_DATA.resolve()
+    path = (root / relative).resolve()
+    if root not in path.parents or not path.is_file():
+        return None
+    return path
+
+
+def _run_fetcher(script: str, extra: list[str] | None = None) -> None:
+    python = str(VENV_PYTHON if VENV_PYTHON.exists() else sys.executable)
+    BIO_DATA.mkdir(parents=True, exist_ok=True)
+    log = BIO_DATA / f"{Path(script).stem}.log"
+    with log.open("a", encoding="utf-8") as handle:
+        handle.write(f"\n=== {time.strftime('%Y-%m-%d %H:%M:%S')} ===\n")
+        handle.flush()
+        subprocess.run(
+            [python, str(BIO_SRC / script), *(extra or ["--html", str(BIO_PAGE)]), "--out", str(BIO_DATA)],
+            stdout=handle, stderr=subprocess.STDOUT, timeout=1800, check=False,
+        )
+
+
+def _loop(script: str, interval: int) -> None:
+    while True:
+        try:
+            _run_fetcher(script)
+            added = [key for key, region in analyzed_symbols().items() if region == "kr" and key.isdigit()]
+            if script == "fetch_reports.py" and added:
+                _run_fetcher(script, ["--codes", ",".join(added)])
+        except Exception:  # noqa: BLE001 - keep the refresher alive
+            pass
+        time.sleep(interval)
+
+
+def start_refreshers() -> None:
+    for script, interval in (("fetch_news.py", NEWS_INTERVAL), ("fetch_reports.py", REPORTS_INTERVAL)):
+        threading.Thread(target=_loop, args=(script, interval), name=f"bio-{script}", daemon=True).start()
+
+
+# ---------------------------------------------------------------- search
+# Set by the dashboard server to the engine's broker. Toss allows one live token per
+# client, so a second TossBroker here would revoke the trading engine's token.
+broker_provider = None
+
+
+def _toss_lookup(symbols: list[str]) -> dict[str, dict]:
+    """Confirm candidates against Toss (it only looks up by symbol, it has no name search)."""
+    if not symbols or broker_provider is None:
+        return {}
+    try:
+        result = broker_provider()._request("GET", "/api/v1/stocks?symbols=" + ",".join(symbols)).get("result") or []
+    except Exception:  # noqa: BLE001 - search still works from Naver alone
+        return {}
+    return {str(x.get("symbol")): x for x in result if isinstance(x, dict)}
+
+
+def search(query: str) -> dict[str, object]:
+    query = query.strip()[:40]
+    if not query:
+        return {"ok": True, "items": []}
+    url = "https://ac.stock.naver.com/ac?" + urllib.parse.urlencode({"q": query, "target": "stock,worldstock"})
+    try:
+        raw = _get_json(url).get("items") or []
+    except Exception as error:  # noqa: BLE001
+        return {"ok": False, "error": f"검색 실패: {error}", "items": []}
+    candidates = []
+    for x in raw:
+        nation = x.get("nationCode")
+        if nation not in {"KOR", "USA"} or x.get("category") != "stock":
+            continue
+        candidates.append({
+            "code": str(x.get("code") or ""), "name": x.get("name") or "",
+            "market": x.get("typeCode") or "", "region": "kr" if nation == "KOR" else "gl",
+        })
+    candidates = [c for c in candidates if KEY_RE.match(c["code"])][:10]
+    toss = _toss_lookup([c["code"] for c in candidates])
+    for c in candidates:
+        t = toss.get(c["code"])
+        c["toss"] = bool(t)
+        if t:
+            c["name"] = t.get("name") or c["name"]
+            c["englishName"] = t.get("englishName")
+            c["market"] = t.get("market") or c["market"]
+            c["securityType"] = t.get("securityType")
+    return {"ok": True, "items": candidates}
+
+
+# ---------------------------------------------------------------- AI analysis
+_SRC = {"type": "array", "items": {"type": "object", "properties": {"title": {"type": "string"}, "url": {"type": "string"}}, "required": ["title", "url"]}}
+ANALYSIS_SCHEMA = {
+    "type": "object",
+    "properties": {
+        "platform": {"type": "string", "description": "핵심 기술/플랫폼 한 줄 요약"},
+        "summary": {"type": "string", "description": "투자 관점 3~5문장 요약"},
+        "clinical": {"type": "object", "properties": {
+            "status": {"type": "string", "enum": ["good", "neutral", "warn", "crit"]},
+            "statusLabel": {"type": "string", "description": "업황·실적 한 줄 상태"}, "note": {"type": "string"}},
+            "required": ["status", "statusLabel", "note"]},
+        "pipeline": {"type": "array", "items": {"type": "object", "properties": {
+            "name": {"type": "string", "description": "제품/기술명"}, "ind": {"type": "string", "description": "용도·공정 단계 (예: HBM 패키징용 TC 본더)"},
+            "phase": {"type": "integer", "minimum": 0, "maximum": 4},
+            "phaseLabel": {"type": "array", "items": {"type": "string"}, "minItems": 4, "maxItems": 4, "description": "개발 단계 4단계 (예: 연구개발/시제품/양산 인증/주력 매출)"},
+            "whatItIs": {"type": "string"}, "efficacy": {"type": "string", "description": "성능·스펙·시장 점유율 등"},
+            "note": {"type": "string"}, "next": {"type": "string"}, "sources": _SRC},
+            "required": ["name", "ind", "phase", "phaseLabel", "note"]}},
+        "stock": {"type": "object", "properties": {
+            "target": {"type": "string", "description": "증권사 평균/범위 목표주가, 통화기호 없이. 없으면 —"},
+            "targetDate": {"type": "string"}, "note": {"type": "string"}},
+            "required": ["target", "note"]},
+        "funding": {"type": "array", "items": {"type": "object", "properties": {
+            "title": {"type": "string"}, "amt": {"type": "string"}, "date": {"type": "string"}, "desc": {"type": "string"}},
+            "required": ["title", "amt", "date", "desc"]}},
+        "reports": {"type": "array", "items": {"type": "object", "properties": {
+            "date": {"type": "string"}, "broker": {"type": "string"}, "title": {"type": "string"},
+            "opinion": {"type": "string"}, "target": {"type": "string"}, "url": {"type": "string"}},
+            "required": ["date", "broker", "title"]}},
+        "events": {"type": "array", "items": {"type": "object", "properties": {
+            "date": {"type": "string"}, "label": {"type": "string"}}, "required": ["date", "label"]}},
+        "history": {"type": "array", "minItems": 3, "maxItems": 8, "description": "지난 3년간 주가에 영향을 준 주요 사건", "items": {"type": "object", "properties": {
+            "date": {"type": "string", "description": "YYYY-MM-DD 또는 YYYY-MM"},
+            "label": {"type": "string"}, "impact": {"type": "string", "enum": ["good", "warn", "crit", "neutral"]},
+            "note": {"type": "string"}, "sources": _SRC},
+            "required": ["date", "label", "impact", "note"]}},
+        "risk": {"type": "object", "properties": {
+            "riskLevel": {"type": "string", "enum": ["low", "medium", "high"]},
+            "summary": {"type": "string", "description": "회사 홍보와 달리 실제 약점·리스크·회의적 시각 3~5문장"},
+            "points": {"type": "array", "maxItems": 4, "items": {"type": "object", "properties": {
+                "title": {"type": "string"}, "note": {"type": "string"}}, "required": ["title", "note"]}},
+            "sources": _SRC},
+            "required": ["riskLevel", "summary", "points"]},
+        "patents": {"type": "object", "properties": {
+            "overview": {"type": "string", "description": "핵심 공정·제품 특허의 진입장벽/만료 위험 1~2문장"},
+            "drugs": {"type": "array", "maxItems": 4, "items": {"type": "object", "properties": {
+                "name": {"type": "string", "description": "핵심 특허·기술 이름"}, "status": {"type": "string"},
+                "expiryUS": {"type": "string", "description": "미국 특허 만료 연도, 모르면 미확인"}, "expiryOther": {"type": "string"},
+                "yearsLeft": {"type": "string", "description": "오늘 기준 남은 기간"},
+                "note": {"type": "string"}, "sources": _SRC},
+                "required": ["name", "status", "expiryUS", "expiryOther", "yearsLeft", "note"]}}},
+            "required": ["overview", "drugs"]},
+        "competitors": {"type": "array", "minItems": 3, "maxItems": 3, "items": {"type": "object", "properties": {
+            "name": {"type": "string"}, "ticker": {"type": "string", "description": "예: 128940·KOSPI, LLY·NYSE, 비상장"},
+            "field": {"type": "string", "description": "겹치는 사업/기술 영역"},
+            "why": {"type": "string"}, "compare": {"type": "string", "description": "대상 기업 대비 강점·약점"},
+            "sources": _SRC}, "required": ["name", "ticker", "field", "why", "compare"]}},
+        "sources": _SRC,
+    },
+    "required": ["platform", "summary", "clinical", "pipeline", "stock", "funding", "patents", "risk", "history", "competitors", "sources"],
+}
+
+_jobs_lock = threading.Lock()
+_running: set[str] = set()
+
+
+def _analysis_path(key: str) -> Path:
+    return ANALYSIS_DIR / f"{key}.json"
+
+
+def _write_status(key: str, payload: dict) -> None:
+    ANALYSIS_DIR.mkdir(parents=True, exist_ok=True)
+    tmp = _analysis_path(key).with_suffix(".tmp")
+    tmp.write_text(json.dumps(payload, ensure_ascii=False, indent=1), encoding="utf-8")
+    tmp.replace(_analysis_path(key))
+
+
+def analyzed_symbols() -> dict[str, str]:
+    symbols = {}
+    for path in ANALYSIS_DIR.glob("*.json") if ANALYSIS_DIR.exists() else []:
+        try:
+            meta = json.loads(path.read_text(encoding="utf-8"))
+            symbols[meta["key"]] = meta["region"]
+        except (OSError, ValueError, KeyError):
+            continue
+    return symbols
+
+
+def _prompt(name: str, key: str, market: str, region: str) -> str:
+    today = time.strftime("%Y-%m-%d")
+    where = "국내(한국) 상장" if region == "kr" else "해외 상장"
+    return f"""오늘은 {today}입니다. 반도체 소재·부품·장비(소부장) 투자 학습용 대시보드에 넣을 기업 분석을 해주세요.
+
+대상: {name} (종목코드 {key}, {market}, {where})
+
+웹 검색으로 최신 자료를 충분히 찾아서 조사하세요:
+- 핵심 기술/제품(어느 반도체 공정 단계를 담당하는지), 주요 제품 라인업(개발 단계·용도·성능·다음 일정), 최근 수주·실적 동향
+- 주요 고객사 구성과 의존도, 기술제휴·M&A·증설(캐펙스) 등 자금 현황
+- 증권사/애널리스트 목표주가와 의견 (국내는 최근 증권사 리포트, 해외는 컨센서스)
+- 향후 주요 일정(신제품 양산, 고객사 인증, 실적 발표 등)
+- 핵심 제품/기술(최대 4개)의 특허·진입장벽과 만료 위험
+- 비판적 시각: 회사 발표와 실제 실적의 괴리, 고객사 편중 리스크, 전문가의 회의적 의견, 과장된 발표 여부 (회사 홍보를 그대로 믿지 말고 비판적으로 조사)
+- 지난 3년간 주가에 영향을 준 주요 사건(수주·계약, 실적 발표, 증설, 고객사 다변화, 리콜/품질 이슈 등) 최대 8개, 날짜와 주가 영향(impact) 포함
+- 업계 주요 경쟁사 Top 3 (같은 공정 단계에서 직접 경쟁하는 곳, 중요도 순, 상장사 우선)
+
+작성 규칙:
+- 모든 설명은 한국어, 초보 투자자도 이해할 수 있게 짧고 명확하게.
+- 확인한 사실만 쓰고, 추정은 '추정'이라고 표시. 날짜는 YY.MM.DD 또는 YY.MM 형식.
+- pipeline 은 중요한 순서로 최대 6개. phase 는 phaseLabel 4단계 중 현재 도달한 단계 번호(0~4).
+- 각 주장에 근거가 된 기사/공시 URL 을 sources 에 넣으세요 (실제 방문한 URL만).
+- clinical.status: good(업황 호조) / neutral / warn(불확실성) / crit(심각한 악재).
+"""
+
+
+def _run_analysis(key: str, name: str, market: str, region: str) -> None:
+    started = time.strftime("%Y-%m-%d %H:%M:%S")
+    base = {"key": key, "name": name, "market": market, "region": region, "startedAt": started}
+    try:
+        workdir = ANALYSIS_DIR / "work"
+        workdir.mkdir(parents=True, exist_ok=True)
+        claude = str(CLAUDE_BIN if CLAUDE_BIN.exists() else "claude")
+        proc = subprocess.run(
+            [claude, "-p", _prompt(name, key, market, region),
+             "--output-format", "json", "--json-schema", json.dumps(ANALYSIS_SCHEMA),
+             "--allowedTools", "WebSearch,WebFetch", "--no-session-persistence",
+             "--setting-sources", "", "--strict-mcp-config"],
+            cwd=workdir, capture_output=True, text=True, timeout=ANALYSIS_TIMEOUT, check=False,
+        )
+        result = json.loads(proc.stdout or "{}")
+        data = result.get("structured_output")
+        if proc.returncode != 0 or result.get("is_error") or not isinstance(data, dict):
+            raise RuntimeError((result.get("result") or proc.stderr or "분석 결과가 비어 있습니다.")[:500])
+        _write_status(key, {**base, "status": "done", "finishedAt": time.strftime("%Y-%m-%d %H:%M:%S"), "data": data})
+    except Exception as error:  # noqa: BLE001 - surface any failure to the page
+        _write_status(key, {**base, "status": "error", "finishedAt": time.strftime("%Y-%m-%d %H:%M:%S"), "error": str(error)[:500]})
+    finally:
+        with _jobs_lock:
+            _running.discard(key)
+    if region == "kr" and key.isdigit():
+        try:
+            _run_fetcher("fetch_reports.py", ["--codes", key])
+        except Exception:  # noqa: BLE001
+            pass
+
+
+def start_analysis(body: dict) -> dict[str, object]:
+    key = str(body.get("key") or "").strip().upper()
+    name = str(body.get("name") or "").strip()[:60]
+    market = str(body.get("market") or "").strip()[:20]
+    region = "kr" if body.get("region") == "kr" else "gl"
+    if not KEY_RE.match(key) or not name:
+        raise ValueError("종목코드와 기업명이 필요합니다.")
+    with _jobs_lock:
+        if key in _running:
+            return {"ok": True, "status": "running"}
+        path = _analysis_path(key)
+        if path.exists() and not body.get("force"):
+            try:
+                previous = json.loads(path.read_text(encoding="utf-8"))
+                if previous.get("status") == "done" and time.time() - path.stat().st_mtime < ANALYSIS_COOLDOWN:
+                    return {"ok": True, "status": "done"}
+            except (OSError, ValueError):
+                pass
+        if len(_running) >= 2:
+            raise ValueError("이미 분석이 2건 진행 중입니다. 잠시 후 다시 시도하세요.")
+        _running.add(key)
+    _write_status(key, {"key": key, "name": name, "market": market, "region": region,
+                        "startedAt": time.strftime("%Y-%m-%d %H:%M:%S"), "status": "running"})
+    threading.Thread(target=_run_analysis, args=(key, name, market, region), name=f"bio-ai-{key}", daemon=True).start()
+    return {"ok": True, "status": "running"}

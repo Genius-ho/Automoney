@@ -27,6 +27,7 @@ if str(PROJECT_ROOT) not in sys.path:
 from application_engine import ApplicationEngine, LiveActionsRequiredError  # noqa: E402
 from local_env import load_env  # noqa: E402
 from web_gui.dashboard import bio  # noqa: E402
+from web_gui.dashboard import semi  # noqa: E402
 from telegram_bot import TelegramCommandLoop  # noqa: E402
 from toss_api import TossApiError  # noqa: E402
 from web_gui.dashboard.service import DashboardService, EngineDashboardService  # noqa: E402
@@ -145,9 +146,9 @@ class Handler(BaseHTTPRequestHandler):
                 self._validate()
                 self._json(HTTPStatus.OK, {"ok": True, "etf_overview": self.service.etf_overview()})
                 return
-            if parsed.path == "/bio":
+            if parsed.path in {"/bio", "/semi"}:
                 self.send_response(HTTPStatus.MOVED_PERMANENTLY)
-                self.send_header("Location", "/bio/")
+                self.send_header("Location", parsed.path + "/")
                 self.end_headers()
                 return
             if parsed.path == "/bio/api/history":
@@ -155,16 +156,31 @@ class Handler(BaseHTTPRequestHandler):
                 self._json(HTTPStatus.OK, bio.history(
                     q.get("key", [""])[0], q.get("region", ["gl"])[0], q.get("market", [""])[0]))
                 return
+            if parsed.path == "/semi/api/history":
+                q = parse_qs(parsed.query)
+                self._json(HTTPStatus.OK, semi.history(
+                    q.get("key", [""])[0], q.get("region", ["gl"])[0], q.get("market", [""])[0]))
+                return
             if parsed.path == "/bio/api/search":
                 self._json(HTTPStatus.OK, bio.search(parse_qs(parsed.query).get("q", [""])[0]))
                 return
+            if parsed.path == "/semi/api/search":
+                self._json(HTTPStatus.OK, semi.search(parse_qs(parsed.query).get("q", [""])[0]))
+                return
             if parsed.path == "/bio/api/prices":
                 self._json(HTTPStatus.OK, bio.prices(bio.parse_extra(parse_qs(parsed.query).get("extra", [""])[0])))
+                return
+            if parsed.path == "/semi/api/prices":
+                self._json(HTTPStatus.OK, semi.prices(semi.parse_extra(parse_qs(parsed.query).get("extra", [""])[0])))
                 return
             if parsed.path in {"/bio/", "/bio/index.html"}:
                 path = bio.BIO_PAGE
             elif parsed.path.startswith("/bio/"):
                 path = bio.data_file(unquote(parsed.path[len("/bio/"):]))
+            elif parsed.path in {"/semi/", "/semi/index.html"}:
+                path = semi.BIO_PAGE
+            elif parsed.path.startswith("/semi/"):
+                path = semi.data_file(unquote(parsed.path[len("/semi/"):]))
             else:
                 filename = STATIC_FILES.get(parsed.path)
                 path = self.static_dir / filename if filename else None
@@ -208,12 +224,13 @@ class Handler(BaseHTTPRequestHandler):
                     {"Set-Cookie": f"mumae_v2_session=; HttpOnly; SameSite=Strict; Path=/; Max-Age=0{self._cookie_flags()}"},
                 )
                 return
-            if parsed.path == "/bio/api/analyze":
-                # The board has no login of its own; accept same-origin requests only.
+            if parsed.path in {"/bio/api/analyze", "/semi/api/analyze"}:
+                # Neither board has a login of its own; accept same-origin requests only.
                 origin = self.headers.get("Origin") or ""
                 if urlparse(origin).netloc != (self.headers.get("Host") or ""):
                     raise PermissionError("허용되지 않은 요청 출처입니다.")
-                self._json(HTTPStatus.OK, bio.start_analysis(self._body()))
+                mod = bio if parsed.path.startswith("/bio/") else semi
+                self._json(HTTPStatus.OK, mod.start_analysis(self._body()))
                 return
             self._validate()
             if parsed.path == "/api/command":
@@ -308,6 +325,8 @@ def run(
         telegram_loop.start()
     bio.broker_provider = active_engine.broker if active_engine is not None else None
     bio.start_refreshers()
+    semi.broker_provider = active_engine.broker if active_engine is not None else None
+    semi.start_refreshers()
     url = f"http://127.0.0.1:{port}/"
     print(f"Mumae CLI Engine + Emergency Dashboard: {url}")
     print(f"Shared data: {Handler.service.data_dir}")
