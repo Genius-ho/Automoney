@@ -2185,7 +2185,18 @@
   function gtransLink(x){
     if(x.region !== 'gl') return '';
     var u = safeUrl(x.url); if(!u) return '';
-    var proxied = 'https://translate.google.com/translate?sl=auto&tl=ko&u=' + encodeURIComponent(u);
+    // translate.google.com/translate?u=... (the old proxy) is being blocked in more and more
+    // regions. <host>.translate.goog is the address Chrome's own "translate this page" now
+    // uses, so it works wherever the browser's built-in translate does.
+    var proxied;
+    try{
+      var parsed = new URL(u);
+      var host = parsed.hostname.replace(/\./g, '-') + '.translate.goog';
+      proxied = parsed.protocol + '//' + host + parsed.pathname + parsed.search +
+        (parsed.search ? '&' : '?') + '_x_tr_sl=auto&_x_tr_tl=ko&_x_tr_hl=ko';
+    }catch(e){
+      proxied = 'https://translate.google.com/translate?sl=auto&tl=ko&u=' + encodeURIComponent(u);
+    }
     return '<a class="gtrans" href="'+esc(proxied)+'" target="_blank" rel="noopener">🌐 구글 번역으로 기사 보기</a>';
   }
 
