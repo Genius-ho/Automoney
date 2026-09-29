@@ -19,6 +19,8 @@ import urllib.request
 from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 
+from web_gui.dashboard import board_update
+
 PROJECT_ROOT = Path(__file__).resolve().parents[2]
 BIO_SRC = PROJECT_ROOT / "semi-studyboard"
 BIO_PAGE = BIO_SRC / "standalone.html"
@@ -155,7 +157,7 @@ def prices(extra: dict[str, str] | None = None) -> dict[str, object]:
 
 def data_file(relative: str) -> Path | None:
     """Resolve /bio/reports/... or /bio/news/... to a file inside BIO_DATA, refusing traversal."""
-    if not relative.startswith(("reports/", "news/", "analysis/")):
+    if not relative.startswith(("reports/", "news/", "analysis/", "update/")):
         return None
     root = BIO_DATA.resolve()
     path = (root / relative).resolve()
@@ -190,6 +192,7 @@ def _loop(script: str, interval: int) -> None:
 
 
 def start_refreshers() -> None:
+    board_update.reset_stale(UPDATE_BOARD)
     for script, interval in (("fetch_news.py", NEWS_INTERVAL), ("fetch_reports.py", REPORTS_INTERVAL)):
         threading.Thread(target=_loop, args=(script, interval), name=f"bio-{script}", daemon=True).start()
 
@@ -294,6 +297,14 @@ ANALYSIS_SCHEMA = {
                 "note": {"type": "string"}, "sources": _SRC},
                 "required": ["name", "status", "expiryUS", "expiryOther", "yearsLeft", "note"]}}},
             "required": ["overview", "drugs"]},
+        "investmentScore": {"type": "object", "properties": {
+            "items": {"type": "array", "minItems": 7, "maxItems": 7, "description": "7개 고정 항목을 이 순서 그대로, 각 0~10점", "items": {"type": "object", "properties": {
+                "category": {"type": "string", "enum": ["매출·이익 성장률", "기술 독점력·진입장벽", "가격 결정력", "경영진·오너 평가", "투자 모멘텀", "주주환원", "시가총액·유동성"]},
+                "score": {"type": "integer", "minimum": 0, "maximum": 10, "description": "0=매우 나쁨/근거 없음, 5=평균, 10=업계 최상위 수준. 확인한 사실에 근거해서만 채점"},
+                "note": {"type": "string", "description": "이 점수를 준 근거 1~2문장, 구체적 수치·사실 포함"}},
+                "required": ["category", "score", "note"]}},
+            "summary": {"type": "string", "description": "총평 2~3문장 — 강점과 약점을 균형 있게"}},
+            "required": ["items", "summary"]},
         "competitors": {"type": "array", "minItems": 3, "maxItems": 3, "items": {"type": "object", "properties": {
             "name": {"type": "string"}, "ticker": {"type": "string", "description": "예: 128940·KOSPI, LLY·NYSE, 비상장"},
             "field": {"type": "string", "description": "겹치는 사업/기술 영역"},
@@ -301,7 +312,7 @@ ANALYSIS_SCHEMA = {
             "sources": _SRC}, "required": ["name", "ticker", "field", "why", "compare"]}},
         "sources": _SRC,
     },
-    "required": ["platform", "summary", "clinical", "pipeline", "stock", "funding", "patents", "risk", "history", "competitors", "sources"],
+    "required": ["platform", "summary", "clinical", "pipeline", "stock", "funding", "patents", "risk", "history", "investmentScore", "competitors", "sources"],
 }
 
 _jobs_lock = threading.Lock()
@@ -330,6 +341,16 @@ def analyzed_symbols() -> dict[str, str]:
     return symbols
 
 
+SCORE_CRITERIA = """아래 7개 항목을 각 0~10점으로 채점하세요(추측이 아니라 조사한 사실에 근거).
+  1) 매출·이익 성장률 — 최근 실적 추세와 향후 성장 전망
+  2) 기술 독점력·진입장벽 — 특허·공정 난이도·대체 불가능성
+  3) 가격 결정력 — 협상력, 경쟁 강도, 마진 방어력
+  4) 경영진·오너 평가 — 위에서 조사한 지배구조 이슈를 반영, 실행력·신뢰도
+  5) 투자 모멘텀 — 지금 시점의 수주·증설·신제품 등 촉매
+  6) 주주환원 — 배당·자사주 매입 정책과 실행 이력
+  7) 시가총액·유동성 — 규모가 크고 거래가 활발할수록 높은 점수 (규모가 작다고 무조건 나쁜 건 아니지만 유동성 리스크는 반영)"""
+
+
 def _prompt(name: str, key: str, market: str, region: str) -> str:
     today = time.strftime("%Y-%m-%d")
     where = "국내(한국) 상장" if region == "kr" else "해외 상장"
@@ -346,6 +367,7 @@ def _prompt(name: str, key: str, market: str, region: str) -> str:
 - 비판적 시각: 회사 발표와 실제 실적의 괴리, 고객사 편중 리스크, 전문가의 회의적 의견, 과장된 발표 여부 (회사 홍보를 그대로 믿지 말고 비판적으로 조사)
 - 지난 3년간 주가에 영향을 준 주요 사건(수주·계약, 실적 발표, 증설, 고객사 다변화, 리콜/품질 이슈 등) 최대 8개, 날짜와 주가 영향(impact) 포함
 - 업계 주요 경쟁사 Top 3 (같은 공정 단계에서 직접 경쟁하는 곳, 중요도 순, 상장사 우선)
+- 투자 점수: {SCORE_CRITERIA}
 
 작성 규칙:
 - 모든 설명은 한국어, 초보 투자자도 이해할 수 있게 짧고 명확하게.
@@ -412,3 +434,50 @@ def start_analysis(body: dict) -> dict[str, object]:
                         "startedAt": time.strftime("%Y-%m-%d %H:%M:%S"), "status": "running"})
     threading.Thread(target=_run_analysis, args=(key, name, market, region), name=f"bio-ai-{key}", daemon=True).start()
     return {"ok": True, "status": "running"}
+
+
+# ---------------------------------------------------------------- AI refresh (calendar / news / macro)
+def score_missing() -> None:
+    """Add the investment score to finished analyses that predate it, from the facts already collected."""
+    for path in sorted(ANALYSIS_DIR.glob("*.json")):
+        try:
+            item = json.loads(path.read_text(encoding="utf-8"))
+        except (OSError, ValueError):
+            continue
+        key, data = item.get("key", ""), item.get("data")
+        if item.get("status") != "done" or not isinstance(data, dict) or data.get("investmentScore"):
+            continue
+        with _jobs_lock:
+            if key in _running:
+                continue
+        facts = json.dumps({k: v for k, v in data.items() if k != "sources"}, ensure_ascii=False)
+        prompt = f"""오늘은 {time.strftime("%Y-%m-%d")}입니다. 반도체 소부장 투자 학습용 대시보드의 {item.get("name")} 분석 자료입니다.
+
+{facts}
+
+위 자료에 담긴 사실만 근거로 투자 점수를 매기세요(자료에 없는 내용은 추측하지 말고, 근거가 부족한 항목은 낮게 채점하되 note 에 그 사실을 밝히세요).
+{SCORE_CRITERIA}
+category 는 위 7개를 이 순서 그대로, note 는 근거 1~2문장(구체적 수치·사실 포함), summary 는 강점과 약점을 균형 있게 2~3문장."""
+        schema = {"type": "object", "properties": {"investmentScore": ANALYSIS_SCHEMA["properties"]["investmentScore"]},
+                  "required": ["investmentScore"]}
+        try:
+            score = board_update.run_claude(UPDATE_BOARD, prompt, schema, web=False, timeout=600)["investmentScore"]
+        except Exception:  # noqa: BLE001 - one failed company must not stop the rest
+            continue
+        with _jobs_lock:
+            if key in _running:
+                continue
+            _write_status(key, {**item, "data": {**data, "investmentScore": score}})
+
+
+UPDATE_BOARD = board_update.Board(
+    label="semi", topic="반도체 소재·부품·장비(소부장)", page=BIO_PAGE, data_dir=BIO_DATA, claude_bin=CLAUDE_BIN,
+    news_cats={"clinical": "개발·양산", "approval": "인증·허가", "deal": "수주·M&A", "finance": "실적·자금", "policy": "정책"},
+    macro_hint="SOX·반도체 장비 지출·美 기준금리(FOMC)·국내 반도체 수출 같은 업황 지표를 최신 수치로 확인하세요.",
+    calendar_hint="주요 기업 실적 발표일, 신제품 양산·고객사 인증, 증설·투자 발표, 수출규제·관세 등 정책 일정, 업계 행사(SEMICON 등)를 담으세요.",
+    after=[score_missing],
+)
+
+
+def start_update(part: str = "all") -> dict[str, object]:
+    return board_update.start_update(UPDATE_BOARD, part)

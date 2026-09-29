@@ -130,6 +130,12 @@
   .meta-row{display:flex;gap:10px;flex-wrap:wrap;font-size:13.5px;color:var(--ink-faint)}
   .meta-pill{background:var(--surface);border:1px solid var(--line);padding:4px 10px;border-radius:99px;display:flex;align-items:center;gap:6px}
   .dot{width:6px;height:6px;border-radius:99px;background:var(--good)}
+  .upd-btn{font:inherit;color:var(--accent);background:var(--accent-soft-2);border:1px solid var(--accent);padding:4px 12px;border-radius:99px;cursor:pointer;font-weight:600}
+  .upd-btn:hover:not(:disabled){background:var(--accent);color:var(--surface)}
+  .upd-btn:disabled{opacity:.6;cursor:progress}
+  .upd-msg{font-size:12.5px;color:var(--ink-faint);align-self:center}
+  .upd-msg.err{color:var(--crit)}
+  .upd-row{display:flex;gap:10px;align-items:center;flex-wrap:wrap}
 
   /* ---------- macro strip ---------- */
   .macro{
@@ -292,6 +298,23 @@
   .risk-badge.low{background:var(--good-soft,#e5f5ec);color:var(--good,#1a8a4c)}
   .risk-badge.medium{background:var(--warn-soft,#fff3d6);color:var(--warn,#9a6b00)}
   .risk-badge.high{background:var(--crit-soft,#fde6e6);color:var(--crit,#c22b2b)}
+  .risk-badge.good{background:var(--good-soft,#e5f5ec);color:var(--good,#1a8a4c)}
+  .risk-badge.neutral{background:var(--accent-soft-2);color:var(--accent)}
+  .risk-badge.warn{background:var(--warn-soft,#fff3d6);color:var(--warn,#9a6b00)}
+  .risk-badge.crit{background:var(--crit-soft,#fde6e6);color:var(--crit,#c22b2b)}
+  .score-section{border-top:none;background:var(--accent-soft-2);border-radius:12px;padding:14px 16px}
+  .score-total{display:flex;align-items:center;gap:12px;margin-bottom:6px}
+  .score-total-num{font-family:inherit;font-variant-numeric:tabular-nums;font-size:30px;font-weight:800;line-height:1}
+  .score-total-num span{font-size:15px;font-weight:600;color:var(--ink-faint)}
+  .score-total-num.good{color:var(--good)}
+  .score-total-num.neutral{color:var(--accent)}
+  .score-total-num.warn{color:var(--warn)}
+  .score-total-num.crit{color:var(--crit)}
+  .score-items{display:grid;gap:12px;margin-top:12px}
+  .score-row-top{display:flex;justify-content:space-between;font-size:13.5px;font-weight:600;margin-bottom:4px}
+  .score-bar{height:7px;border-radius:99px;background:var(--surface);overflow:hidden}
+  .score-bar-fill{height:100%;border-radius:99px;background:var(--accent)}
+  .score-row p{margin:4px 0 0;font-size:12.5px;color:var(--ink-soft);line-height:1.5}
   .risk-points{display:grid;gap:8px;margin-top:10px}
   .risk-point{border-left:3px solid var(--crit,#c22b2b);background:var(--surface);border-radius:0 10px 10px 0;padding:8px 12px}
   .risk-point b{display:block;font-size:13px;margin-bottom:2px}
@@ -666,12 +689,14 @@
 <header class="top">
   <div class="top-inner">
     <div class="brand">
-      <span class="eyebrow">Bio Stock Study Board</span>
+      <span class="eyebrow">Semiconductor Study Board</span>
       <h1>반도체 소부장 스터디보드</h1>
       <p class="subtitle">삼성전자·SK하이닉스·마이크론과 분야별 1·2위 소재·부품·장비(소부장) 기업의 업황, 주요 제품·기술, 주가, 특허·경쟁사를 한 화면에서 살펴보는 학습용 대시보드입니다.</p>
     </div>
     <div class="meta-row">
-      <span class="meta-pill"><span class="dot"></span>업데이트 2026.09.22</span>
+      <span class="meta-pill"><span class="dot"></span><span id="upd-date">업데이트 2026.09.22</span></span>
+      <button type="button" class="upd-btn" data-upd="all" data-label="🔄 전체 AI 업데이트" hidden title="Claude Sonnet 5.5 (medium)가 웹 검색으로 캘린더·뉴스·지표를 한 번에 갱신해요">🔄 전체 AI 업데이트</button>
+      <span class="upd-msg" data-upd-msg="all"></span>
       <span class="meta-pill">정보 제공 목적 · 투자 권유 아님</span>
       <div class="view-switch" role="group" aria-label="화면 보기 선택">
         <button type="button" data-view-mode="auto">자동</button>
@@ -682,7 +707,7 @@
     </div>
   </div>
   <div class="top-inner" style="margin-top:0">
-    <div class="macro" style="width:100%">
+    <div class="macro" id="macro" style="width:100%">
       <div class="macro-cell">
         <span class="macro-label">SOX (필라델피아 반도체지수)</span>
         <span class="macro-value up">+64.5% <span style="font-size:12.5px;font-weight:500">YTD</span></span>
@@ -724,6 +749,7 @@
     <div class="section-head">
       <h2>📅 다가오는·최근 촉매 일정 <span class="count" id="count-events"></span></h2>
       <span class="section-note">최근 확정·예정된 수주·실적·증설 이벤트를 시간순으로 정리</span>
+      <span class="upd-row"><button type="button" class="upd-btn" data-upd="calendar" data-label="🔄 캘린더·지표 업데이트" hidden>🔄 캘린더·지표 업데이트</button><span class="upd-msg" data-upd-msg="calendar"></span></span>
     </div>
     <div class="timeline" id="timeline"></div>
     <div class="divider-note">캘린더는 언론 보도·공시 기준 예정일이며, 실적 발표·양산 일정 등은 지연되거나 변경될 수 있습니다. 각 이벤트는 아래 탭에서 더 자세히 확인할 수 있습니다.</div>
@@ -776,7 +802,7 @@
 
   <!-- ===================== NEWS ===================== -->
   <section class="panel" id="panel-news">
-    <div class="section-head"><h2>📰 반도체 뉴스 <span class="count" id="news-count"></span></h2><span class="section-note">국내·해외 실적, 수주, 신규 장비·소재 개발 소식을 쉬운 말로 정리했어요</span></div>
+    <div class="section-head"><h2>📰 반도체 뉴스 <span class="count" id="news-count"></span></h2><span class="section-note">국내·해외 실적, 수주, 신규 장비·소재 개발 소식을 쉬운 말로 정리했어요</span><span class="upd-row"><button type="button" class="upd-btn" data-upd="news" data-label="🔄 뉴스 업데이트" hidden>🔄 뉴스 업데이트</button><span class="upd-msg" data-upd-msg="news"></span></span></div>
     <div class="news-filters">
       <div class="seg" role="group" aria-label="지역">
         <button type="button" data-nregion="all" aria-pressed="true">전체</button>
@@ -1420,6 +1446,30 @@
     return h + '</div>';
   }
 
+  // investment score: 7 fixed categories, 0~10 each, from the AI analysis
+  var SCORE_MAX = 70;
+  function investmentScoreSection(c){
+    var s = c.investmentScore;
+    if(!s || !s.items || !s.items.length) return '';
+    var total = s.items.reduce(function(sum, it){ return sum + (it.score || 0); }, 0);
+    var pct = Math.round(total / SCORE_MAX * 100);
+    var grade = pct >= 80 ? 'good' : pct >= 60 ? 'neutral' : pct >= 40 ? 'warn' : 'crit';
+    var gradeLabel = pct >= 80 ? '우수' : pct >= 60 ? '양호' : pct >= 40 ? '보통' : '주의';
+    var h = '<div class="profile-section score-section"><h4>🎯 투자 점수 (AI 평가)</h4>';
+    h += '<div class="score-total"><div class="score-total-num '+grade+'">'+total+'<span>/'+SCORE_MAX+'</span></div>'+
+         '<span class="risk-badge '+grade+'">'+gradeLabel+'</span></div>';
+    if(s.summary) h += '<p class="pi-note">'+esc(s.summary)+'</p>';
+    h += '<div class="score-items">';
+    s.items.forEach(function(it){
+      var w = Math.round((it.score||0) / 10 * 100);
+      h += '<div class="score-row"><div class="score-row-top"><span>'+esc(it.category)+'</span><b>'+(it.score||0)+'/10</b></div>'+
+           '<div class="score-bar"><div class="score-bar-fill" style="width:'+w+'%"></div></div>'+
+           '<p>'+esc(it.note)+'</p></div>';
+    });
+    h += '</div><p class="basis">AI가 조사한 사실을 바탕으로 매긴 참고용 점수예요. 투자 판단의 근거로 그대로 쓰지 말고, 각 항목의 근거를 직접 확인하세요.</p></div>';
+    return h;
+  }
+
   // skeptical / bear-case view (base companies: RISKS map; custom: AI analysis)
   var RISK_LABEL = {low:'🟢 낮음 — 근거는 비교적 탄탄', medium:'🟡 보통 — 일부 약점 있음', high:'🔴 높음 — 회의적 시각 큼'};
   function riskSection(c){
@@ -1534,6 +1584,7 @@
     else { h += '<p class="profile-empty">공개된 제품 상세 정보가 없습니다.</p>'; }
     h += '</div>';
 
+    h += investmentScoreSection(c);
     h += riskSection(c);
     h += governanceSection(c);
     h += patentsSection(c);
@@ -1615,15 +1666,19 @@
 
   // timeline
   var tl = document.getElementById('timeline');
-  events.forEach(function(e){
-    var row = document.createElement('div');
-    row.className = 'tl-row'+(e.past?' past':'');
-    row.innerHTML = '<div class="tl-date mono">'+e.date+'</div>'+
-      '<div class="tl-body"><div class="tl-title">'+e.label+'</div><div class="tl-desc">'+e.desc+'</div></div>'+
-      statusBadge(e.status, e.past?'완료':'예정');
-    tl.appendChild(row);
-  });
-  document.getElementById('count-events').textContent = '('+events.length+')';
+  function renderTimeline(){
+    tl.innerHTML = '';
+    events.forEach(function(e){
+      var row = document.createElement('div');
+      row.className = 'tl-row'+(e.past?' past':'');
+      row.innerHTML = '<div class="tl-date mono">'+e.date+'</div>'+
+        '<div class="tl-body"><div class="tl-title">'+e.label+'</div><div class="tl-desc">'+e.desc+'</div></div>'+
+        statusBadge(e.status, e.past?'완료':'예정');
+      tl.appendChild(row);
+    });
+    document.getElementById('count-events').textContent = '('+events.length+')';
+  }
+  renderTimeline();
 
   var idx = document.getElementById('company-index');
   var pickerKR = document.getElementById('picker-kr');
@@ -2066,7 +2121,7 @@
     else if(!/^https?:$/.test(location.protocol)) status = 'AI 분석은 서버(hoaiserver:8765/semi/)에서 열었을 때만 동작해요.';
     else if(a && a.status === 'running'){ busy = true; label = '⏳ 분석 중…'; status = (a.startedAt||'')+' 시작 · 웹 검색으로 조사 중이라 5~15분 정도 걸려요. 창을 닫아도 계속 진행돼요.'; }
     else if(a && a.status === 'error') status = '분석 실패: '+(a.error||'')+' — 다시 시도해보세요.';
-    else if(a && a.status === 'done'){ label = '🔄 다시 분석'; status = (a.finishedAt||'')+' AI 분석 결과 · 사실 여부는 근거 링크로 확인하세요.'; }
+    else if(a && a.status === 'done'){ label = '🔄 AI 업데이트'; status = (a.finishedAt||'')+' AI 분석 결과 · 사실 여부는 근거 링크로 확인하세요.'; }
     else status = '버튼을 누르면 AI가 업황·주요 제품·자금·목표주가를 웹에서 찾아 채워요.';
     h += '<div class="ai-row">'+(key && /^https?:$/.test(location.protocol) ? '<button type="button" class="btn-add" data-ai="'+c.id+'"'+(busy?' disabled':'')+'>'+label+'</button>' : '')+
          '<span class="ai-status">'+esc(status)+'</span></div>';
@@ -2085,6 +2140,7 @@
     c.funding = (d.funding || []).map(function(f){ return {title:esc(f.title), amt:esc(f.amt), date:esc(f.date), desc:esc(f.desc)}; });
     c.reports = d.reports || [];
     c.competitors = d.competitors || [];
+    c.investmentScore = d.investmentScore || null;
     c.history = d.history || [];
     c.patents = d.patents || null;
     c.risk = d.risk || null;
@@ -2135,6 +2191,66 @@
     };
     getJSON('reports/index.json').then(function(d){ if(d){ reportIndex = d; rerender(); } });
     getJSON('news/news.json').then(function(d){ if(d){ liveNews = d; renderNews(); renderNewsTop(); } });
+
+    /* AI refresh: POST api/update?part=all|calendar|news has the server run Claude (Sonnet 5.5, medium effort,
+       web search); update/latest.json then overlays the embedded calendar, curated news and macro strip */
+    var updBtns = [].slice.call(document.querySelectorAll('[data-upd]'));
+    var updPoll = null, updApplied = '';
+    var PART_LABEL = {all:'전체', calendar:'캘린더·지표', news:'뉴스'};
+    var applyUpdate = function(d){
+      if(d.asOf) document.getElementById('upd-date').textContent = '업데이트 '+d.asOf;
+      if(d.macro && d.macro.length === 4){
+        document.getElementById('macro').innerHTML = d.macro.map(function(m){
+          return '<div class="macro-cell"><span class="macro-label">'+esc(m.label)+'</span>'+
+            '<span class="macro-value'+(m.tone==='up'||m.tone==='down' ? ' '+m.tone : '')+'">'+esc(m.value)+
+            (m.unit ? ' <span style="font-size:12.5px;font-weight:500">'+esc(m.unit)+'</span>' : '')+'</span>'+
+            '<span class="macro-sub">'+esc(m.sub)+'</span></div>';
+        }).join('');
+      }
+      if(d.events && d.events.length){
+        events = d.events.map(function(e){ return {date:esc(e.date), label:esc(e.label), desc:esc(e.desc), status:e.status, past:e.past}; });
+        renderTimeline();
+      }
+      if(d.news){ NEWS = d.news; renderNewsTop(); rerender(); }
+    };
+    var showUpdate = function(u){
+      var running = !!u && u.status === 'running', failed = !!u && u.status === 'error';
+      var parts = (u && u.data && u.data.parts) || {};
+      updBtns.forEach(function(b){
+        var part = b.getAttribute('data-upd');
+        b.disabled = running;
+        b.textContent = running && (u.part || 'all') === part ? '⏳ 업데이트 중…' : b.getAttribute('data-label');
+      });
+      [].forEach.call(document.querySelectorAll('[data-upd-msg]'), function(m){
+        var part = m.getAttribute('data-upd-msg'), mine = (u && u.part || 'all') === part;
+        m.classList.toggle('err', failed && mine);
+        m.textContent = running ? (mine ? (u.startedAt||'')+' 시작 · 웹 검색 중이라 몇 분 걸려요. 창을 닫아도 계속 진행돼요.' : '') :
+          failed && mine ? PART_LABEL[part]+' 업데이트 실패: '+(u.error||'')+' — 기존 내용은 그대로예요.' :
+          part === 'all' ? (u && u.finishedAt && !failed ? '마지막 AI 업데이트 '+u.finishedAt.slice(0,16) : '') :
+          parts[part] ? '마지막 AI 업데이트 '+String(parts[part]).slice(0,16) : '';
+      });
+    };
+    var loadUpdate = function(){
+      getJSON('update/latest.json').then(function(u){
+        showUpdate(u);
+        if(u && u.data && u.finishedAt && u.finishedAt !== updApplied){ updApplied = u.finishedAt; applyUpdate(u.data); }
+        clearTimeout(updPoll);
+        if(u && u.status === 'running') updPoll = setTimeout(loadUpdate, 10000);
+      });
+    };
+    updBtns.forEach(function(b){
+      b.hidden = false;
+      b.addEventListener('click', function(){
+        var part = b.getAttribute('data-upd');
+        if(!confirm('AI가 웹 검색으로 '+PART_LABEL[part]+' 내용을 최신으로 갱신합니다 (Claude Sonnet 5.5 · medium, 수 분 소요). 진행할까요?')) return;
+        updBtns.forEach(function(x){ x.disabled = true; });
+        fetch('api/update?part='+part, {method:'POST'}).then(function(r){ return r.json(); }).then(function(d){
+          if(!d.ok){ alert(d.error || '업데이트 요청 실패'); loadUpdate(); return; }
+          loadUpdate();
+        }).catch(function(){ alert('업데이트 요청 실패'); loadUpdate(); });
+      });
+    });
+    loadUpdate();
     loadPrices();
     setInterval(loadPrices, 60000);
     // weekly 3-year price chart + event markers (api/history), cached per session

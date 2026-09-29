@@ -16,6 +16,8 @@ import urllib.request
 from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 
+from web_gui.dashboard import board_update
+
 PROJECT_ROOT = Path(__file__).resolve().parents[2]
 BIO_SRC = PROJECT_ROOT / "bio-studyboard"
 BIO_PAGE = BIO_SRC / "standalone.html"
@@ -152,7 +154,7 @@ def prices(extra: dict[str, str] | None = None) -> dict[str, object]:
 
 def data_file(relative: str) -> Path | None:
     """Resolve /bio/reports/... or /bio/news/... to a file inside BIO_DATA, refusing traversal."""
-    if not relative.startswith(("reports/", "news/", "analysis/")):
+    if not relative.startswith(("reports/", "news/", "analysis/", "update/")):
         return None
     root = BIO_DATA.resolve()
     path = (root / relative).resolve()
@@ -187,6 +189,7 @@ def _loop(script: str, interval: int) -> None:
 
 
 def start_refreshers() -> None:
+    board_update.reset_stale(UPDATE_BOARD)
     for script, interval in (("fetch_news.py", NEWS_INTERVAL), ("fetch_reports.py", REPORTS_INTERVAL)):
         threading.Thread(target=_loop, args=(script, interval), name=f"bio-{script}", daemon=True).start()
 
@@ -409,3 +412,16 @@ def start_analysis(body: dict) -> dict[str, object]:
                         "startedAt": time.strftime("%Y-%m-%d %H:%M:%S"), "status": "running"})
     threading.Thread(target=_run_analysis, args=(key, name, market, region), name=f"bio-ai-{key}", daemon=True).start()
     return {"ok": True, "status": "running"}
+
+
+# ---------------------------------------------------------------- AI refresh (calendar / news / macro)
+UPDATE_BOARD = board_update.Board(
+    label="bio", topic="바이오·제약", page=BIO_PAGE, data_dir=BIO_DATA, claude_bin=CLAUDE_BIN,
+    news_cats={"clinical": "임상", "approval": "허가·FDA", "deal": "기술수출·M&A", "finance": "실적·자금", "policy": "정책"},
+    macro_hint="XBI(미 바이오텍 ETF)·코스닥 제약지수·美 기준금리(FOMC)·국내 기술수출 누계 같은 업황 지표를 최신 수치로 확인하세요.",
+    calendar_hint="임상 결과 발표, FDA PDUFA·허가 일정, 학회(ESMO 등), 기술수출·자금 이벤트, 주요 실적 발표를 담으세요.",
+)
+
+
+def start_update(part: str = "all") -> dict[str, object]:
+    return board_update.start_update(UPDATE_BOARD, part)
