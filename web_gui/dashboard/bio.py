@@ -365,6 +365,7 @@ def _run_analysis(key: str, name: str, market: str, region: str) -> None:
         claude = str(CLAUDE_BIN if CLAUDE_BIN.exists() else "claude")
         proc = subprocess.run(
             [claude, "-p", _prompt(name, key, market, region),
+             "--model", board_update.MODEL, "--effort", board_update.EFFORT,
              "--output-format", "json", "--json-schema", json.dumps(ANALYSIS_SCHEMA),
              "--allowedTools", "WebSearch,WebFetch", "--no-session-persistence",
              "--setting-sources", "", "--strict-mcp-config"],

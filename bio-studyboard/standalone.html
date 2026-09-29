@@ -734,6 +734,11 @@
       <span class="section-note">7월 이후 확정·예정된 임상·허가·자금 이벤트를 시간순으로 정리</span>
       <span class="upd-row"><button type="button" class="upd-btn" data-upd="calendar" data-label="🔄 캘린더·지표 업데이트" hidden>🔄 캘린더·지표 업데이트</button><span class="upd-msg" data-upd-msg="calendar"></span></span>
     </div>
+    <div class="seg" id="tl-region" role="group" aria-label="일정 지역" style="margin-bottom:12px">
+      <button type="button" data-tlregion="all" aria-pressed="true">전체</button>
+      <button type="button" data-tlregion="kr" aria-pressed="false">국내</button>
+      <button type="button" data-tlregion="gl" aria-pressed="false">해외</button>
+    </div>
     <div class="timeline" id="timeline"></div>
     <div class="divider-note">캘린더는 언론 보도 기준 예정일이며, FDA PDUFA 등 규제 일정은 지연되거나 변경될 수 있습니다. 각 이벤트는 아래 탭에서 더 자세히 확인할 수 있습니다.</div>
 
@@ -1898,18 +1903,27 @@
 
   // timeline
   var tl = document.getElementById('timeline');
+  var tlRegion = 'all';
   function renderTimeline(){
     tl.innerHTML = '';
-    events.forEach(function(e){
+    // events without a region tag (embedded fallback data) stay visible under every filter
+    var shown = events.filter(function(e){ return tlRegion === 'all' || !e.region || e.region === tlRegion; });
+    shown.forEach(function(e){
       var row = document.createElement('div');
       row.className = 'tl-row'+(e.past?' past':'');
       row.innerHTML = '<div class="tl-date mono">'+e.date+'</div>'+
-        '<div class="tl-body"><div class="tl-title">'+e.label+'</div><div class="tl-desc">'+e.desc+'</div></div>'+
+        '<div class="tl-body"><div class="tl-title">'+(e.region ? '<span class="tag '+(e.region==='kr'?'kr':'gl')+'">'+(e.region==='kr'?'국내':'해외')+'</span> ' : '')+e.label+'</div><div class="tl-desc">'+e.desc+'</div></div>'+
         statusBadge(e.status, e.past?'완료':'예정');
       tl.appendChild(row);
     });
-    document.getElementById('count-events').textContent = '('+events.length+')';
+    if(!shown.length) tl.innerHTML = '<p class="profile-empty" style="padding:16px">이 지역의 일정이 아직 없어요. "캘린더·지표 업데이트"를 눌러 채워 보세요.</p>';
+    document.querySelectorAll('[data-tlregion]').forEach(function(b){ b.setAttribute('aria-pressed', String(b.getAttribute('data-tlregion') === tlRegion)); });
+    document.getElementById('count-events').textContent = '('+shown.length+(shown.length !== events.length ? '/'+events.length : '')+')';
   }
+  document.getElementById('tl-region').addEventListener('click', function(e){
+    var b = e.target.closest('[data-tlregion]'); if(!b) return;
+    tlRegion = b.getAttribute('data-tlregion'); renderTimeline();
+  });
   renderTimeline();
 
   var idx = document.getElementById('company-index');
@@ -2441,7 +2455,7 @@
         }).join('');
       }
       if(d.events && d.events.length){
-        events = d.events.map(function(e){ return {date:esc(e.date), label:esc(e.label), desc:esc(e.desc), status:e.status, past:e.past}; });
+        events = d.events.map(function(e){ return {date:esc(e.date), label:esc(e.label), desc:esc(e.desc), status:e.status, past:e.past, region:e.region}; });
         renderTimeline();
       }
       if(d.news){ NEWS = d.news; renderNewsTop(); rerender(); }

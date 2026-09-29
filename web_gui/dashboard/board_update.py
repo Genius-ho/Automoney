@@ -96,6 +96,14 @@ def company_ids(text: str) -> dict[str, str]:
     return dict(re.findall(r'\bid:"([a-z0-9]+)", name:"([^"]+)"', text))
 
 
+def company_names(text: str) -> dict[str, list[str]]:
+    """Listed company names grouped by region (kr / gl)."""
+    out: dict[str, list[str]] = {"kr": [], "gl": []}
+    for name, region in re.findall(r'\bid:"[a-z0-9]+", name:"([^"]+)", ticker:"[^"]*", region:"(kr|gl)"', text):
+        out[region].append(name)
+    return out
+
+
 def load_update(board: Board) -> dict | None:
     try:
         return json.loads(board.path.read_text(encoding="utf-8"))
@@ -128,8 +136,9 @@ def schema(board: Board, ids: list[str], part: str) -> dict:
                 "label": {"type": "string"},
                 "desc": {"type": "string", "description": "1~2문장, 왜 중요한지 포함"},
                 "status": {"type": "string", "enum": list(STATUSES)},
+                "region": {"type": "string", "enum": list(REGIONS), "description": "kr=국내 기업 일정, gl=해외 기업·글로벌(미국 규제·금리·해외 학회 등) 일정"},
                 "past": {"type": "boolean", "description": "오늘 기준 이미 지난 일이면 true"}},
-                "required": ["date", "label", "desc", "status", "past"]}},
+                "required": ["date", "label", "desc", "status", "region", "past"]}},
             "news": {"type": "array", "maxItems": 30, "items": {"type": "object", "properties": {
                 "date": {"type": "string", "description": "YYYY-MM-DD 기사 날짜"},
                 "region": {"type": "string", "enum": list(REGIONS)},
@@ -156,10 +165,14 @@ def prompt(board: Board, text: str, ids: dict[str, str], part: str, since: dict[
     today = time.strftime("%Y-%m-%d")
     cats = ", ".join(f"{k}({v})" for k, v in board.news_cats.items())
     names = ", ".join(f"{k}={v}" for k, v in ids.items())
+    regions = company_names(text)
     calendar = f"""[촉매 캘린더(events)] 현재 내용 ({since["calendar"]} 무렵까지 반영):
 {embedded_events(text)}
 
 - {board.calendar_hint}
+- 국내와 해외를 모두 다루세요. 각 이벤트에 region(kr/gl)을 붙이고, 국내 일정만 채우지 마세요. 해외(gl) 일정은 예정·최근 합쳐 최소 8건이 되도록 검색해서 채우세요(해외 기업의 FDA PDUFA·승인, 임상 결과 발표, 실적 발표일, 주요 학회, 美 정책 등).
+- 수록 국내 기업: {", ".join(regions["kr"])}
+- 수록 해외 기업: {", ".join(regions["gl"])}
 - 위 목록을 바탕으로 최신 전체 목록을 다시 작성하세요. 이미 일어난 일은 past=true 로 바꾸고 결과를 반영해 설명을 고치세요.
 - 예정 일정이 연기·취소·확정되었으면 반영하고, 새로 확인한 예정 일정은 추가하세요. 너무 오래된(약 2개월 전) 항목은 빼도 됩니다.
 - 날짜순(오래된 것 → 먼 미래)으로 정렬하세요. 확인되지 않은 날짜는 '10월 하순'처럼 대략적으로 쓰고 desc 에 '추정'이라고 표시하세요.
@@ -223,6 +236,7 @@ def _clean_events(items: list[dict]) -> list[dict]:
     return [{
         "date": str(e["date"])[:20], "label": str(e["label"])[:160], "desc": str(e.get("desc", ""))[:500],
         "status": e.get("status") if e.get("status") in STATUSES else "neutral", "past": bool(e.get("past")),
+        "region": e.get("region") if e.get("region") in REGIONS else "",
     } for e in items if e.get("date") and e.get("label")]
 
 

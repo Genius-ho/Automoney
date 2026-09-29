@@ -697,6 +697,8 @@
       <span class="meta-pill"><span class="dot"></span><span id="upd-date">업데이트 2026.09.22</span></span>
       <button type="button" class="upd-btn" data-upd="all" data-label="🔄 전체 AI 업데이트" hidden title="Claude Sonnet 5.5 (medium)가 웹 검색으로 캘린더·뉴스·지표를 한 번에 갱신해요">🔄 전체 AI 업데이트</button>
       <span class="upd-msg" data-upd-msg="all"></span>
+      <button type="button" class="upd-btn" id="batch-btn" hidden title="모든 종목의 AI 분석(기업 개요·제품·자금·목표주가·투자 점수)을 다시 조사해요. 종목 수가 많아 1시간 이상 걸려요">🔄 전 종목 AI 업데이트</button>
+      <span class="upd-msg" id="batch-msg"></span>
       <span class="meta-pill">정보 제공 목적 · 투자 권유 아님</span>
       <div class="view-switch" role="group" aria-label="화면 보기 선택">
         <button type="button" data-view-mode="auto">자동</button>
@@ -750,6 +752,11 @@
       <h2>📅 다가오는·최근 촉매 일정 <span class="count" id="count-events"></span></h2>
       <span class="section-note">최근 확정·예정된 수주·실적·증설 이벤트를 시간순으로 정리</span>
       <span class="upd-row"><button type="button" class="upd-btn" data-upd="calendar" data-label="🔄 캘린더·지표 업데이트" hidden>🔄 캘린더·지표 업데이트</button><span class="upd-msg" data-upd-msg="calendar"></span></span>
+    </div>
+    <div class="seg" id="tl-region" role="group" aria-label="일정 지역" style="margin-bottom:12px">
+      <button type="button" data-tlregion="all" aria-pressed="true">전체</button>
+      <button type="button" data-tlregion="kr" aria-pressed="false">국내</button>
+      <button type="button" data-tlregion="gl" aria-pressed="false">해외</button>
     </div>
     <div class="timeline" id="timeline"></div>
     <div class="divider-note">캘린더는 언론 보도·공시 기준 예정일이며, 실적 발표·양산 일정 등은 지연되거나 변경될 수 있습니다. 각 이벤트는 아래 탭에서 더 자세히 확인할 수 있습니다.</div>
@@ -1666,18 +1673,27 @@
 
   // timeline
   var tl = document.getElementById('timeline');
+  var tlRegion = 'all';
   function renderTimeline(){
     tl.innerHTML = '';
-    events.forEach(function(e){
+    // events without a region tag (embedded fallback data) stay visible under every filter
+    var shown = events.filter(function(e){ return tlRegion === 'all' || !e.region || e.region === tlRegion; });
+    shown.forEach(function(e){
       var row = document.createElement('div');
       row.className = 'tl-row'+(e.past?' past':'');
       row.innerHTML = '<div class="tl-date mono">'+e.date+'</div>'+
-        '<div class="tl-body"><div class="tl-title">'+e.label+'</div><div class="tl-desc">'+e.desc+'</div></div>'+
+        '<div class="tl-body"><div class="tl-title">'+(e.region ? '<span class="tag '+(e.region==='kr'?'kr':'gl')+'">'+(e.region==='kr'?'국내':'해외')+'</span> ' : '')+e.label+'</div><div class="tl-desc">'+e.desc+'</div></div>'+
         statusBadge(e.status, e.past?'완료':'예정');
       tl.appendChild(row);
     });
-    document.getElementById('count-events').textContent = '('+events.length+')';
+    if(!shown.length) tl.innerHTML = '<p class="profile-empty" style="padding:16px">이 지역의 일정이 아직 없어요. "캘린더·지표 업데이트"를 눌러 채워 보세요.</p>';
+    document.querySelectorAll('[data-tlregion]').forEach(function(b){ b.setAttribute('aria-pressed', String(b.getAttribute('data-tlregion') === tlRegion)); });
+    document.getElementById('count-events').textContent = '('+shown.length+(shown.length !== events.length ? '/'+events.length : '')+')';
   }
+  document.getElementById('tl-region').addEventListener('click', function(e){
+    var b = e.target.closest('[data-tlregion]'); if(!b) return;
+    tlRegion = b.getAttribute('data-tlregion'); renderTimeline();
+  });
   renderTimeline();
 
   var idx = document.getElementById('company-index');
@@ -2208,7 +2224,7 @@
         }).join('');
       }
       if(d.events && d.events.length){
-        events = d.events.map(function(e){ return {date:esc(e.date), label:esc(e.label), desc:esc(e.desc), status:e.status, past:e.past}; });
+        events = d.events.map(function(e){ return {date:esc(e.date), label:esc(e.label), desc:esc(e.desc), status:e.status, past:e.past, region:e.region}; });
         renderTimeline();
       }
       if(d.news){ NEWS = d.news; renderNewsTop(); rerender(); }
@@ -2251,6 +2267,39 @@
       });
     });
     loadUpdate();
+    /* refresh every company's AI analysis: POST api/analyze-all queues them on the server (2 at a time);
+       update/batch.json carries the progress */
+    var batchBtn = document.getElementById('batch-btn'), batchMsg = document.getElementById('batch-msg');
+    var batchPoll = null, batchSeen = -1;
+    var loadBatch = function(){
+      getJSON('update/batch.json').then(function(b){
+        var running = !!b && b.status === 'running';
+        batchBtn.disabled = running;
+        batchBtn.textContent = running ? '⏳ 종목 업데이트 중…' : '🔄 전 종목 AI 업데이트';
+        batchMsg.classList.toggle('err', !!b && b.status === 'error');
+        batchMsg.textContent = !b ? '' : running ? (b.done+b.failed)+'/'+b.total+' 완료'+(b.failed ? ' (실패 '+b.failed+')' : '')+' · 진행 중: '+(b.current||[]).join(', ') :
+          b.status === 'error' ? '중단: '+(b.error||'')+' ('+(b.done||0)+'/'+b.total+' 완료)' :
+          '마지막 전 종목 업데이트 '+String(b.finishedAt||'').slice(0,16)+' · '+b.done+'/'+b.total+' 완료'+(b.failed ? ', 실패 '+b.failed : '');
+        var progress = b ? b.done + b.failed : 0;
+        if(b && progress !== batchSeen){    // a company finished: pull the fresh analyses in
+          if(batchSeen !== -1) baseCompanies().forEach(function(c){ if(aiKey(c)) loadAnalysis(c, rerender); });
+          batchSeen = progress;
+        }
+        clearTimeout(batchPoll);
+        if(running) batchPoll = setTimeout(loadBatch, 10000);
+      });
+    };
+    batchBtn.hidden = false;
+    batchBtn.addEventListener('click', function(){
+      if(!confirm('모든 종목의 AI 분석을 웹 검색으로 다시 조사합니다 (Claude Sonnet 5.5 · medium, 2개씩 진행, 1시간 이상 소요). 최근 6시간 안에 갱신된 종목은 건너뜁니다. 진행할까요?')) return;
+      batchBtn.disabled = true;
+      fetch('api/analyze-all', {method:'POST'}).then(function(r){ return r.json(); }).then(function(d){
+        if(!d.ok){ alert(d.error || '요청 실패'); }
+        else if(d.status === 'done') alert('모든 종목이 최근 6시간 안에 이미 갱신돼 있어요.');
+        batchSeen = -1; loadBatch();
+      }).catch(function(){ alert('요청 실패'); loadBatch(); });
+    });
+    loadBatch();
     loadPrices();
     setInterval(loadPrices, 60000);
     // weekly 3-year price chart + event markers (api/history), cached per session

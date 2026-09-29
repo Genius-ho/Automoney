@@ -224,13 +224,15 @@ class Handler(BaseHTTPRequestHandler):
                     {"Set-Cookie": f"mumae_v2_session=; HttpOnly; SameSite=Strict; Path=/; Max-Age=0{self._cookie_flags()}"},
                 )
                 return
-            if parsed.path in {"/bio/api/analyze", "/semi/api/analyze", "/bio/api/update", "/semi/api/update"}:
+            if parsed.path in {"/bio/api/analyze", "/semi/api/analyze", "/bio/api/update", "/semi/api/update", "/semi/api/analyze-all"}:
                 # Neither board has a login of its own; accept same-origin requests only.
                 origin = self.headers.get("Origin") or ""
                 if urlparse(origin).netloc != (self.headers.get("Host") or ""):
                     raise PermissionError("허용되지 않은 요청 출처입니다.")
                 mod = bio if parsed.path.startswith("/bio/") else semi
-                if parsed.path.endswith("/api/update"):
+                if parsed.path == "/semi/api/analyze-all":
+                    self._json(HTTPStatus.OK, semi.start_analysis_all())
+                elif parsed.path.endswith("/api/update"):
                     self._json(HTTPStatus.OK, mod.start_update(parse_qs(parsed.query).get("part", ["all"])[0]))
                 else:
                     self._json(HTTPStatus.OK, mod.start_analysis(self._body()))
