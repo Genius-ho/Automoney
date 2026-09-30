@@ -712,23 +712,23 @@
     <div class="macro" id="macro" style="width:100%">
       <div class="macro-cell">
         <span class="macro-label">SOX (필라델피아 반도체지수)</span>
-        <span class="macro-value up">+64.5% <span style="font-size:12.5px;font-weight:500">YTD</span></span>
-        <span class="macro-sub">전년 대비 +150% · AI 반도체 수요가 견인</span>
+        <span class="macro-value up">+78.3% <span style="font-size:12.5px;font-weight:500">YTD</span></span>
+        <span class="macro-sub">9/29 종가 12,629 · 52주 범위 6,352~14,635</span>
       </div>
       <div class="macro-cell">
-        <span class="macro-label">글로벌 반도체 장비 지출</span>
-        <span class="macro-value up">$1.3조</span>
-        <span class="macro-sub">2026년 전망 · 전년 대비 +64%</span>
+        <span class="macro-label">글로벌 반도체 장비 매출 전망</span>
+        <span class="macro-value up">$165.9B <span style="font-size:12.5px;font-weight:500">2026</span></span>
+        <span class="macro-sub">SEMI 7/14 중간 전망 · 전년 대비 +23.2%</span>
       </div>
       <div class="macro-cell">
         <span class="macro-label">美 기준금리 (FOMC)</span>
         <span class="macro-value">3.75–4.00%</span>
-        <span class="macro-sub">9/16 25bp 인상 · 2023년來 첫 인상</span>
+        <span class="macro-sub">9/16 25bp 인상(12-0) · 점도표상 연내 1회 추가 인상 시사</span>
       </div>
       <div class="macro-cell">
-        <span class="macro-label">국내 반도체 수출(1~8월 누계)</span>
-        <span class="macro-value up">2,812억 달러</span>
-        <span class="macro-sub">전년 동기 대비 +169.6% · 18개월 연속 증가</span>
+        <span class="macro-label">국내 반도체 수출(9/1~20)</span>
+        <span class="macro-value up">341억 달러</span>
+        <span class="macro-sub">관세청 9/21 발표 · 전년 동기 대비 +259.4% · 전체 수출의 47.8%</span>
       </div>
     </div>
   </div>
@@ -826,7 +826,7 @@
 
   <!-- ===================== COMPARE ===================== -->
   <section class="panel" id="panel-compare">
-    <div class="section-head"><h2>주가 · 컨센서스 비교</h2><span class="section-note">국내는 원화, 해외는 달러 기준. 목표주가는 최근 증권사 리포트 평균</span></div>
+    <div class="section-head"><h2>주가 · 컨센서스 비교</h2><span class="section-note">국내는 원화, 해외는 상장 시장 통화($·HK$·¥·€) 기준. 목표주가는 최근 증권사 리포트 평균</span></div>
     <div class="table-wrap">
       <table>
         <thead><tr>
@@ -1042,7 +1042,7 @@
       <h3>⑨ 특허 · 독점 기간 — 소부장 회사는 왜 특허가 중요한가</h3>
       <p class="one">반도체 소부장은 <strong>특허로 진입장벽을 세우는 산업</strong>이에요. 특정 공정을 특허로 막아두면 경쟁사가 쉽게 따라오지 못해요.</p>
       <div class="lcols">
-        <div class="lmini"><h4>🛡 공정 특허의 힘</h4><p>예를 들어 EUV 노광 기술이나 특정 식각 공정의 화학 조합은 특허로 보호돼요. 특허가 많은 회사일수록 고객사(삼성전자 등)를 쉽게 바꾸기 어려워요(전환비용).</p></div>
+        <div class="lmini"><h4>🛡 공정 특허의 힘</h4><p>예를 들어 EUV 노광 기술이나 특정 식각 공정의 화학 조합은 특허로 보호돼요. 특허로 보호된 공정·소재를 쓰는 고객사(삼성전자 등)는 공급사를 쉽게 바꾸기 어려워요(전환비용).</p></div>
         <div class="lmini"><h4>⚖️ 특허 분쟁도 잦아요</h4><p>장비·소재 회사 간 특허 소송이 자주 일어나요. 소송에서 지면 매출의 상당 부분을 잃을 수 있어서, 각 기업 상세의 특허 현황을 확인하는 게 중요해요.</p></div>
       </div>
       <div class="analogy"><b>투자 포인트:</b> 신규 소부장 기업을 볼 때 <b>"이 회사만의 독점 공정/특허가 있는가, 아니면 여러 회사가 만들 수 있는 범용 제품인가"</b>를 확인하세요. 독점 공정이 있으면 이익률이 높고 안정적이에요.</div>
@@ -1271,7 +1271,21 @@
 
   // per-company color tag (red/yellow/black) -- purely personal, saved to localStorage,
   // click the small dot to cycle: 없음 → 빨강 → 노랑 → 검정 → 없음
-  var CTAG_KEY = 'bio-dash-ctags-v1';
+  // One-time move off the bio board's storage keys (both boards share an origin, so bio's
+  // added companies showed up here). Keep only colour tags, memos and hides for this board's companies.
+  (function(){ try{
+    if(localStorage.getItem('semi-dash-migrated')) return;
+    var ids = {}; companies.concat(overseas).forEach(function(c){ ids[c.id] = 1; });
+    ['ctags', 'notes'].forEach(function(k){
+      var o = JSON.parse(localStorage.getItem('bio-dash-'+k+'-v1') || '{}') || {}, r = {};
+      Object.keys(o).forEach(function(id){ if(ids[id]) r[id] = o[id]; });
+      localStorage.setItem('semi-dash-'+k+'-v1', JSON.stringify(r));
+    });
+    var hid = (JSON.parse(localStorage.getItem('bio-dash-hidden-v1') || '[]') || []).filter(function(id){ return ids[id]; });
+    localStorage.setItem('semi-dash-hidden-v1', JSON.stringify(hid));
+    localStorage.setItem('semi-dash-migrated', '1');
+  }catch(e){} })();
+  var CTAG_KEY = 'semi-dash-ctags-v1';
   var CTAG_CYCLE = [null, 'red', 'yellow', 'black'];
   var CTAG_LABEL = {red:'관심(빨강)', yellow:'주의(노랑)', black:'중요(검정)'};
   var ctags = {};
@@ -1320,6 +1334,8 @@
     '</div>';
   }
 
+  // AI-written targets are often ranges or already carry a unit ("27만~53만원"); only prefix a bare number
+  function fmtTarget(c){ var t = String(c.stock.target||'—'); return t === '—' ? '—' : /^[\d.,]+$/.test(t) ? c.stock.currency+t : t; }
   function statItem(k, v){
     return '<div><div style="font-size:11px;color:var(--ink-faint);text-transform:uppercase;letter-spacing:.05em;margin-bottom:3px">'+k+'</div>'+
       '<div class="mono" style="font-size:16px;font-weight:600">'+v+'</div></div>';
@@ -1545,7 +1561,7 @@
   }
 
   // per-company sticky-note memo (localStorage only, never sent anywhere)
-  var NOTES_KEY = 'bio-dash-notes-v1';
+  var NOTES_KEY = 'semi-dash-notes-v1';
   var notes = {};
   try{ notes = JSON.parse(localStorage.getItem(NOTES_KEY) || '{}') || {}; }catch(e){ notes = {}; }
   function saveNotes(){ try{ localStorage.setItem(NOTES_KEY, JSON.stringify(notes)); }catch(e){} }
@@ -1606,7 +1622,7 @@
       h += statItem('현재가', c.stock.price==='—' ? '—' : c.stock.currency+c.stock.price);
       var changeStr = c.stock.change === 0 ? '—' : (c.stock.change > 0 ? '+' : '') + c.stock.change + '%';
       h += statItem('등락', changeStr);
-      h += statItem('목표주가', c.stock.target==='—' ? '—' : c.stock.currency+c.stock.target);
+      h += statItem('목표주가', fmtTarget(c));
       h += statItem('기준일', c.stock.asOf || c.stock.targetDate || '—');
       h += '</div>';
       if(c.stock.note) h += '<p class="pi-note" style="margin-top:12px">'+esc(c.stock.note)+'</p>';
@@ -1653,8 +1669,8 @@
   // Base (Claude-researched) companies live in `companies`/`overseas` above and are
   // never edited from the page. User "delete" of a base company just hides it
   // (restorable); user "add" creates a lightweight custom entry stored locally.
-  var CUSTOM_KEY = 'bio-dash-custom-v1';
-  var HIDDEN_KEY = 'bio-dash-hidden-v1';
+  var CUSTOM_KEY = 'semi-dash-custom-v1';
+  var HIDDEN_KEY = 'semi-dash-hidden-v1';
 
   var customCompanies = [];
   try{ customCompanies = JSON.parse(localStorage.getItem(CUSTOM_KEY) || '[]') || []; }catch(e){ customCompanies = []; }
@@ -1757,7 +1773,7 @@
         row.scrollLeft = Math.max(0, ch.offsetLeft - row.offsetLeft - 16);
       }
     });
-    try{ localStorage.setItem('bio-dash-company', c.id); }catch(e){}
+    try{ localStorage.setItem('semi-dash-company', c.id); }catch(e){}
   }
   profileEl.addEventListener('click', function(e){
     var delBtn = e.target.closest('[data-del]');
@@ -1782,7 +1798,7 @@
       cards += '<div class="sc">'+
         '<div class="sc-top"><div><div class="sc-name">'+c.name+' <span class="tag '+(c.region==='kr'?'kr':'gl')+'">'+(c.region==='kr'?'국내':'해외')+'</span></div><div class="sc-ticker">'+c.ticker+'</div></div>'+
         '<div class="sc-price"><b>'+(c.stock.price==='—'?'—':c.stock.currency+c.stock.price)+'</b><span class="'+cCls+'">'+cStr+'</span></div></div>'+
-        '<div class="sc-meta"><span>목표 '+(c.stock.target==='—'?'—':c.stock.currency+c.stock.target)+'</span><span>'+(c.stock.asOf||c.stock.targetDate||'')+'</span></div>'+
+        '<div class="sc-meta"><span>목표 '+fmtTarget(c)+'</span><span>'+(c.stock.asOf||c.stock.targetDate||'')+'</span></div>'+
         (c.stock.note ? '<div class="sc-note">'+c.stock.note+'</div>' : '')+
       '</div>';
       var tr = document.createElement('tr');
@@ -1793,7 +1809,7 @@
         '<td><span class="tag '+(c.region==='kr'?'kr':'gl')+'">'+(c.region==='kr'?'국내':'해외')+'</span></td>'+
         '<td class="num">'+(c.stock.price==='—'?'—':c.stock.currency+c.stock.price)+'</td>'+
         '<td class="num '+changeCls+'">'+changeStr+'</td>'+
-        '<td class="num">'+(c.stock.target==='—'?'—':c.stock.currency+c.stock.target)+'</td>'+
+        '<td class="num">'+fmtTarget(c)+'</td>'+
         '<td class="num">'+(c.stock.asOf||c.stock.targetDate||'—')+'</td>'+
         '<td style="font-size:11.5px;color:var(--ink-soft);max-width:220px">'+c.stock.note+'</td>';
       stockBody.appendChild(tr);
@@ -1915,7 +1931,7 @@
   // initial render + initial company selection
   refreshAll();
   var savedCompany = null;
-  try{ savedCompany = localStorage.getItem('bio-dash-company'); }catch(e){}
+  try{ savedCompany = localStorage.getItem('semi-dash-company'); }catch(e){}
   var initialId = (savedCompany && visibleCompanies().some(function(c){ return c.id === savedCompany; })) ? savedCompany : (visibleCompanies()[0] && visibleCompanies()[0].id);
   selectCompany(initialId);
 
@@ -1935,12 +1951,12 @@
       btn.classList.add('active');
       document.getElementById('panel-'+btn.dataset.tab).classList.add('active');
       document.body.setAttribute('data-tab', btn.dataset.tab);
-      try{ localStorage.setItem('bio-dash-tab', btn.dataset.tab); }catch(e){}
+      try{ localStorage.setItem('semi-dash-tab', btn.dataset.tab); }catch(e){}
       window.scrollTo({top:0, behavior:'smooth'});
     });
   });
   try{
-    var saved = localStorage.getItem('bio-dash-tab');
+    var saved = localStorage.getItem('semi-dash-tab');
     if(saved){
       var target = document.querySelector('.tab-btn[data-tab="'+saved+'"]');
       if(target) target.click();
@@ -2279,7 +2295,7 @@
         batchMsg.classList.toggle('err', !!b && b.status === 'error');
         batchMsg.textContent = !b ? '' : running ? (b.done+b.failed)+'/'+b.total+' 완료'+(b.failed ? ' (실패 '+b.failed+')' : '')+' · 진행 중: '+(b.current||[]).join(', ') :
           b.status === 'error' ? '중단: '+(b.error||'')+' ('+(b.done||0)+'/'+b.total+' 완료)' :
-          '마지막 전 종목 업데이트 '+String(b.finishedAt||'').slice(0,16)+' · '+b.done+'/'+b.total+' 완료'+(b.failed ? ', 실패 '+b.failed : '');
+          '마지막 전 종목 업데이트 '+String(b.finishedAt||'').slice(0,16)+' · 갱신 '+b.done+'개'+(b.failed ? ', 실패 '+b.failed+'개' : '');
         var progress = b ? b.done + b.failed : 0;
         if(b && progress !== batchSeen){    // a company finished: pull the fresh analyses in
           if(batchSeen !== -1) baseCompanies().forEach(function(c){ if(aiKey(c)) loadAnalysis(c, rerender); });

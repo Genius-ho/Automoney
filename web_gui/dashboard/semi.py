@@ -379,7 +379,7 @@ def _prompt(name: str, key: str, market: str, region: str) -> str:
 - 투자 점수: {SCORE_CRITERIA}
 
 작성 규칙:
-- 모든 설명은 한국어, 초보 투자자도 이해할 수 있게 짧고 명확하게.
+- 모든 설명은 한국어 해요체(~예요/~해요), 초보 투자자도 이해할 수 있게 짧고 명확하게. '제가' 같은 1인칭이나 조사 과정 메모는 쓰지 마세요.
 - 확인한 사실만 쓰고, 추정은 '추정'이라고 표시. 날짜는 YY.MM.DD 또는 YY.MM 형식.
 - pipeline 은 중요한 순서로 최대 6개. phase 는 phaseLabel 4단계 중 현재 도달한 단계 번호(0~4).
 - 각 주장에 근거가 된 기사/공시 URL 을 sources 에 넣으세요 (실제 방문한 URL만).

@@ -694,23 +694,23 @@
     <div class="macro" id="macro" style="width:100%">
       <div class="macro-cell">
         <span class="macro-label">XBI (미 바이오텍 ETF)</span>
-        <span class="macro-value up">+36% <span style="font-size:12.5px;font-weight:500">YTD</span></span>
-        <span class="macro-sub">1년 +79% · 9/2 종가 기준</span>
+        <span class="macro-value up">+28.6% <span style="font-size:12.5px;font-weight:500">YTD</span></span>
+        <span class="macro-sub">9/29 종가 $156.81 · 52주 범위 $100.20~169.55</span>
       </div>
       <div class="macro-cell">
         <span class="macro-label">코스닥 제약지수</span>
-        <span class="macro-value up">+24%</span>
-        <span class="macro-sub">7월말 대비 · 8/30~9/11 구간 +31% 반등</span>
+        <span class="macro-value down">-53% <span style="font-size:12.5px;font-weight:500">고점 대비</span></span>
+        <span class="macro-sub">9/28 보도 · 연초 고점 17,542 → 8,000선 초반</span>
       </div>
       <div class="macro-cell">
         <span class="macro-label">美 기준금리 (FOMC)</span>
         <span class="macro-value">3.75–4.00%</span>
-        <span class="macro-sub">9/16 25bp 인상 · 2023년來 첫 인상</span>
+        <span class="macro-sub">9/16 25bp 인상(12-0) · 점도표상 연내 1회 추가 인상 시사</span>
       </div>
       <div class="macro-cell">
         <span class="macro-label">국내 기술수출 누계</span>
         <span class="macro-value up">21.7조원</span>
-        <span class="macro-sub">2026년 9월까지 · 역대 최고 경신 전망</span>
+        <span class="macro-sub">9/23 보도 · 금액 공개 11건 합산 · 지난해 연간 최대치의 80.6%</span>
       </div>
     </div>
   </div>
@@ -732,7 +732,7 @@
   <section class="panel active" id="panel-overview">
     <div class="section-head">
       <h2>📅 다가오는·최근 촉매 일정 <span class="count" id="count-events"></span></h2>
-      <span class="section-note">7월 이후 확정·예정된 임상·허가·자금 이벤트를 시간순으로 정리</span>
+      <span class="section-note">최근 확정·예정된 임상·허가·실적·학회 이벤트를 시간순으로 정리</span>
       <span class="upd-row"><button type="button" class="upd-btn" data-upd="calendar" data-label="🔄 캘린더·지표 업데이트" hidden>🔄 캘린더·지표 업데이트</button><span class="upd-msg" data-upd-msg="calendar"></span></span>
     </div>
     <div class="seg" id="tl-region" role="group" aria-label="일정 지역" style="margin-bottom:12px">
@@ -808,7 +808,7 @@
 
   <!-- ===================== COMPARE ===================== -->
   <section class="panel" id="panel-compare">
-    <div class="section-head"><h2>주가 · 컨센서스 비교</h2><span class="section-note">국내는 원화, 해외는 달러 기준. 목표주가는 최근 증권사 리포트 평균</span></div>
+    <div class="section-head"><h2>주가 · 컨센서스 비교</h2><span class="section-note">국내는 원화, 해외는 상장 시장 통화($·HK$·¥·€) 기준. 목표주가는 최근 증권사 리포트 평균</span></div>
     <div class="table-wrap">
       <table>
         <thead><tr>
@@ -1657,6 +1657,8 @@
     '</div>';
   }
 
+  // AI-written targets are often ranges or already carry a unit ("27만~53만원"); only prefix a bare number
+  function fmtTarget(c){ var t = String(c.stock.target||'—'); return t === '—' ? '—' : /^[\d.,]+$/.test(t) ? c.stock.currency+t : t; }
   function statItem(k, v){
     return '<div><div style="font-size:11px;color:var(--ink-faint);text-transform:uppercase;letter-spacing:.05em;margin-bottom:3px">'+k+'</div>'+
       '<div class="mono" style="font-size:16px;font-weight:600">'+v+'</div></div>';
@@ -1918,7 +1920,7 @@
       h += statItem('현재가', c.stock.price==='—' ? '—' : c.stock.currency+c.stock.price);
       var changeStr = c.stock.change === 0 ? '—' : (c.stock.change > 0 ? '+' : '') + c.stock.change + '%';
       h += statItem('등락', changeStr);
-      h += statItem('목표주가', c.stock.target==='—' ? '—' : c.stock.currency+c.stock.target);
+      h += statItem('목표주가', fmtTarget(c));
       h += statItem('기준일', c.stock.asOf || c.stock.targetDate || '—');
       h += '</div>';
       if(c.stock.note) h += '<p class="pi-note" style="margin-top:12px">'+esc(c.stock.note)+'</p>';
@@ -2094,7 +2096,7 @@
       cards += '<div class="sc">'+
         '<div class="sc-top"><div><div class="sc-name">'+c.name+' <span class="tag '+(c.region==='kr'?'kr':'gl')+'">'+(c.region==='kr'?'국내':'해외')+'</span></div><div class="sc-ticker">'+c.ticker+'</div></div>'+
         '<div class="sc-price"><b>'+(c.stock.price==='—'?'—':c.stock.currency+c.stock.price)+'</b><span class="'+cCls+'">'+cStr+'</span></div></div>'+
-        '<div class="sc-meta"><span>목표 '+(c.stock.target==='—'?'—':c.stock.currency+c.stock.target)+'</span><span>'+(c.stock.asOf||c.stock.targetDate||'')+'</span></div>'+
+        '<div class="sc-meta"><span>목표 '+fmtTarget(c)+'</span><span>'+(c.stock.asOf||c.stock.targetDate||'')+'</span></div>'+
         (c.stock.note ? '<div class="sc-note">'+c.stock.note+'</div>' : '')+
       '</div>';
       var tr = document.createElement('tr');
@@ -2105,7 +2107,7 @@
         '<td><span class="tag '+(c.region==='kr'?'kr':'gl')+'">'+(c.region==='kr'?'국내':'해외')+'</span></td>'+
         '<td class="num">'+(c.stock.price==='—'?'—':c.stock.currency+c.stock.price)+'</td>'+
         '<td class="num '+changeCls+'">'+changeStr+'</td>'+
-        '<td class="num">'+(c.stock.target==='—'?'—':c.stock.currency+c.stock.target)+'</td>'+
+        '<td class="num">'+fmtTarget(c)+'</td>'+
         '<td class="num">'+(c.stock.asOf||c.stock.targetDate||'—')+'</td>'+
         '<td style="font-size:11.5px;color:var(--ink-soft);max-width:220px">'+c.stock.note+'</td>';
       stockBody.appendChild(tr);
@@ -2465,15 +2467,17 @@
     c.analyzed = true;
     if(d.platform) c.platform = d.platform;
     if(d.clinical) c.clinical = d.clinical;
-    c.pipeline = d.pipeline || [];
+    // hand-curated companies keep their existing data wherever the analysis came back empty
+    var has = function(v){ return Array.isArray(v) ? v.length > 0 : !!v; };
+    if(has(d.pipeline) || c.custom) c.pipeline = d.pipeline || [];
     // fundCard renders raw HTML, so escape AI text here
-    c.funding = (d.funding || []).map(function(f){ return {title:esc(f.title), amt:esc(f.amt), date:esc(f.date), desc:esc(f.desc)}; });
-    c.reports = d.reports || [];
-    c.competitors = d.competitors || [];
-    c.history = d.history || [];
-    c.patents = d.patents || null;
-    c.risk = d.risk || null;
-    c.governance = d.governance || null;
+    if(has(d.funding) || c.custom) c.funding = (d.funding || []).map(function(f){ return {title:esc(f.title), amt:esc(f.amt), date:esc(f.date), desc:esc(f.desc)}; });
+    if(has(d.reports) || c.custom) c.reports = d.reports || [];
+    if(has(d.competitors) || c.custom) c.competitors = d.competitors || [];
+    if(has(d.history) || c.custom) c.history = d.history || [];
+    if(has(d.patents) || c.custom) c.patents = d.patents || null;
+    if(has(d.risk) || c.custom) c.risk = d.risk || null;
+    if(has(d.governance) || c.custom) c.governance = d.governance || null;
     if(!c.stock) c.stock = {price:'—', currency:'', change:0, target:'—', targetDate:'', asOf:'', note:''};
     if(d.stock){ c.stock.target = d.stock.target || '—'; c.stock.targetDate = d.stock.targetDate || ''; c.stock.note = d.stock.note || ''; }
   }

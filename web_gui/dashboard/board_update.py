@@ -196,11 +196,37 @@ def prompt(board: Board, text: str, ids: dict[str, str], part: str, since: dict[
 
 {body}
 
-모든 설명은 한국어. 확인하지 못한 내용을 지어내지 마세요. summary 에는 이번에 바뀐 핵심과 확인하지 못한 부분을 밝혀 주세요.
+작성 규칙:
+- 모든 설명은 한국어 해요체(~예요/~해요)로 통일하고, '제가' 같은 1인칭은 쓰지 마세요.
+- 확인하지 못한 내용을 지어내지 마세요. 날짜·수치가 확정되지 않았으면 문장 끝에 '(추정)'만 붙이세요.
+- macro.sub·events.desc·news 에는 독자에게 필요한 사실만 쓰고, '확인 못 함', '기존 표기 교체', '검색된 기준' 같은 조사 과정 메모는 쓰지 마세요. 그런 메모는 summary 에만 쓰세요.
+- summary 에는 이번에 바뀐 핵심과 확인하지 못한 부분을 밝혀 주세요.
 """
 
 
 # ---------------------------------------------------------------- validation / merge
+# Research-process notes ("제가 확인하지 못했습니다", "기존 표기는 교체") belong in the run summary, not on the page.
+META_RE = re.compile(r"제가|확인하지 못|확인 못|미확인|직접 확인|교체했|표기는|검색된|검색으로|조회돼|조회됐")
+
+
+def tidy(text: str, mark: bool = False) -> str:
+    """Drop sentences / parentheticals that are notes about the research itself; with mark, flag the gap as (추정)."""
+    text = str(text or "").strip()
+    cleaned = re.sub(r"\s*\([^()]*\)", lambda m: "" if META_RE.search(m.group(0)) else m.group(0), text)
+    sentences = re.split(r"(?<=[.다요함음])\s+", cleaned)
+    kept = [x for x in sentences if not META_RE.search(x)]
+    out = " ".join(kept).strip()
+    if mark and out != text and "추정" not in out:
+        out = (out + " (추정)").strip()
+    return out or text
+
+
+def _tidy_segments(text: str) -> str:
+    """Macro 'sub' lines are ' · '-joined facts; drop the note segments."""
+    parts = [tidy(x) for x in str(text or "").split(" · ")]
+    return " · ".join(x for x in parts if x and not META_RE.search(x))
+
+
 def _clean_url(url: str) -> str:
     return url if re.match(r"^https?://", url or "", re.I) else ""
 
@@ -215,8 +241,8 @@ def _clean_news(items: list[dict], ids: set[str], cats: set[str]) -> list[dict]:
             "category": item.get("category") if item.get("category") in cats else "finance",
             "companies": [c for c in item.get("companies", []) if c in ids],
             "companyLabel": str(item.get("companyLabel", ""))[:60],
-            "title": str(item["title"])[:200], "summary": str(item.get("summary", ""))[:600],
-            "why": str(item.get("why", ""))[:300],
+            "title": str(item["title"])[:200], "summary": tidy(item.get("summary", ""))[:600],
+            "why": tidy(item.get("why", ""))[:300],
             "impact": item.get("impact") if item.get("impact") in IMPACTS else "mixed",
             "source": str(item.get("source", ""))[:40], "url": _clean_url(str(item.get("url", ""))),
         })
@@ -234,7 +260,7 @@ def _merge_news(new: list[dict], old: list[dict]) -> list[dict]:
 
 def _clean_events(items: list[dict]) -> list[dict]:
     return [{
-        "date": str(e["date"])[:20], "label": str(e["label"])[:160], "desc": str(e.get("desc", ""))[:500],
+        "date": str(e["date"])[:20], "label": str(e["label"])[:160], "desc": tidy(e.get("desc", ""), mark=True)[:500],
         "status": e.get("status") if e.get("status") in STATUSES else "neutral", "past": bool(e.get("past")),
         "region": e.get("region") if e.get("region") in REGIONS else "",
     } for e in items if e.get("date") and e.get("label")]
@@ -243,7 +269,7 @@ def _clean_events(items: list[dict]) -> list[dict]:
 def _clean_macro(items: list[dict]) -> list[dict]:
     return [{
         "label": str(m["label"])[:60], "value": str(m["value"])[:30], "unit": str(m.get("unit", ""))[:12],
-        "sub": str(m.get("sub", ""))[:120], "tone": m.get("tone") if m.get("tone") in ("up", "down", "flat") else "flat",
+        "sub": _tidy_segments(m.get("sub", ""))[:120], "tone": m.get("tone") if m.get("tone") in ("up", "down", "flat") else "flat",
     } for m in items if m.get("label") and m.get("value")]
 
 
