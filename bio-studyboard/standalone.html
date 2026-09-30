@@ -182,6 +182,7 @@
   .tag.kr{background:var(--kr-soft);color:var(--kr)}
   .tag.gl{background:var(--gl-soft);color:var(--gl)}
   .tag.custom{background:transparent;color:var(--ink-faint);border:1px dashed var(--line);font-weight:600}
+  .tag.ai{background:var(--accent-soft-2);color:var(--accent);border:1px solid var(--accent);font-weight:700}
 
   /* ---------- badges / status ---------- */
   .badge{display:inline-flex;align-items:center;gap:5px;font-size:11.5px;font-weight:600;padding:3px 9px;border-radius:6px;white-space:nowrap}
@@ -1467,6 +1468,87 @@
       stock:{"price": "243.00", "currency": "$", "change": 0, "target": "199 (113~260)", "targetDate": "26.09", "asOf": "26.09.22", "note": "MarketBeat 기준 18명 컨센서스는 'Hold'(매수 10·중립 6·매도 2), 평균 목표주가 199.13달러. TIKR 집계로는 20명, 평균 203달러. UBS는 26.09 매수로 올리며 목표주가를 260달러로 제시(최고치). 26.07 Stifel·JPMorgan은 225~230달러로 상향. 주가는 약 240~246달러로 평균 목표주가보다 15~20% 높고, PER 약 45배. 이사 Keith Meister가 26.08 이후 2.55억달러 넘게 주식을 팔았음."},
       funding:[{"title": "SomaLogic 인수(보유 현금 사용)", "amt": "3.5억달러 (+최대 0.75억달러 마일스톤)", "date": "26.01.30", "desc": "외부 자금 조달 없이 보유 현금으로 인수. 유상증자는 없었음."}, {"title": "현금·부채 현황(26.2Q 말)", "amt": "현금성자산 11.7억달러 / 부채 약 19.9억달러", "date": "26.06", "desc": "1년 안에 갚을 부채가 5억달러. 영업현금흐름으로 충분히 대응 가능한 수준이라 현금 소진 위험은 낮음."}, {"title": "잉여현금흐름(FCF)", "amt": "1.62억달러 (분기)", "date": "26.2Q", "desc": "영업현금흐름 2.01억달러에서 설비투자 0.39억달러를 뺀 값. 흑자 회사라 적자 바이오텍과 달리 증자 필요성이 낮음(전년 동기 2.04억달러보다는 감소)."}],
       reports:[{"date": "26.09", "broker": "UBS", "title": "투자의견 매수로 상향", "opinion": "Buy", "target": "260"}, {"date": "26.09", "broker": "Zacks", "title": "Strong Buy에서 Hold로 하향", "opinion": "Hold"}, {"date": "26.07", "broker": "Stifel / JPMorgan", "title": "2Q 실적 후 목표주가 상향", "target": "225~230"}, {"date": "26.09", "broker": "MarketBeat 컨센서스(18명)", "title": "평균 목표주가 199.13달러", "opinion": "Hold", "target": "199.13", "url": "https://www.marketbeat.com/stocks/NASDAQ/ILMN/forecast"}]
+    },
+    /* ---- AI·플랫폼 바이오 발굴 (26.09.30 추가): 요약은 웹 검색으로 확인한 내용, 상세는 기업별 'AI 업데이트'로 채움 ---- */
+    {
+      id:"generate", name:"Generate Biomedicines (제너레이트)", ticker:"GENB·NASDAQ", region:"gl", aiBio:true,
+      platform:"AI·생성형 생물학 — 머신러닝으로 새로운 단백질·항체를 설계하는 임상 단계 회사",
+      clinical:{status:"neutral", statusLabel:"26.02 상장한 신규 AI 단백질 설계 회사", note:"26.02.27 나스닥에 GENB로 상장했고 공모가는 16달러, 총 4억 달러를 조달했다. 생성형 AI로 설계한 항체·단백질 의약품을 임상에서 검증하는 단계라 아직 승인된 약은 없다."},
+      pipeline:[],
+      stock:{price:"—", currency:"$", change:0, target:"—", targetDate:"", asOf:"", note:"상장 1년 미만이라 주가 이력이 짧고 변동성이 큼."},
+      funding:[{title:"기업공개(IPO)", amt:"4억 달러", date:"26.02", desc:"주당 16달러에 2,500만 주 공모. 26.03.02 마감."}]
+    },
+    {
+      id:"schrodinger", name:"Schrödinger (슈뢰딩거)", ticker:"SDGR·NASDAQ", region:"gl", aiBio:true,
+      platform:"물리 기반 분자 시뮬레이션 + 머신러닝 신약 설계 소프트웨어 (업계 표준급) + 자체 신약 파이프라인",
+      clinical:{status:"neutral", statusLabel:"소프트웨어 매출 + 자체 파이프라인 병행", note:"분자 시뮬레이션과 머신러닝을 결합한 설계 플랫폼을 제약사에 판매하고, 일부 후보물질은 직접 개발한다. 에이전트형 AI 공동연구자 'Bunsen'을 내놓았다."},
+      pipeline:[],
+      stock:{price:"—", currency:"$", change:0, target:"—", targetDate:"", asOf:"", note:"소프트웨어 구독 매출과 파이프라인 임상 결과가 주가 변수."},
+      funding:[]
+    },
+    {
+      id:"absci", name:"Absci (앱시)", ticker:"ABSI·NASDAQ", region:"gl", aiBio:true,
+      platform:"생성형 AI로 항체·단백질을 설계하고 실험으로 바로 검증하는 AI 바이오로직스 회사",
+      clinical:{status:"neutral", statusLabel:"AI 설계 항체 ABS-201 1상 진행", note:"AI가 설계한 항체 ABS-201(탈모 치료 목표)이 1상 시험 중이다. 26.01 항체 신규 설계 모델 'Origin-1'을 공개했다."},
+      pipeline:[],
+      stock:{price:"—", currency:"$", change:0, target:"—", targetDate:"", asOf:"", note:"임상 초기 단계의 소형주라 자금 조달과 1상 결과가 변수."},
+      funding:[]
+    },
+    {
+      id:"abcellera", name:"AbCellera (앱셀레라)", ticker:"ABCL·NASDAQ", region:"gl", aiBio:true,
+      platform:"AI·단일세포 분석·딥시퀀싱으로 치료용 항체를 찾는 플랫폼 (릴리 등과 협업)",
+      clinical:{status:"good", statusLabel:"ABCL635 폐경 안면홍조 2상 성공(26.08)", note:"26.08.10 ABCL635가 안면홍조 중간 단계 시험에서 효과를 보였다고 발표하자 주가가 한때 41% 올라 시가총액이 약 30억 달러에 이르렀다. 현금성 유동자산이 약 6.5억 달러로 풍부하다는 평가가 있다."},
+      pipeline:[],
+      stock:{price:"—", currency:"$", change:0, target:"—", targetDate:"", asOf:"", note:"2상 성공 이후 재평가 구간. 이후 3상 계획과 자금 소진 속도가 관건."},
+      funding:[]
+    },
+    {
+      id:"tempus", name:"Tempus AI (템퍼스)", ticker:"TEM·NASDAQ", region:"gl", aiBio:true,
+      platform:"AI 기반 정밀의료 — 임상·분자 데이터를 모아 진단 검사와 신약 개발용 데이터 사업을 함께 운영",
+      clinical:{status:"neutral", statusLabel:"진단 + 데이터 라이선스 사업", note:"유전체 검사와 방대한 임상 데이터를 바탕으로 진단 매출을 내고, 제약사에 데이터·AI 모델을 라이선스한다. 리커젼과도 데이터 라이선스 계약을 맺고 있다."},
+      pipeline:[],
+      stock:{price:"—", currency:"$", change:0, target:"—", targetDate:"", asOf:"", note:"AI 데이터 기업 성격이라 성장 기대와 적자 축소 속도가 주가를 좌우."},
+      funding:[]
+    },
+    {
+      id:"relay", name:"Relay Therapeutics (릴레이 테라퓨틱스)", ticker:"RLAY·NASDAQ", region:"gl", aiBio:true,
+      platform:"'Dynamo' 플랫폼 — 단백질의 움직임을 컴퓨터로 시뮬레이션하고 실험과 결합해 정밀 항암제를 설계",
+      clinical:{status:"neutral", statusLabel:"RLY-2608 등 정밀 항암 파이프라인", note:"단백질 움직임 계산과 실험을 결합해 그동안 약으로 만들기 어려웠던 표적을 겨냥한다. 파이프라인에는 RLY-2608·RLY-4008·RLY-8186 등이 있다. 26.09.24 기준 주가는 약 17.7달러, 시가총액 약 39억 달러로 조사됐다."},
+      pipeline:[],
+      stock:{price:"17.72", currency:"$", change:0, target:"—", targetDate:"", asOf:"26.09.24", note:"시가총액 약 $3.89B. 애널리스트 9명 컨센서스 'Buy'(26.06 기준)."},
+      funding:[]
+    },
+    {
+      id:"insilico", name:"Insilico Medicine (인실리코 메디신)", ticker:"3696.HK·HKEX", region:"gl", aiBio:true,
+      platform:"생성형 AI로 표적 발굴부터 후보물질 설계까지 하는 임상 단계 회사. 홍콩 상장",
+      clinical:{status:"good", statusLabel:"AI 발굴 신약 중 가장 앞선 rentosertib(IPF 2a상 완료)", note:"특발성 폐섬유증 후보 rentosertib(ISM001-055)이 2a상을 마쳤고 결과가 Nature Medicine(25.05)에 실렸다. 25.12.30 홍콩 증시에 상장했고, 26.03 릴리와 최대 27.5억 달러 규모 협업을 맺었다."},
+      pipeline:[],
+      stock:{price:"—", currency:"HK$", change:0, target:"—", targetDate:"", asOf:"", note:"홍콩 상장 AI 신약 기업. 임상 결과와 대형 제약사 협업 소식이 변수."},
+      funding:[{title:"홍콩 IPO", amt:"약 22.8억 HK$", date:"25.12.30", desc:"2025년 홍콩 최대 바이오텍 IPO."}, {title:"일라이릴리 협업", amt:"최대 27.5억 달러", date:"26.03", desc:"AI 시대 최대 규모의 제약사 협업으로 보도됨."}]
+    },
+    {
+      id:"lantern", name:"Lantern Pharma (랜턴 파마)", ticker:"LTRN·NASDAQ", region:"gl", aiBio:true,
+      platform:"AI·머신러닝 플랫폼 'RADR' — 수십억 개 데이터로 바이오마커를 찾아 항암 임상을 빠르게 설계하는 소형 회사",
+      clinical:{status:"warn", statusLabel:"초소형 AI 항암 개발사, 자금·임상 결과 변수", note:"AI 플랫폼으로 표적 환자군을 좁혀 임상 비용과 기간을 줄이는 것이 핵심 주장이다. 26.09.23 멀티에이전트 'Open-Medicine' 플랫폼을 소개했다. 시가총액이 매우 작아 변동성이 크다."},
+      pipeline:[],
+      stock:{price:"—", currency:"$", change:0, target:"25", targetDate:"", asOf:"", note:"Lake Street 매수·목표가 25달러(현재가 대비 1,400% 이상)로 소개되나 초소형주라 극도로 변동성이 큼."},
+      funding:[]
+    },
+    {
+      id:"eikon", name:"Eikon Therapeutics (아이콘 테라퓨틱스)", ticker:"EIKN·NASDAQ", region:"gl", aiBio:true,
+      platform:"초고해상도 현미경으로 살아있는 세포 속 단백질 움직임을 대량 촬영하고 머신러닝으로 분석해 표적·후보물질을 찾는 항암 신약 개발사",
+      clinical:{status:"neutral", statusLabel:"26.02 상장한 후기 임상 항암 개발사", note:"26.02.05 나스닥에 EIKN으로 상장했고 공모가는 18달러, 총 3.81억 달러를 조달했다. 데이터·AI 기반 발굴 플랫폼을 내세우는 후기 임상 단계 항암 개발사로 분류된다."},
+      pipeline:[],
+      stock:{price:"—", currency:"$", change:0, target:"—", targetDate:"", asOf:"", note:"상장 1년 미만이라 주가 이력이 짧고 임상 결과에 따른 변동성이 큼."},
+      funding:[{title:"기업공개(IPO)", amt:"3.81억 달러", date:"26.02", desc:"주당 18달러에 2,117만 주 공모(상향 조정)."}]
+    },
+    {
+      id:"certara", name:"Certara (서타라)", ticker:"CERT·NASDAQ", region:"gl", aiBio:true,
+      platform:"바이오시뮬레이션 — AI·모델링으로 임상시험 설계와 용량을 예측하는 신약 개발 소프트웨어·서비스",
+      clinical:{status:"neutral", statusLabel:"모델링·시뮬레이션 중심으로 사업 재편", note:"규제·의학 문서 작성 사업을 최대 1.35억 달러에 Veristat에 매각하기로 하고 모델링·임상 인텔리전스에 집중한다. 26년 가이던스는 매출 성장 0~4%, 조정 EBITDA 마진 30~32%."},
+      pipeline:[],
+      stock:{price:"—", currency:"$", change:0, target:"—", targetDate:"", asOf:"", note:"직접 신약을 개발하지 않는 소프트웨어·서비스 회사라 임상 실패 위험이 상대적으로 낮음."},
+      funding:[]
     }
   ];
 
@@ -1796,7 +1878,7 @@
 
   function renderProfile(c){
     var h = '<div class="profile-head"><div class="card-head">';
-    h += '<div class="card-title"><h3>'+esc(c.name)+'</h3><span class="ticker mono">'+esc(c.ticker)+'</span><span class="tag '+(c.region==='kr'?'kr':'gl')+'">'+(c.region==='kr'?'국내':'해외')+'</span>'+(c.custom?'<span class="tag custom">직접 추가</span>':'')+'</div>';
+    h += '<div class="card-title"><h3>'+esc(c.name)+'</h3><span class="ticker mono">'+esc(c.ticker)+'</span><span class="tag '+(c.region==='kr'?'kr':'gl')+'">'+(c.region==='kr'?'국내':'해외')+'</span>'+(c.aiBio?'<span class="tag ai">AI 바이오</span>':'')+(c.custom?'<span class="tag custom">직접 추가</span>':'')+'</div>';
     h += (c.clinical ? statusBadge(c.clinical.status, esc(c.clinical.statusLabel)) : '');
     h += stickyNote(c);
     h += '</div>';

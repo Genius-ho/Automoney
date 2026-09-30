@@ -39,6 +39,8 @@ UA = "Mozilla/5.0"  # Yahoo 429s full browser UA strings from scripts
 # Page companies whose ticker field is not a symbol
 SYMBOL_OVERRIDES = {}
 
+CURRENCY_SIGNS = {"USD": "$", "HKD": "HK$", "JPY": "¥", "EUR": "€", "TWD": "NT$", "GBP": "£"}
+
 _price_lock = threading.Lock()
 _price_cache: tuple[float, dict[str, object], set[str]] | None = None
 
@@ -78,7 +80,8 @@ def _gl_quote(symbol: str) -> dict[str, object]:
     previous = float(meta.get("chartPreviousClose") or meta.get("previousClose") or 0)
     change = (price / previous - 1) * 100 if previous else 0.0
     as_of = time.strftime("%Y-%m-%d %H:%M", time.localtime(int(meta.get("regularMarketTime") or time.time())))
-    return {"price": f"{price:,.2f}", "change": round(change, 2), "currency": "$", "asOf": as_of + " KST"}
+    currency = CURRENCY_SIGNS.get(str(meta.get("currency") or "USD").upper(), "$")
+    return {"price": f"{price:,.2f}", "change": round(change, 2), "currency": currency, "asOf": as_of + " KST"}
 
 
 HISTORY_TTL = 6 * 3600
