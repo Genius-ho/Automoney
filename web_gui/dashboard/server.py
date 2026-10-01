@@ -28,6 +28,7 @@ from application_engine import ApplicationEngine, LiveActionsRequiredError  # no
 from local_env import load_env  # noqa: E402
 from web_gui.dashboard import bio  # noqa: E402
 from web_gui.dashboard import semi  # noqa: E402
+from web_gui.dashboard import crypto  # noqa: E402
 from telegram_bot import TelegramCommandLoop  # noqa: E402
 from toss_api import TossApiError  # noqa: E402
 from web_gui.dashboard.service import DashboardService, EngineDashboardService  # noqa: E402
@@ -146,7 +147,7 @@ class Handler(BaseHTTPRequestHandler):
                 self._validate()
                 self._json(HTTPStatus.OK, {"ok": True, "etf_overview": self.service.etf_overview()})
                 return
-            if parsed.path in {"/bio", "/semi"}:
+            if parsed.path in {"/bio", "/semi", "/crypto"}:
                 self.send_response(HTTPStatus.MOVED_PERMANENTLY)
                 self.send_header("Location", parsed.path + "/")
                 self.end_headers()
@@ -160,6 +161,15 @@ class Handler(BaseHTTPRequestHandler):
                 q = parse_qs(parsed.query)
                 self._json(HTTPStatus.OK, semi.history(
                     q.get("key", [""])[0], q.get("region", ["gl"])[0], q.get("market", [""])[0]))
+                return
+            if parsed.path == "/crypto/api/history":
+                self._json(HTTPStatus.OK, crypto.history(parse_qs(parsed.query).get("sym", ["BTC"])[0]))
+                return
+            if parsed.path == "/crypto/api/prices":
+                self._json(HTTPStatus.OK, crypto.prices())
+                return
+            if parsed.path == "/crypto/api/news":
+                self._json(HTTPStatus.OK, crypto.news())
                 return
             if parsed.path == "/bio/api/search":
                 self._json(HTTPStatus.OK, bio.search(parse_qs(parsed.query).get("q", [""])[0]))
@@ -177,6 +187,10 @@ class Handler(BaseHTTPRequestHandler):
                 path = bio.BIO_PAGE
             elif parsed.path.startswith("/bio/"):
                 path = bio.data_file(unquote(parsed.path[len("/bio/"):]))
+            elif parsed.path in {"/crypto/", "/crypto/index.html"}:
+                path = crypto.PAGE
+            elif parsed.path.startswith("/crypto/"):
+                path = crypto.data_file(unquote(parsed.path[len("/crypto/"):]))
             elif parsed.path in {"/semi/", "/semi/index.html"}:
                 path = semi.BIO_PAGE
             elif parsed.path.startswith("/semi/"):
@@ -224,13 +238,15 @@ class Handler(BaseHTTPRequestHandler):
                     {"Set-Cookie": f"mumae_v2_session=; HttpOnly; SameSite=Strict; Path=/; Max-Age=0{self._cookie_flags()}"},
                 )
                 return
-            if parsed.path in {"/bio/api/analyze", "/semi/api/analyze", "/bio/api/update", "/semi/api/update", "/semi/api/analyze-all"}:
+            if parsed.path in {"/bio/api/analyze", "/semi/api/analyze", "/bio/api/update", "/semi/api/update", "/semi/api/analyze-all", "/crypto/api/update"}:
                 # Neither board has a login of its own; accept same-origin requests only.
                 origin = self.headers.get("Origin") or ""
                 if urlparse(origin).netloc != (self.headers.get("Host") or ""):
                     raise PermissionError("허용되지 않은 요청 출처입니다.")
                 mod = bio if parsed.path.startswith("/bio/") else semi
-                if parsed.path == "/semi/api/analyze-all":
+                if parsed.path == "/crypto/api/update":
+                    self._json(HTTPStatus.OK, crypto.start_update())
+                elif parsed.path == "/semi/api/analyze-all":
                     self._json(HTTPStatus.OK, semi.start_analysis_all())
                 elif parsed.path.endswith("/api/update"):
                     self._json(HTTPStatus.OK, mod.start_update(parse_qs(parsed.query).get("part", ["all"])[0]))
@@ -332,6 +348,7 @@ def run(
     bio.start_refreshers()
     semi.broker_provider = active_engine.broker if active_engine is not None else None
     semi.start_refreshers()
+    crypto.start()
     url = f"http://127.0.0.1:{port}/"
     print(f"Mumae CLI Engine + Emergency Dashboard: {url}")
     print(f"Shared data: {Handler.service.data_dir}")

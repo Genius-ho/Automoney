@@ -111,7 +111,7 @@ def load_update(board: Board) -> dict | None:
         return None
 
 
-def _write(board: Board, payload: dict) -> None:
+def write_update(board: Board, payload: dict) -> None:
     board.path.parent.mkdir(parents=True, exist_ok=True)
     tmp = board.path.with_suffix(".tmp")
     tmp.write_text(json.dumps(payload, ensure_ascii=False, indent=1), encoding="utf-8")
@@ -303,10 +303,10 @@ def _run(board: Board, part: str) -> None:
             new["news"] = _merge_news(_clean_news(data.get("news", []), set(ids), set(board.news_cats)), old_news)
             parts["news"] = finished
         new.update(asOf=time.strftime("%Y.%m.%d"), parts=parts, summary=str(data.get("summary", ""))[:600])
-        _write(board, {"status": "done", "part": part, "startedAt": started, "finishedAt": finished,
+        write_update(board, {"status": "done", "part": part, "startedAt": started, "finishedAt": finished,
                        "model": f"{MODEL} · {EFFORT}", "data": new})
     except Exception as error:  # noqa: BLE001 - surface any failure to the page, keep the last good data
-        _write(board, {**(previous or {}), "status": "error", "part": part, "startedAt": started,
+        write_update(board, {**(previous or {}), "status": "error", "part": part, "startedAt": started,
                        "finishedAt": time.strftime("%Y-%m-%d %H:%M:%S"), "error": str(error)[:500]})
     finally:
         with board.lock:
@@ -323,7 +323,7 @@ def reset_stale(board: Board) -> None:
     """A restart kills the worker thread; don't leave the page waiting on a dead job."""
     previous = load_update(board)
     if previous and previous.get("status") == "running":
-        _write(board, {**previous, "status": "error", "error": "서버가 재시작되어 업데이트가 중단되었어요. 다시 눌러 주세요."})
+        write_update(board, {**previous, "status": "error", "error": "서버가 재시작되어 업데이트가 중단되었어요. 다시 눌러 주세요."})
 
 
 def start_update(board: Board, part: str = "all") -> dict[str, object]:
@@ -334,6 +334,6 @@ def start_update(board: Board, part: str = "all") -> dict[str, object]:
             return {"ok": True, "status": "running"}
         board.running = True
     previous = load_update(board) or {}
-    _write(board, {**previous, "status": "running", "part": part, "startedAt": time.strftime("%Y-%m-%d %H:%M:%S"), "error": ""})
+    write_update(board, {**previous, "status": "running", "part": part, "startedAt": time.strftime("%Y-%m-%d %H:%M:%S"), "error": ""})
     threading.Thread(target=_run, args=(board, part), name=f"{board.label}-update", daemon=True).start()
     return {"ok": True, "status": "running"}

@@ -1,0 +1,567 @@
+<!doctype html>
+<html lang="ko">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">
+<title>크립토 스터디보드</title>
+<meta name="description" content="2018년 이후 비트코인·이더리움 가격과 반감기·ETF·업그레이드·폭락·규제 등 주요 사건을 한 페이지에 정리한 학습용 대시보드">
+<style>
+  @import url('https://cdn.jsdelivr.net/npm/pretendard@1.3.9/dist/web/variable/pretendardvariable-dynamic-subset.min.css');
+  :root{
+    --bg:#f3f1ec; --surface:#ffffff; --surface-2:#ece8e0; --ink:#1d1a16; --ink-soft:#4a443b; --ink-faint:#7a7266;
+    --line:#e2ddd3; --accent:#b4600c; --accent-soft:#f7e9d7; --accent-soft-2:#fbf3e8; --on-accent:#fff;
+    --btc:#e08a12; --btc-soft:#fbeedb; --eth:#5b5bd6; --eth-soft:#e6e6fa;
+    --good:#2f8f5b; --good-soft:#e2f1e7; --warn:#b8791f; --warn-soft:#f6ecd9; --crit:#b7473a; --crit-soft:#f7e6e2;
+    --shadow:0 1px 2px rgba(30,25,15,.04),0 8px 24px -12px rgba(30,25,15,.16);
+    color-scheme:light;
+  }
+  @media (prefers-color-scheme: dark){
+    :root:not([data-theme="light"]){
+      --bg:#14120f; --surface:#1c1915; --surface-2:#24201b; --ink:#eee9e1; --ink-soft:#c9c1b5; --ink-faint:#968d80;
+      --line:#2f2a23; --accent:#f0a24a; --accent-soft:#3a2a17; --accent-soft-2:#2a2118; --on-accent:#14120f;
+      --btc:#f3a43a; --btc-soft:#3a2a15; --eth:#9a9cf5; --eth-soft:#25254a;
+      --good:#5ecb92; --good-soft:#1a3226; --warn:#e0ab52; --warn-soft:#332a17; --crit:#e58b7c; --crit-soft:#382220;
+      --shadow:0 1px 2px rgba(0,0,0,.3),0 8px 24px -12px rgba(0,0,0,.6);
+      color-scheme:dark;
+    }
+  }
+  *{box-sizing:border-box}
+  body{margin:0;background:var(--bg);color:var(--ink);font-family:"Pretendard Variable",Pretendard,"Noto Sans KR",system-ui,sans-serif;font-size:15px;line-height:1.55;-webkit-font-smoothing:antialiased}
+  a{color:var(--accent)}
+  .wrap{max-width:1120px;margin:0 auto;padding:0 20px 60px}
+  header.top{padding:28px 20px 20px;border-bottom:1px solid var(--line);background:linear-gradient(180deg,var(--accent-soft-2),transparent)}
+  .top-inner{max-width:1120px;margin:0 auto}
+  .eyebrow{font-size:12.5px;letter-spacing:.12em;text-transform:uppercase;color:var(--accent);font-weight:700}
+  h1{font-size:clamp(26px,4vw,34px);font-weight:700;margin:4px 0 6px;letter-spacing:-.01em}
+  .subtitle{color:var(--ink-soft);margin:0;max-width:64ch}
+  .meta-row{display:flex;gap:10px;flex-wrap:wrap;align-items:center;margin-top:14px;font-size:13.5px;color:var(--ink-faint)}
+  .pill{background:var(--surface);border:1px solid var(--line);padding:4px 10px;border-radius:99px}
+  .upd-btn{font:inherit;color:var(--accent);background:var(--accent-soft-2);border:1px solid var(--accent);padding:4px 12px;border-radius:99px;cursor:pointer;font-weight:700}
+  .upd-btn:hover:not(:disabled){background:var(--accent);color:var(--on-accent)}
+  .upd-btn:disabled{opacity:.6;cursor:progress}
+  .upd-msg.err{color:var(--crit)}
+  /* price cards */
+  .cards{display:grid;grid-template-columns:repeat(3,1fr);gap:12px;margin-top:18px}
+  .card{background:var(--surface);border:1px solid var(--line);border-radius:14px;padding:14px 16px;box-shadow:var(--shadow);min-width:0}
+  .card h3{margin:0;font-size:13.5px;color:var(--ink-faint);font-weight:600;display:flex;align-items:center;gap:6px}
+  .coin{display:inline-grid;place-items:center;width:22px;height:22px;border-radius:99px;font-size:12px;font-weight:800;color:#fff}
+  .coin.btc{background:var(--btc)} .coin.eth{background:var(--eth)}
+  .big{font-size:24px;font-weight:800;font-variant-numeric:tabular-nums;margin:4px 0 2px;letter-spacing:-.02em}
+  .chg{font-size:13.5px;font-weight:700;font-variant-numeric:tabular-nums}
+  .up{color:var(--good)} .down{color:var(--crit)}
+  .kv{display:flex;justify-content:space-between;gap:8px;font-size:13px;color:var(--ink-soft);margin-top:4px;font-variant-numeric:tabular-nums}
+  .kv b{color:var(--ink);font-weight:600}
+  /* sections */
+  section{margin-top:30px}
+  .sec-head{display:flex;flex-wrap:wrap;align-items:baseline;justify-content:space-between;gap:8px 16px;margin-bottom:12px}
+  .sec-head h2{margin:0;font-size:20px;letter-spacing:-.01em}
+  .note{font-size:13px;color:var(--ink-faint)}
+  .seg{display:inline-flex;background:var(--surface);border:1px solid var(--line);border-radius:99px;padding:2px;gap:2px;flex-wrap:wrap}
+  .seg button{font:inherit;font-size:13.5px;font-weight:600;color:var(--ink-soft);background:transparent;border:0;border-radius:99px;padding:6px 12px;cursor:pointer}
+  .seg button[aria-pressed="true"]{background:var(--accent);color:var(--on-accent)}
+  .controls{display:flex;flex-wrap:wrap;gap:8px;margin-bottom:10px}
+  /* chart */
+  .chart-box{background:var(--surface);border:1px solid var(--line);border-radius:14px;padding:12px 12px 6px;box-shadow:var(--shadow)}
+  .chart-box svg{width:100%;height:auto;display:block;overflow:visible}
+  .c-grid{stroke:var(--line);stroke-width:1}
+  .c-axis{fill:var(--ink-faint);font-size:11px;font-family:inherit}
+  .c-line{fill:none;stroke-width:1.8}
+  .c-line.btc{stroke:var(--btc)} .c-line.eth{stroke:var(--eth)}
+  .c-area.btc{fill:var(--btc-soft)} .c-area.eth{fill:var(--eth-soft)}
+  #chart [data-ev]{cursor:pointer}
+  .hit{stroke:transparent;stroke-width:14}
+  .vl{stroke-width:1;stroke-dasharray:3 3;opacity:.55;pointer-events:none}
+  .dot{stroke:var(--surface)!important;stroke-width:1.5}
+  .vl.hi,.vl.pin{opacity:1;stroke-width:2;stroke-dasharray:none}
+  .dot.hi,.dot.pin{r:6.5}
+  .t-up{stroke:var(--good);fill:var(--good)} .t-down{stroke:var(--crit);fill:var(--crit)} .t-neutral{stroke:var(--ink-faint);fill:var(--ink-faint)}
+  .vl.halving{stroke:var(--btc);opacity:.9;stroke-width:2;stroke-dasharray:none}
+  .dot.halving{fill:var(--btc)}
+  .halving-lbl{fill:var(--btc);font-size:10.5px;font-weight:700}
+  .legend{display:flex;flex-wrap:wrap;gap:6px 14px;font-size:12.5px;color:var(--ink-faint);padding:6px 4px 4px}
+  .legend i{display:inline-block;width:9px;height:9px;border-radius:99px;margin-right:5px;vertical-align:0}
+  /* timeline */
+  .chips{display:flex;flex-wrap:wrap;gap:6px}
+  .chip{font:inherit;font-size:13px;font-weight:600;border:1px solid var(--line);background:var(--surface);color:var(--ink-soft);border-radius:99px;padding:4px 10px;cursor:pointer}
+  .chip[aria-pressed="true"]{border-color:var(--accent);background:var(--accent-soft);color:var(--accent)}
+  .year{font-size:18px;font-weight:800;margin:22px 0 8px;color:var(--ink-soft);display:flex;align-items:baseline;gap:10px}
+  .year small{font-size:12.5px;font-weight:600;color:var(--ink-faint)}
+  .tl{display:flex;flex-direction:column;gap:8px}
+  .item{background:var(--surface);border:1px solid var(--line);border-left:4px solid var(--line);border-radius:10px;padding:10px 14px;scroll-margin:90px 0;cursor:pointer}
+  .item.i-up{border-left-color:var(--good)} .item.i-down{border-left-color:var(--crit)} .item.i-neutral{border-left-color:var(--ink-faint)}
+  .item.hi,.item.pin{background:var(--accent-soft-2);box-shadow:inset 0 0 0 1px var(--accent)}
+  .item-top{display:flex;flex-wrap:wrap;align-items:center;gap:6px 8px}
+  .date{font-weight:800;font-variant-numeric:tabular-nums}
+  .tag{font-size:11.5px;font-weight:700;padding:2px 7px;border-radius:6px;background:var(--surface-2);color:var(--ink-soft)}
+  .tag.btc{background:var(--btc-soft);color:var(--btc)} .tag.eth{background:var(--eth-soft);color:var(--eth)}
+  .tag.ai{background:var(--accent-soft);color:var(--accent)}
+  .item h4{margin:4px 0 2px;font-size:15.5px}
+  .item p{margin:0;color:var(--ink-soft);font-size:14px}
+  .px{font-size:12.5px;color:var(--ink-faint);margin-top:4px;font-variant-numeric:tabular-nums}
+  .src{font-size:12.5px;margin-top:4px}
+  .src a{margin-right:8px}
+  /* tables, news, learn */
+  .grid2{display:grid;grid-template-columns:1fr 1fr;gap:14px}
+  table{width:100%;border-collapse:collapse;font-size:13.5px;background:var(--surface);border:1px solid var(--line);border-radius:12px;overflow:hidden}
+  th,td{padding:8px 10px;border-bottom:1px solid var(--line);text-align:left;vertical-align:top}
+  th{background:var(--surface-2);font-weight:700;color:var(--ink-soft);font-size:12.5px}
+  td.num{font-variant-numeric:tabular-nums;white-space:nowrap}
+  .ncard{background:var(--surface);border:1px solid var(--line);border-radius:12px;padding:12px 14px;margin-bottom:8px}
+  .ncard h4{margin:4px 0;font-size:15px}
+  .ncard p{margin:4px 0 0;font-size:14px;color:var(--ink-soft)}
+  .ncard .why{color:var(--accent)}
+  .nfoot{font-size:12.5px;color:var(--ink-faint);margin-top:6px}
+  .nline{display:flex;gap:10px;padding:7px 0;border-bottom:1px solid var(--line);font-size:14px}
+  .nline .d{color:var(--ink-faint);font-variant-numeric:tabular-nums;white-space:nowrap}
+  .nline small{color:var(--ink-faint);margin-left:6px}
+  .learn{display:grid;grid-template-columns:repeat(2,1fr);gap:12px}
+  .learn .card p{margin:6px 0 0;font-size:14px;color:var(--ink-soft)}
+  .learn .card h3{font-size:15px;color:var(--ink)}
+  .empty{color:var(--ink-faint);font-size:14px;padding:10px 0}
+  footer{margin-top:40px;font-size:12.5px;color:var(--ink-faint);text-align:center}
+  @media (max-width:760px){
+    .cards{grid-template-columns:1fr}
+    .grid2,.learn{grid-template-columns:1fr}
+    .wrap{padding:0 14px 48px}
+    header.top{padding:22px 14px 16px}
+  }
+</style>
+</head>
+<body>
+<header class="top">
+  <div class="top-inner">
+    <div class="eyebrow">Crypto Study Board</div>
+    <h1>크립토 스터디보드</h1>
+    <p class="subtitle">2018년부터 지금까지 비트코인·이더리움의 가격과 반감기, ETF 출시, 네트워크 업그레이드, 폭락·급등, 규제 같은 주요 사건을 한 페이지에서 따라가는 학습용 대시보드입니다.</p>
+    <div class="meta-row">
+      <span class="pill" id="upd-date">히스토리 기준 2025.12</span>
+      <button type="button" class="upd-btn" id="upd-btn" hidden title="Claude Sonnet 5.5 (medium)가 웹 검색으로 새 사건과 뉴스를 찾아 추가해요">🔄 AI 업데이트</button>
+      <span class="upd-msg" id="upd-msg"></span>
+      <span class="pill">정보 제공 목적 · 투자 권유 아님</span>
+    </div>
+    <div class="cards">
+      <div class="card" id="card-btc"><h3><span class="coin btc">₿</span>비트코인 BTC</h3><div class="big">—</div></div>
+      <div class="card" id="card-eth"><h3><span class="coin eth">Ξ</span>이더리움 ETH</h3><div class="big">—</div></div>
+      <div class="card" id="card-ratio"><h3>📐 ETH/BTC · 환율</h3><div class="big">—</div></div>
+    </div>
+  </div>
+</header>
+
+<main class="wrap">
+  <section>
+    <div class="sec-head">
+      <h2>📈 2018년 이후 가격 흐름</h2>
+      <span class="note">주간 종가(달러) · 선이나 점을 누르면 아래 히스토리의 해당 사건으로 이동해요</span>
+    </div>
+    <div class="controls">
+      <div class="seg" role="group" aria-label="자산"><button type="button" data-asset="btc" aria-pressed="true">비트코인</button><button type="button" data-asset="eth" aria-pressed="false">이더리움</button></div>
+      <div class="seg" role="group" aria-label="눈금"><button type="button" data-scale="log" aria-pressed="true">로그</button><button type="button" data-scale="lin" aria-pressed="false">일반</button></div>
+    </div>
+    <div class="chart-box">
+      <div id="chart"><p class="empty">차트를 불러오는 중…</p></div>
+      <div class="legend"><span><i style="background:var(--good)"></i>상승 요인</span><span><i style="background:var(--crit)"></i>하락 요인</span><span><i style="background:var(--ink-faint)"></i>중립</span><span><i style="background:var(--btc)"></i>반감기</span><span>로그 눈금: 같은 높이 = 같은 비율 변화</span></div>
+    </div>
+  </section>
+
+  <section>
+    <div class="sec-head">
+      <h2>🗓 히스토리 <span class="note" id="tl-count"></span></h2>
+      <div class="seg" role="group" aria-label="정렬"><button type="button" data-order="asc" aria-pressed="true">과거부터</button><button type="button" data-order="desc" aria-pressed="false">최신부터</button></div>
+    </div>
+    <div class="controls">
+      <div class="seg" role="group" aria-label="자산 필터"><button type="button" data-fasset="all" aria-pressed="true">전체</button><button type="button" data-fasset="btc" aria-pressed="false">BTC</button><button type="button" data-fasset="eth" aria-pressed="false">ETH</button></div>
+      <div class="chips" id="type-chips"></div>
+    </div>
+    <div id="timeline"></div>
+  </section>
+
+  <section class="grid2">
+    <div>
+      <div class="sec-head"><h2>⛏ 비트코인 반감기</h2></div>
+      <table>
+        <thead><tr><th>회차</th><th>날짜</th><th>블록 높이</th><th>채굴 보상</th></tr></thead>
+        <tbody>
+          <tr><td>1차</td><td class="num">2012-11-28</td><td class="num">210,000</td><td>50 → 25 BTC</td></tr>
+          <tr><td>2차</td><td class="num">2016-07-09</td><td class="num">420,000</td><td>25 → 12.5 BTC</td></tr>
+          <tr><td>3차</td><td class="num">2020-05-11</td><td class="num">630,000</td><td>12.5 → 6.25 BTC</td></tr>
+          <tr><td>4차</td><td class="num">2024-04-20</td><td class="num">840,000</td><td>6.25 → 3.125 BTC</td></tr>
+          <tr><td>5차</td><td class="num">2028년 상반기 (추정)</td><td class="num">1,050,000</td><td>3.125 → 1.5625 BTC</td></tr>
+        </tbody>
+      </table>
+      <p class="note">반감기는 날짜가 아니라 21만 블록마다 와요. 블록이 평균 10분마다 생겨서 약 4년 주기가 돼요.</p>
+    </div>
+    <div>
+      <div class="sec-head"><h2>🏦 ETF 이정표</h2></div>
+      <table>
+        <thead><tr><th>날짜</th><th>내용</th></tr></thead>
+        <tbody>
+          <tr><td class="num">2021-10-19</td><td>美 첫 비트코인 <b>선물</b> ETF(BITO) 상장</td></tr>
+          <tr><td class="num">2024-01-11</td><td>美 비트코인 <b>현물</b> ETF 11종 거래 시작 (전날 SEC 승인)</td></tr>
+          <tr><td class="num">2024-04-30</td><td>홍콩 비트코인·이더리움 현물 ETF 상장</td></tr>
+          <tr><td class="num">2024-07-23</td><td>美 이더리움 현물 ETF 거래 시작 (5/23 상장 규칙 승인)</td></tr>
+        </tbody>
+      </table>
+      <p class="note">현물 ETF는 실제 코인을 사서 보관하고, 선물 ETF는 선물 계약을 사요. 현물 ETF로 주식 계좌에서도 코인에 투자할 수 있게 됐어요.</p>
+    </div>
+  </section>
+
+  <section>
+    <div class="sec-head">
+      <h2>📰 뉴스</h2>
+      <span class="note" id="news-note"></span>
+    </div>
+    <div id="news-ai"></div>
+    <div id="news-live"></div>
+  </section>
+
+  <section>
+    <div class="sec-head"><h2>📚 기본 지식</h2></div>
+    <div class="learn">
+      <div class="card"><h3>⛏ 반감기와 4년 사이클</h3><p>비트코인은 새 블록을 만든 채굴자에게 보상을 주는데, 이 보상이 21만 블록(약 4년)마다 절반으로 줄어요. 새로 풀리는 공급이 줄어드는 셈이라, 과거에는 반감기 후 1~1.5년 사이에 고점이 온 경우가 많았어요. 다만 ETF·기관 자금이 커지면서 이 패턴이 그대로 반복될지는 논쟁이 있어요.</p></div>
+      <div class="card"><h3>🔁 PoW와 PoS — 이더리움 머지</h3><p>작업증명(PoW)은 계산 경쟁(채굴)으로 블록을 만들고, 지분증명(PoS)은 코인을 맡긴(스테이킹) 검증자가 블록을 만들어요. 이더리움은 2022년 9월 15일 '머지(The Merge)'로 PoW에서 PoS로 바뀌었고 에너지 사용이 약 99.9% 줄었어요. 비트코인은 지금도 PoW예요.</p></div>
+      <div class="card"><h3>🏦 현물 ETF가 중요한 이유</h3><p>거래소 계정 없이 증권 계좌로 살 수 있어서 연기금·자산운용사 같은 큰 자금이 들어올 길이 열렸어요. 매일 발표되는 ETF 순유입·순유출이 단기 가격의 주요 지표가 됐어요.</p></div>
+      <div class="card"><h3>🇰🇷 김치 프리미엄</h3><p>국내 거래소(업비트) 원화 가격이 해외 달러 가격을 환율로 바꾼 값보다 얼마나 비싼지를 말해요. 국내 매수세가 과열되면 크게 벌어지고(2018년 초 약 50%), 위 카드에 실시간으로 계산해 보여줘요.</p></div>
+      <div class="card"><h3>💥 연쇄 파산과 디레버리징</h3><p>2022년 테라·루나 붕괴 → 셀시우스·3AC 파산 → FTX 파산처럼, 레버리지를 크게 쓴 회사 하나가 무너지면 담보 청산이 연쇄적으로 일어나 시장 전체가 급락해요. 2025년 10월 10일처럼 하루에 수십조 원어치 레버리지 포지션이 강제 청산되기도 해요.</p></div>
+      <div class="card"><h3>🌐 금리·달러와의 관계</h3><p>코인은 이자가 없는 위험자산이라 금리가 오르고 달러가 강해지면 약해지는 경향이 있어요. 2022년 미국 금리 인상기, 2024년 8월 엔 캐리 청산 때 함께 급락했어요.</p></div>
+    </div>
+  </section>
+
+  <footer>가격: Yahoo Finance(달러), 업비트(원화) · 히스토리는 공개 보도 기준이며 가격은 대략적인 수치예요 · 투자 판단의 근거로 쓰지 마세요</footer>
+</main>
+
+<script>
+(function(){
+  'use strict';
+  /* Seed history (hand-written). Prices are approximate; the AI update adds later events on top. */
+  /*EVENTS:BEGIN*/
+  var EVENTS = [
+    {"date":"2018-01-13","asset":"eth","type":"rally","impact":"up","title":"이더리움 2018년 사이클 고점","desc":"ICO 열풍 속에 이더리움이 약 1,400달러로 당시 최고가를 기록했어요. 이후 1년 가까이 약 94% 떨어지는 긴 하락장이 시작됐어요."},
+    {"date":"2018-01-16","asset":"both","type":"crash","impact":"down","title":"한국·중국 규제 우려에 급락","desc":"한국의 거래소 규제 논의와 중국의 단속 소식이 겹치며 비트코인이 하루 만에 1만 달러 아래로 떨어졌어요. 2017년 12월 약 2만 달러 고점 이후 하락장의 신호탄이었어요."},
+    {"date":"2018-01-30","asset":"both","type":"regulation","impact":"down","title":"국내 가상화폐 거래 실명제 시행","desc":"은행 실명 확인 계좌가 있어야 원화 입금이 가능해졌어요. 과열됐던 김치 프리미엄(한때 약 50%)이 빠르게 줄어들었어요."},
+    {"date":"2018-02-06","asset":"btc","type":"crash","impact":"down","title":"비트코인 6,000달러대까지 하락","desc":"한 달 전 약 1.7만 달러였던 비트코인이 약 6,000달러까지 떨어졌어요. 고점 대비 약 70% 하락이에요."},
+    {"date":"2018-11-15","asset":"both","type":"crash","impact":"down","title":"비트코인캐시 분열 '해시 전쟁'","desc":"비트코인캐시가 두 체인으로 갈라지며 채굴자들이 해시파워 싸움을 벌였어요. 1년 가까이 버티던 6,000달러 지지선이 무너졌어요."},
+    {"date":"2018-12-15","asset":"both","type":"crash","impact":"down","title":"크립토 겨울의 바닥","desc":"비트코인은 약 3,200달러, 이더리움은 약 85달러까지 내려가 이번 하락장의 바닥을 찍었어요. 고점 대비 각각 약 84%, 94% 하락이었어요."},
+    {"date":"2019-06-26","asset":"btc","type":"rally","impact":"up","title":"페이스북 리브라 발표 후 1.38만 달러","desc":"6월 18일 페이스북이 자체 코인 리브라 백서를 공개하자 관심이 다시 몰렸어요. 비트코인이 약 1.38만 달러까지 올라 2019년 고점을 찍었어요."},
+    {"date":"2019-09-23","asset":"btc","type":"adoption","impact":"neutral","title":"백트(Bakkt) 실물 인수 선물 출시","desc":"뉴욕증권거래소 모회사 ICE가 만든 백트가 실물 비트코인으로 결제되는 선물을 내놨어요. 기대와 달리 첫 거래량이 적어 9월 하순 가격이 크게 밀렸어요."},
+    {"date":"2020-03-12","asset":"both","type":"macro","impact":"down","title":"코로나 '검은 목요일'","desc":"코로나19 공포로 전 세계 자산이 동시에 팔리면서 비트코인이 하루에 약 40% 가까이 폭락해 4,000달러 선까지 떨어졌어요. 이더리움도 약 110달러까지 밀렸어요."},
+    {"date":"2020-05-11","asset":"btc","type":"halving","impact":"neutral","title":"3차 반감기","desc":"블록 63만 번째에서 채굴 보상이 12.5에서 6.25 BTC로 줄었어요. 이후 1년 반 동안 이어진 2020~2021년 상승장의 출발점으로 자주 언급돼요."},
+    {"date":"2020-08-11","asset":"btc","type":"adoption","impact":"up","title":"마이크로스트래티지 첫 비트코인 매입","desc":"미국 상장사 마이크로스트래티지(현 스트래티지)가 현금 대신 비트코인 약 2.1만 개를 사들인다고 발표했어요. 상장사의 '비트코인 재무 전략'이 퍼지는 계기가 됐어요."},
+    {"date":"2020-10-21","asset":"both","type":"adoption","impact":"up","title":"페이팔 가상자산 거래 지원 발표","desc":"수억 명이 쓰는 결제 서비스 페이팔이 코인 매매·결제를 지원한다고 발표했어요. 대중화 기대에 비트코인이 1.3만 달러를 넘어섰어요."},
+    {"date":"2020-12-01","asset":"eth","type":"upgrade","impact":"neutral","title":"이더리움 비콘체인 출범","desc":"지분증명(PoS) 방식의 새 체인 '비콘체인'이 가동됐어요. 2년 뒤 머지에서 기존 체인과 합쳐지는 이더리움 2.0의 첫 단계예요."},
+    {"date":"2020-12-16","asset":"btc","type":"rally","impact":"up","title":"비트코인 2만 달러 돌파","desc":"2017년 고점(약 2만 달러)을 3년 만에 넘어섰어요. 기관 매수 기대 속에 상승장이 본격화됐어요."},
+    {"date":"2021-02-08","asset":"btc","type":"adoption","impact":"up","title":"테슬라 15억 달러 비트코인 매입","desc":"테슬라가 15억 달러어치 비트코인을 샀고 차량 결제에도 받겠다고 공시했어요. 비트코인이 하루에 10% 넘게 올라 4만 달러를 넘었어요."},
+    {"date":"2021-03-25","asset":"both","type":"regulation","impact":"neutral","title":"국내 특정금융정보법(특금법) 시행","desc":"가상자산 거래소도 금융당국 신고와 실명계좌가 의무가 됐어요. 9월 신고 마감 후 원화 거래가 가능한 거래소가 업비트·빗썸·코인원·코빗 4곳으로 줄었어요."},
+    {"date":"2021-04-14","asset":"btc","type":"rally","impact":"up","title":"코인베이스 나스닥 상장, 6.4만 달러 신고가","desc":"미국 최대 거래소 코인베이스가 나스닥에 직상장한 날 비트코인이 약 6.48만 달러로 당시 최고가를 찍었어요. 상장일이 단기 고점이 됐어요."},
+    {"date":"2021-05-19","asset":"both","type":"crash","impact":"down","title":"테슬라 결제 중단·중국 규제로 폭락","desc":"5월 12일 테슬라가 환경 문제로 비트코인 결제를 중단했고, 18일 중국이 금융기관의 코인 업무를 금지했어요. 19일 비트코인은 장중 약 3만 달러, 이더리움은 약 1,900달러까지 폭락했어요."},
+    {"date":"2021-06-21","asset":"btc","type":"regulation","impact":"down","title":"중국 채굴 전면 퇴출","desc":"쓰촨성 등 중국 전역에서 채굴장이 문을 닫으면서 비트코인 해시레이트가 한때 절반 가까이 줄었어요. 채굴 산업이 미국·카자흐스탄 등으로 옮겨갔어요."},
+    {"date":"2021-08-05","asset":"eth","type":"upgrade","impact":"up","title":"런던 하드포크 (EIP-1559)","desc":"거래 수수료의 일부를 태워 없애는 방식이 도입됐어요. 이더리움 공급이 줄 수 있는 구조가 생겨 '초음파 머니' 이야기가 나왔어요."},
+    {"date":"2021-09-07","asset":"btc","type":"adoption","impact":"neutral","title":"엘살바도르, 비트코인 법정화폐 채택","desc":"엘살바도르가 세계 최초로 비트코인을 법정화폐로 쓰기 시작했어요. 시행 당일에는 오히려 가격이 10% 넘게 급락했어요."},
+    {"date":"2021-09-24","asset":"both","type":"regulation","impact":"down","title":"중국, 모든 가상자산 거래 불법 선언","desc":"중국 인민은행이 가상자산 관련 거래를 전부 불법으로 규정했어요. 중국발 규제 리스크가 사실상 마무리된 계기로도 평가돼요."},
+    {"date":"2021-10-19","asset":"btc","type":"etf","impact":"up","title":"美 첫 비트코인 선물 ETF(BITO) 상장","desc":"미국에서 처음으로 비트코인 선물 ETF가 상장했어요. 기대감 속에 비트코인이 며칠 뒤 약 6.7만 달러로 신고가를 썼어요."},
+    {"date":"2021-11-10","asset":"both","type":"rally","impact":"up","title":"비트코인 6.9만·이더리움 4.8천 달러 최고가","desc":"비트코인이 약 6.9만 달러, 이더리움이 약 4,800달러대로 2021년 사이클 최고가를 기록했어요. 이후 1년간 큰 하락장이 이어졌어요."},
+    {"date":"2021-11-14","asset":"btc","type":"upgrade","impact":"neutral","title":"비트코인 탭루트 업그레이드","desc":"2017년 세그윗 이후 4년 만의 큰 업그레이드예요. 서명 방식(슈노르)이 바뀌어 개인정보 보호와 스마트 계약 표현력이 좋아졌어요."},
+    {"date":"2022-03-16","asset":"both","type":"macro","impact":"down","title":"美 연준 금리 인상 시작","desc":"연준이 2018년 이후 처음 금리를 올리며 긴축을 시작했어요. 2022년 한 해 동안 기준금리가 0%대에서 4%대로 올라 위험자산 전반이 약세였어요."},
+    {"date":"2022-05-09","asset":"both","type":"collapse","impact":"down","title":"테라·루나 붕괴","desc":"한국인 권도형 대표의 테라폼랩스가 만든 스테이블코인 UST가 1달러 고정에 실패하고 루나 가격이 사실상 0이 됐어요. 약 400억 달러가 증발했고 비트코인은 3만 달러 아래로 떨어졌어요."},
+    {"date":"2022-06-18","asset":"both","type":"collapse","impact":"down","title":"셀시우스·3AC 사태로 2만 달러 붕괴","desc":"6월 12일 대출 업체 셀시우스가 출금을 막고 헤지펀드 3AC가 무너지며 연쇄 청산이 일어났어요. 비트코인은 약 1.76만 달러, 이더리움은 약 900달러까지 떨어졌어요."},
+    {"date":"2022-09-15","asset":"eth","type":"upgrade","impact":"neutral","title":"이더리움 머지 — PoW에서 PoS로","desc":"이더리움이 작업증명(채굴)을 끝내고 지분증명으로 완전히 바뀌었어요. 에너지 사용이 약 99.9% 줄었고 새로 발행되는 ETH도 크게 줄었어요. 가격은 '소문에 사서 뉴스에 판다'는 흐름으로 이후 하락했어요."},
+    {"date":"2022-11-11","asset":"both","type":"collapse","impact":"down","title":"FTX 파산","desc":"세계 2~3위 거래소 FTX가 고객 자산 유용 의혹 일주일 만에 파산 신청을 했어요. 비트코인은 11월 하순 약 1.55만 달러까지 떨어져 이번 하락장의 바닥을 찍었어요."},
+    {"date":"2023-03-11","asset":"both","type":"macro","impact":"neutral","title":"SVB 파산과 USDC 디페그","desc":"실리콘밸리은행 파산으로 준비금이 묶인 스테이블코인 USDC가 하루 동안 약 0.88달러까지 떨어졌어요. 정부의 예금 전액 보호 발표 후 오히려 '은행 불안의 대안'으로 비트코인이 반등했어요."},
+    {"date":"2023-04-12","asset":"eth","type":"upgrade","impact":"up","title":"샹하이·카펠라(샤펠라) 업그레이드","desc":"스테이킹했던 ETH를 꺼낼 수 있게 됐어요. 대량 매도 우려와 달리 출금보다 신규 스테이킹이 더 많았어요."},
+    {"date":"2023-06-15","asset":"btc","type":"etf","impact":"up","title":"블랙록, 비트코인 현물 ETF 신청","desc":"세계 최대 자산운용사 블랙록이 현물 ETF를 신청하면서 승인 기대가 크게 높아졌어요. 다른 대형 운용사들도 잇따라 신청했어요."},
+    {"date":"2023-08-29","asset":"btc","type":"etf","impact":"up","title":"그레이스케일, SEC 상대 소송 승소","desc":"법원이 SEC의 그레이스케일 현물 ETF 전환 거부가 부당하다고 판결했어요. 현물 ETF 승인이 사실상 시간문제가 됐다는 평가가 나왔어요."},
+    {"date":"2024-01-11","asset":"btc","type":"etf","impact":"up","title":"美 비트코인 현물 ETF 거래 시작","desc":"전날 SEC가 11개 현물 ETF를 승인했고 이날 거래가 시작됐어요. 블랙록 IBIT는 역대 가장 빠르게 성장한 ETF 중 하나가 됐어요."},
+    {"date":"2024-03-13","asset":"eth","type":"upgrade","impact":"neutral","title":"덴쿤 업그레이드 (EIP-4844)","desc":"레이어2 네트워크가 데이터를 싸게 올릴 수 있는 '블롭'이 도입돼 L2 수수료가 크게 낮아졌어요."},
+    {"date":"2024-03-14","asset":"btc","type":"rally","impact":"up","title":"반감기 전 처음으로 신고가 (약 7.38만 달러)","desc":"ETF 자금 유입으로 비트코인이 반감기 전에 사상 최고가를 넘은 첫 사례가 됐어요."},
+    {"date":"2024-04-20","asset":"btc","type":"halving","impact":"neutral","title":"4차 반감기","desc":"블록 84만 번째에서 채굴 보상이 6.25에서 3.125 BTC로 줄었어요. 수익이 줄어든 채굴자 일부는 AI 데이터센터 사업으로 눈을 돌렸어요."},
+    {"date":"2024-04-30","asset":"both","type":"etf","impact":"neutral","title":"홍콩 비트코인·이더리움 현물 ETF 상장","desc":"아시아 최초로 홍콩에서 BTC·ETH 현물 ETF가 상장했어요. 첫 거래 규모는 미국보다 훨씬 작았어요."},
+    {"date":"2024-07-19","asset":"both","type":"regulation","impact":"neutral","title":"국내 가상자산이용자보호법 시행","desc":"이용자 예치금 보호, 시세조종·미공개정보 이용 처벌 등을 담은 첫 가상자산 법이 시행됐어요."},
+    {"date":"2024-07-23","asset":"eth","type":"etf","impact":"neutral","title":"美 이더리움 현물 ETF 거래 시작","desc":"5월 23일 상장 규칙 승인 후 거래가 시작됐어요. 초기에는 그레이스케일 ETHE에서 자금이 빠져나가며 가격이 오히려 약세였어요."},
+    {"date":"2024-08-05","asset":"both","type":"macro","impact":"down","title":"엔 캐리 트레이드 청산 폭락","desc":"일본 금리 인상과 미국 경기 우려가 겹치며 세계 증시와 함께 급락했어요. 비트코인은 장중 약 4.9만 달러, 이더리움은 약 2,100달러까지 밀렸어요."},
+    {"date":"2024-11-06","asset":"btc","type":"rally","impact":"up","title":"트럼프 당선, 신고가 경신","desc":"친가상자산 공약을 내건 트럼프가 미국 대선에서 이기며 비트코인이 7.5만 달러를 넘는 신고가를 기록했어요."},
+    {"date":"2024-12-05","asset":"btc","type":"rally","impact":"up","title":"비트코인 10만 달러 돌파","desc":"친가상자산 성향의 SEC 위원장 지명 소식 속에 사상 처음 10만 달러를 넘었어요."},
+    {"date":"2025-01-20","asset":"btc","type":"rally","impact":"up","title":"트럼프 취임일 약 10.9만 달러","desc":"취임 기대감에 비트코인이 장중 약 10.9만 달러로 당시 최고가를 기록했어요. 취임 직전 발행된 트럼프 밈코인도 화제가 됐어요."},
+    {"date":"2025-02-21","asset":"eth","type":"collapse","impact":"down","title":"바이비트 해킹 (약 15억 달러)","desc":"거래소 바이비트에서 약 15억 달러어치 ETH가 해킹됐어요. 역대 최대 규모이며 북한 라자루스 그룹 소행으로 지목됐어요."},
+    {"date":"2025-03-06","asset":"btc","type":"regulation","impact":"neutral","title":"美 전략적 비트코인 비축 행정명령","desc":"미국 정부가 압수한 비트코인을 팔지 않고 비축하라는 행정명령이 나왔어요. 신규 매입이 없다는 점에 시장 반응은 엇갈렸어요."},
+    {"date":"2025-04-07","asset":"both","type":"macro","impact":"down","title":"美 상호관세 충격","desc":"4월 2일 미국의 대규모 관세 발표 후 세계 증시와 함께 급락해 비트코인이 7.5만 달러 아래로 떨어졌어요. 4월 9일 관세 유예 발표 후 빠르게 반등했어요."},
+    {"date":"2025-05-07","asset":"eth","type":"upgrade","impact":"neutral","title":"펙트라 업그레이드","desc":"검증자 1명당 스테이킹 한도가 32에서 2,048 ETH로 늘고, 일반 지갑도 스마트 계정처럼 쓸 수 있게 됐어요."},
+    {"date":"2025-07-14","asset":"btc","type":"rally","impact":"up","title":"비트코인 약 12.3만 달러 신고가","desc":"미국 하원의 '크립토 주간' 법안 논의 기대 속에 신고가를 썼어요."},
+    {"date":"2025-07-18","asset":"both","type":"regulation","impact":"up","title":"美 스테이블코인법(GENIUS Act) 서명","desc":"미국 최초의 가상자산 관련 연방법이에요. 달러 스테이블코인의 준비금·발행 규칙을 정했고, 이더리움 등 결제·스테이블코인 인프라에 대한 기대가 커졌어요."},
+    {"date":"2025-08-24","asset":"eth","type":"rally","impact":"up","title":"이더리움 4년 만의 신고가 (약 4,950달러)","desc":"ETF 자금 유입과 상장사들의 ETH 매입('ETH 재무 전략') 속에 2021년 고점을 넘었어요."},
+    {"date":"2025-10-06","asset":"btc","type":"rally","impact":"up","title":"비트코인 약 12.6만 달러 사상 최고가","desc":"미국 정부 셧다운 속 '디베이스먼트(화폐가치 하락) 헤지' 수요로 사상 최고가를 기록했어요."},
+    {"date":"2025-10-10","asset":"both","type":"crash","impact":"down","title":"역대 최대 강제청산 (약 190억 달러)","desc":"미국의 대중국 100% 관세 경고가 나오자 레버리지 포지션이 하루에 약 190억 달러어치 강제 청산됐어요. 역대 최대 규모이며, 이후 연말까지 약세장이 이어졌어요."},
+    {"date":"2025-11-21","asset":"btc","type":"crash","impact":"down","title":"비트코인 8만 달러대 초반까지 하락","desc":"10월 고점 대비 약 35% 떨어졌어요. ETF 자금 유출과 금리 인하 기대 후퇴가 겹쳤어요."},
+    {"date":"2025-12-03","asset":"eth","type":"upgrade","impact":"neutral","title":"후사카(Fusaka) 업그레이드","desc":"검증자가 데이터를 일부만 확인해도 되는 'PeerDAS'가 도입돼 레이어2 처리 용량을 늘릴 기반이 마련됐어요."}
+  ];
+  /*EVENTS:END*/
+
+  var TYPES = [
+    {k:'halving', l:'반감기', i:'⛏'}, {k:'etf', l:'ETF', i:'🏦'}, {k:'upgrade', l:'업그레이드', i:'🔧'},
+    {k:'rally', l:'급등·신고가', i:'🚀'}, {k:'crash', l:'급락', i:'📉'}, {k:'regulation', l:'규제·정책', i:'⚖️'},
+    {k:'collapse', l:'파산·해킹', i:'💥'}, {k:'adoption', l:'기관·채택', i:'🤝'}, {k:'macro', l:'거시경제', i:'🌐'}
+  ];
+  var TYPE_MAP = {}; TYPES.forEach(function(t){ TYPE_MAP[t.k] = t; });
+  var ASSET_LABEL = {btc:'BTC', eth:'ETH', both:'시장 전체'};
+
+  function esc(t){ return String(t==null?'':t).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;'); }
+  function safeUrl(u){ return /^https?:\/\//i.test(String(u||'')) ? String(u).replace(/"/g,'%22') : ''; }
+  function evTime(d){ return Date.parse(d + 'T00:00:00Z') / 1000; }
+  function fmtUsd(v){ return v >= 1000 ? '$' + Math.round(v).toLocaleString('en-US') : '$' + v.toFixed(v < 10 ? 3 : 2); }
+  function pct(v){ return (v > 0 ? '+' : '') + v.toFixed(1) + '%'; }
+
+  var state = {asset:'btc', scale:'log', fasset:'all', types:{}, order:'asc'};
+  var hist = {};          // sym -> {points, ath}
+  var aiEvents = [], pinned = null;
+  function allEvents(){
+    return EVENTS.map(function(e){ return Object.assign({ai:false}, e); })
+      .concat(aiEvents.map(function(e){ return Object.assign({ai:true}, e); }))
+      .sort(function(a, b){ return a.date < b.date ? -1 : a.date > b.date ? 1 : 0; })
+      .map(function(e, i){ e.idx = i; return e; });
+  }
+  var events = allEvents();
+  function onChart(e, sym){ return e.asset === 'both' || e.asset === sym.toLowerCase(); }
+
+  /* ---------------- price at an event (nearest weekly close) and the move 4 weeks later ---------------- */
+  function priceAround(sym, date){
+    var h = hist[sym]; if(!h) return null;
+    var t = evTime(date), pts = h.points, i = 0;
+    while(i < pts.length - 1 && pts[i + 1].t <= t) i++;
+    if(t < pts[0].t - 7 * 86400) return null;
+    var after = pts[Math.min(i + 4, pts.length - 1)];
+    return {price: pts[i].c, after: i + 4 < pts.length ? (after.c / pts[i].c - 1) * 100 : null};
+  }
+
+  /* ---------------- chart ---------------- */
+  var chartEl = document.getElementById('chart');
+  function renderChart(){
+    var sym = state.asset.toUpperCase(), h = hist[sym];
+    if(!h){ chartEl.innerHTML = '<p class="empty">'+(location.protocol.indexOf('http') === 0 ? '차트를 불러오는 중…' : '차트는 서버에서 열었을 때만 보여요.')+'</p>'; return; }
+    // phones get a narrower coordinate system so lines, dots and tap targets stay finger-sized
+    var narrow = chartEl.clientWidth < 600;
+    var pts = h.points, W = narrow ? 520 : 960, H = narrow ? 380 : 340, pl = narrow ? 44 : 58, pr = 10, pt = 14, pb = 26;
+    var t0 = pts[0].t, t1 = pts[pts.length - 1].t, log = state.scale === 'log';
+    var vals = pts.map(function(p){ return p.c; });
+    var lo = Math.min.apply(null, vals), hi = Math.max.apply(null, vals);
+    var f = log ? Math.log : function(v){ return v; };
+    var ylo = log ? f(lo * .85) : 0, yhi = f(hi * 1.08);
+    function sx(t){ return pl + (t - t0) / (t1 - t0) * (W - pl - pr); }
+    function sy(v){ return pt + (1 - (f(v) - ylo) / (yhi - ylo)) * (H - pt - pb); }
+    var ticks = [];
+    if(log){ [10,20,50,100,200,500,1000,2000,5000,10000,20000,50000,100000,200000].forEach(function(v){ if(v >= lo * .85 && v <= hi * 1.08) ticks.push(v); }); }
+    else { var step = Math.pow(10, Math.floor(Math.log10(hi))) / 2; for(var v = 0; v <= hi * 1.08; v += step) ticks.push(v); }
+    var grid = ticks.map(function(v){ var y = sy(Math.max(v, 1e-9)).toFixed(1);
+      return '<line class="c-grid" x1="'+pl+'" x2="'+(W-pr)+'" y1="'+y+'" y2="'+y+'"/><text class="c-axis" x="'+(pl-6)+'" y="'+(+y+4)+'" text-anchor="end">'+(v >= 1000 ? (v/1000)+'k' : v)+'</text>'; }).join('');
+    var years = '';
+    for(var yr = 2018; yr <= new Date().getFullYear(); yr++){
+      var tx = Date.UTC(yr, 0, 1) / 1000; if(tx < t0 || tx > t1) continue;
+      years += '<line class="c-grid" x1="'+sx(tx).toFixed(1)+'" x2="'+sx(tx).toFixed(1)+'" y1="'+pt+'" y2="'+(H-pb)+'" stroke-dasharray="2 4"/><text class="c-axis" x="'+sx(tx).toFixed(1)+'" y="'+(H-8)+'" text-anchor="middle">'+yr+'</text>';
+    }
+    var line = pts.map(function(p, i){ return (i ? 'L' : 'M') + sx(p.t).toFixed(1) + ',' + sy(p.c).toFixed(1); }).join('');
+    var area = line + 'L' + sx(t1).toFixed(1) + ',' + (H - pb) + 'L' + sx(t0).toFixed(1) + ',' + (H - pb) + 'Z';
+    // three layers so a dot always wins over a neighbouring event's wide hit line:
+    // invisible hit lines, then the visible dashed lines, then the dots (halvings drawn last)
+    var hits = '', vls = '', dots = '';
+    var onThis = visibleEvents().filter(function(e){ return onChart(e, sym); })
+      .sort(function(a, b){ return (a.type === 'halving') - (b.type === 'halving'); });
+    onThis.forEach(function(e){
+      var t = evTime(e.date); if(t < t0 || t > t1 + 7 * 86400) return;
+      var i = 0; while(i < pts.length - 1 && pts[i + 1].t <= t) i++;
+      var x = sx(t).toFixed(1), y = sy(pts[i].c).toFixed(1);
+      var cls = 't-' + e.impact + (e.type === 'halving' ? ' halving' : '') + (pinned === e.idx ? ' pin' : '');
+      var tip = '<title>'+esc(e.date+' · '+e.title)+'</title>';
+      hits += '<line class="hit" data-ev="'+e.idx+'" x1="'+x+'" x2="'+x+'" y1="'+pt+'" y2="'+(H-pb)+'">'+tip+'</line>';
+      vls += '<line class="vl '+cls+'" data-ev="'+e.idx+'" x1="'+x+'" x2="'+x+'" y1="'+pt+'" y2="'+(H-pb)+'"/>'+
+        (e.type === 'halving' ? '<text class="halving-lbl" x="'+(+x+4)+'" y="'+(pt+10)+'">반감기</text>' : '');
+      dots += '<circle class="dot '+cls+'" data-ev="'+e.idx+'" cx="'+x+'" cy="'+y+'" r="4.5" tabindex="0">'+tip+'</circle>';
+    });
+    var marks = hits + vls + dots;
+    chartEl.innerHTML = '<svg viewBox="0 0 '+W+' '+H+'" role="img" aria-label="'+sym+' 2018년 이후 주간 종가 차트">'+grid+years+
+      '<path class="c-area '+state.asset+'" d="'+area+'" opacity=".55"/><path class="c-line '+state.asset+'" d="'+line+'"/>'+marks+'</svg>';
+  }
+
+  /* ---------------- timeline ---------------- */
+  var tlEl = document.getElementById('timeline');
+  function visibleEvents(){
+    var anyType = Object.keys(state.types).some(function(k){ return state.types[k]; });
+    return events.filter(function(e){
+      if(state.fasset !== 'all' && e.asset !== state.fasset && e.asset !== 'both') return false;
+      return !anyType || state.types[e.type];
+    });
+  }
+  function renderTimeline(){
+    var list = visibleEvents();
+    if(state.order === 'desc') list = list.slice().reverse();
+    document.getElementById('tl-count').textContent = list.length + '건';
+    var h = '', year = null;
+    list.forEach(function(e){
+      var y = e.date.slice(0, 4);
+      if(y !== year){
+        year = y;
+        var b = hist.BTC && yearMove('BTC', y), et = hist.ETH && yearMove('ETH', y);
+        h += (h ? '</div>' : '') + '<div class="year">'+y+'<small>'+(b ? 'BTC '+pct(b) : '')+(et ? ' · ETH '+pct(et) : '')+'</small></div><div class="tl">';
+      }
+      var t = TYPE_MAP[e.type] || {l:e.type, i:''};
+      var px = [];
+      ['BTC','ETH'].forEach(function(s){
+        if(!onChart(e, s)) return;
+        var p = priceAround(s, e.date); if(!p) return;
+        px.push(s+' '+fmtUsd(p.price)+(p.after != null ? ' → 4주 뒤 <b class="'+(p.after >= 0 ? 'up' : 'down')+'">'+pct(p.after)+'</b>' : ''));
+      });
+      h += '<div class="item i-'+e.impact+(pinned === e.idx ? ' pin' : '')+'" data-ev="'+e.idx+'" id="ev-'+e.idx+'">'+
+        '<div class="item-top"><span class="date">'+esc(e.date.replace(/-/g, '.'))+'</span>'+
+        '<span class="tag">'+t.i+' '+esc(t.l)+'</span><span class="tag '+e.asset+'">'+ASSET_LABEL[e.asset]+'</span>'+(e.ai ? '<span class="tag ai">AI 추가</span>' : '')+'</div>'+
+        '<h4>'+esc(e.title)+'</h4><p>'+esc(e.desc)+'</p>'+
+        (px.length ? '<div class="px">주간 종가 기준 '+px.join(' · ')+'</div>' : '')+
+        ((e.sources||[]).length ? '<div class="src">'+e.sources.map(function(s){ var u = safeUrl(s.url); return u ? '<a href="'+u+'" target="_blank" rel="noopener">'+esc(s.title||'근거')+' ↗</a>' : ''; }).join('')+'</div>' : '')+
+        '</div>';
+    });
+    tlEl.innerHTML = h ? h + '</div>' : '<p class="empty">조건에 맞는 사건이 없어요.</p>';
+  }
+  function yearMove(sym, y){
+    var pts = hist[sym].points, s = Date.UTC(+y, 0, 1) / 1000, e = Date.UTC(+y + 1, 0, 1) / 1000;
+    var inYear = pts.filter(function(p){ return p.t >= s && p.t < e; });
+    if(inYear.length < 2) return null;
+    var prev = pts.filter(function(p){ return p.t < s; }).pop() || inYear[0];
+    return (inYear[inYear.length - 1].c / prev.c - 1) * 100;
+  }
+
+  /* ---------------- linking chart ↔ timeline (hover highlights, click/tap pins + scrolls) ---------------- */
+  function setCls(idx, cls, on){ document.querySelectorAll('[data-ev="'+idx+'"]').forEach(function(el){ el.classList.toggle(cls, on); }); }
+  function pick(idx, fromChart){
+    if(pinned != null) setCls(pinned, 'pin', false);
+    pinned = pinned === idx ? null : idx;
+    if(pinned == null) return;
+    setCls(idx, 'pin', true);
+    if(fromChart){
+      var row = document.getElementById('ev-'+idx);
+      if(!row){ state.fasset = 'all'; state.types = {}; syncFilters(); renderTimeline(); row = document.getElementById('ev-'+idx); setCls(idx, 'pin', true); }
+      if(row) row.scrollIntoView({behavior:'smooth', block:'center'});
+    } else {
+      var ev = events[idx];
+      if(ev && !onChart(ev, state.asset.toUpperCase()) && ev.asset !== 'both'){ state.asset = ev.asset; syncFilters(); renderChart(); setCls(idx, 'pin', true); }
+      document.querySelector('.chart-box').scrollIntoView({behavior:'smooth', block:'center'});
+    }
+  }
+  [chartEl, tlEl].forEach(function(root){
+    root.addEventListener('mouseover', function(e){ var m = e.target.closest('[data-ev]'); if(m) setCls(m.dataset.ev, 'hi', true); });
+    root.addEventListener('mouseout', function(e){ var m = e.target.closest('[data-ev]'); if(m) setCls(m.dataset.ev, 'hi', false); });
+    root.addEventListener('click', function(e){
+      if(e.target.closest('a')) return;
+      var m = e.target.closest('[data-ev]'); if(m) pick(+m.dataset.ev, root === chartEl);
+    });
+  });
+  chartEl.addEventListener('keydown', function(e){
+    if(e.key !== 'Enter' && e.key !== ' ') return;
+    var m = e.target.closest('.dot'); if(m){ e.preventDefault(); pick(+m.dataset.ev, true); }
+  });
+
+  /* ---------------- filters ---------------- */
+  document.getElementById('type-chips').innerHTML = TYPES.map(function(t){ return '<button type="button" class="chip" data-type="'+t.k+'" aria-pressed="false">'+t.i+' '+t.l+'</button>'; }).join('');
+  function syncFilters(){
+    document.querySelectorAll('[data-asset]').forEach(function(b){ b.setAttribute('aria-pressed', String(b.dataset.asset === state.asset)); });
+    document.querySelectorAll('[data-scale]').forEach(function(b){ b.setAttribute('aria-pressed', String(b.dataset.scale === state.scale)); });
+    document.querySelectorAll('[data-fasset]').forEach(function(b){ b.setAttribute('aria-pressed', String(b.dataset.fasset === state.fasset)); });
+    document.querySelectorAll('[data-order]').forEach(function(b){ b.setAttribute('aria-pressed', String(b.dataset.order === state.order)); });
+    document.querySelectorAll('[data-type]').forEach(function(b){ b.setAttribute('aria-pressed', String(!!state.types[b.dataset.type])); });
+  }
+  document.addEventListener('click', function(e){
+    var b = e.target.closest('[data-asset],[data-scale],[data-fasset],[data-order],[data-type]'); if(!b) return;
+    if(b.dataset.asset){ state.asset = b.dataset.asset; loadHistory(state.asset.toUpperCase()); }
+    if(b.dataset.scale) state.scale = b.dataset.scale;
+    if(b.dataset.fasset) state.fasset = b.dataset.fasset;
+    if(b.dataset.order) state.order = b.dataset.order;
+    if(b.dataset.type) state.types[b.dataset.type] = !state.types[b.dataset.type];
+    syncFilters(); renderChart(); renderTimeline();
+  });
+
+  /* ---------------- news ---------------- */
+  var aiNews = [], liveNews = null;
+  function renderNews(){
+    var IMP = {positive:'▲ 호재', negative:'▼ 악재', mixed:'◆ 엇갈림'};
+    document.getElementById('news-ai').innerHTML = aiNews.slice(0, 12).map(function(n){
+      var u = safeUrl(n.url);
+      return '<div class="ncard"><span class="tag '+n.asset+'">'+ASSET_LABEL[n.asset]+'</span> <span class="tag">'+(IMP[n.impact]||'')+'</span>'+
+        '<h4>'+(u ? '<a href="'+u+'" target="_blank" rel="noopener">'+esc(n.title)+' ↗</a>' : esc(n.title))+'</h4>'+
+        '<p>'+esc(n.summary)+'</p>'+(n.why ? '<p class="why">💡 '+esc(n.why)+'</p>' : '')+
+        '<div class="nfoot">'+esc(n.source)+' · '+esc(n.date)+'</div></div>';
+    }).join('');
+    var live = liveNews && liveNews.items || [];
+    document.getElementById('news-live').innerHTML = live.length ? '<h3 style="font-size:15px;margin:16px 0 4px">🔄 최신 헤드라인 <small class="note">'+esc(liveNews.generatedAt||'')+' 자동 수집 · 제목만</small></h3>'+
+      live.slice(0, 20).map(function(n){ var u = safeUrl(n.url);
+        return '<div class="nline"><span class="d">'+esc(n.date.slice(5).replace('-', '.'))+'</span><span>'+(u ? '<a href="'+u+'" target="_blank" rel="noopener">'+esc(n.title)+'</a>' : esc(n.title))+'<small>'+esc(n.source)+'</small></span></div>'; }).join('') : '';
+    document.getElementById('news-note').textContent = aiNews.length ? 'AI 요약 '+aiNews.length+'건' : (location.protocol.indexOf('http') === 0 ? '' : '뉴스는 서버에서 열었을 때만 보여요');
+  }
+
+  /* ---------------- server data ---------------- */
+  var onServer = /^https?:$/.test(location.protocol);
+  function getJSON(u){ return fetch(u, {cache:'no-store'}).then(function(r){ return r.ok ? r.json() : null; }).catch(function(){ return null; }); }
+  function loadHistory(sym){
+    if(hist[sym] || !onServer){ renderChart(); return; }
+    getJSON('api/history?sym='+sym).then(function(d){
+      if(d && d.ok){ hist[sym] = d; renderCards(); renderTimeline(); }
+      renderChart();
+    });
+  }
+  var last = null;
+  function renderCards(){
+    if(!last) return;
+    ['BTC','ETH'].forEach(function(s){
+      var q = last.items[s], h = hist[s], el = document.getElementById('card-'+s.toLowerCase());
+      var ath = h ? (q.usd / h.ath.price - 1) * 100 : null;
+      el.innerHTML = el.querySelector('h3').outerHTML +
+        '<div class="big">'+fmtUsd(q.usd)+' <span class="chg '+(q.change >= 0 ? 'up' : 'down')+'">'+pct(q.change)+'</span></div>'+
+        '<div class="kv"><span>업비트</span><b>₩'+Math.round(q.krw).toLocaleString('ko-KR')+'</b></div>'+
+        '<div class="kv"><span>김치 프리미엄</span><b class="'+(q.premium >= 0 ? 'up' : 'down')+'">'+pct(q.premium)+'</b></div>'+
+        (h ? '<div class="kv"><span>최고가 대비 (종가 '+fmtUsd(h.ath.price)+', '+h.ath.date+')</span><b class="'+(ath >= 0 ? 'up' : 'down')+'">'+pct(ath)+'</b></div>' : '');
+    });
+    var r = document.getElementById('card-ratio');
+    r.innerHTML = r.querySelector('h3').outerHTML + '<div class="big">'+(last.items.ETH.usd / last.items.BTC.usd).toFixed(4)+' <span class="note">ETH/BTC</span></div>'+
+      '<div class="kv"><span>원/달러 환율</span><b>₩'+last.usdkrw.toFixed(1)+'</b></div><div class="kv"><span>기준</span><b>'+esc(last.asOf)+'</b></div>'+
+      '<div class="kv"><span>ETH/BTC가 오르면</span><b>이더리움이 상대적으로 강세</b></div>';
+  }
+  function loadPrices(){ getJSON('api/prices').then(function(d){ if(d && d.ok){ last = d; renderCards(); } }); }
+
+  /* AI refresh: POST api/update has the server run Claude (Sonnet 5.5, medium, web search);
+     update/latest.json adds events after the seed history plus summarized news */
+  var updBtn = document.getElementById('upd-btn'), updMsg = document.getElementById('upd-msg'), updPoll = null, updApplied = '';
+  function loadUpdate(){
+    getJSON('update/latest.json').then(function(u){
+      var running = !!u && u.status === 'running';
+      updBtn.disabled = running;
+      updBtn.textContent = running ? '⏳ 업데이트 중…' : '🔄 AI 업데이트';
+      updMsg.classList.toggle('err', !!u && u.status === 'error');
+      updMsg.textContent = !u ? '' : running ? (u.startedAt||'')+' 시작 · 웹 검색 중이라 몇 분 걸려요' :
+        u.status === 'error' ? '업데이트 실패: '+(u.error||'')+' — 기존 내용은 그대로예요.' : '마지막 AI 업데이트 '+String(u.finishedAt||'').slice(0, 16);
+      updMsg.title = (u && u.data && u.data.summary) || '';
+      if(u && u.data && u.finishedAt && u.finishedAt !== updApplied){
+        updApplied = u.finishedAt;
+        aiEvents = u.data.events || []; aiNews = u.data.news || [];
+        events = allEvents(); pinned = null;
+        if(u.data.asOf) document.getElementById('upd-date').textContent = '업데이트 ' + u.data.asOf;
+        renderChart(); renderTimeline(); renderNews();
+      }
+      clearTimeout(updPoll);
+      if(running) updPoll = setTimeout(loadUpdate, 10000);
+    });
+  }
+  updBtn.addEventListener('click', function(){
+    if(!confirm('AI가 웹 검색으로 새 사건과 뉴스를 찾아 히스토리에 추가합니다 (Claude Sonnet 5.5 · medium, 수 분 소요). 진행할까요?')) return;
+    updBtn.disabled = true;
+    fetch('api/update', {method:'POST'}).then(function(r){ return r.json(); }).then(function(d){
+      if(!d.ok) alert(d.error || '업데이트 요청 실패');
+      loadUpdate();
+    }).catch(function(){ alert('업데이트 요청 실패'); loadUpdate(); });
+  });
+
+  var wasNarrow = null;
+  window.addEventListener('resize', function(){ var n = chartEl.clientWidth < 600; if(n !== wasNarrow){ wasNarrow = n; renderChart(); } });
+  syncFilters(); renderChart(); renderTimeline(); renderNews();
+  if(onServer){
+    updBtn.hidden = false;
+    loadHistory('BTC'); loadHistory('ETH'); loadPrices(); loadUpdate();
+    getJSON('api/news').then(function(d){ if(d && d.ok){ liveNews = d; renderNews(); } });
+    setInterval(loadPrices, 60000);
+  }
+})();
+</script>
+</body>
+</html>
