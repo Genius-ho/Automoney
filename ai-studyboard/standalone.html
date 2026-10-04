@@ -1,0 +1,800 @@
+<!doctype html>
+<html lang="ko">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">
+<title>AI 스터디보드</title>
+<meta name="description" content="트랜스포머에서 추론 시대까지 AI 붐의 역사와 나스닥, 시기별 특징주, 그리고 다음 병목을 한 페이지에 정리한 학습용 대시보드">
+<style>
+  @import url('https://cdn.jsdelivr.net/npm/pretendard@1.3.9/dist/web/variable/pretendardvariable-dynamic-subset.min.css');
+  :root{
+    --bg:#f2f3f1; --surface:#ffffff; --surface-2:#e9ebe8; --ink:#171a19; --ink-soft:#434947; --ink-faint:#6f7673;
+    --line:#dde0dc; --accent:#0d7a6f; --accent-soft:#d9efeb; --accent-soft-2:#eef7f5; --on-accent:#fff;
+    --e1:#8a6fd6; --e2:#2f9e5b; --e3:#d48a1c; --e4:#d0484f; --e5:#5d6b78;
+    --good:#2f8f5b; --good-soft:#e2f1e7; --warn:#b8791f; --warn-soft:#f6ecd9; --crit:#b7473a; --crit-soft:#f7e6e2;
+    --shadow:0 1px 2px rgba(15,25,20,.04),0 8px 24px -12px rgba(15,25,20,.16);
+    color-scheme:light;
+  }
+  @media (prefers-color-scheme: dark){
+    :root:not([data-theme="light"]){
+      --bg:#101312; --surface:#171b1a; --surface-2:#1f2422; --ink:#e7ece9; --ink-soft:#bfc7c3; --ink-faint:#8b9490;
+      --line:#2a302e; --accent:#4cc7b6; --accent-soft:#16322e; --accent-soft-2:#14231f; --on-accent:#101312;
+      --e1:#ad97f2; --e2:#5fcf8d; --e3:#efb04f; --e4:#f07a80; --e5:#93a3b2;
+      --good:#5ecb92; --good-soft:#1a3226; --warn:#e0ab52; --warn-soft:#332a17; --crit:#e58b7c; --crit-soft:#382220;
+      --shadow:0 1px 2px rgba(0,0,0,.3),0 8px 24px -12px rgba(0,0,0,.6);
+      color-scheme:dark;
+    }
+  }
+  *{box-sizing:border-box}
+  body{margin:0;background:var(--bg);color:var(--ink);font-family:"Pretendard Variable",Pretendard,"Noto Sans KR",system-ui,sans-serif;font-size:15px;line-height:1.55;-webkit-font-smoothing:antialiased}
+  a{color:var(--accent)}
+  .wrap{max-width:1120px;margin:0 auto;padding:0 20px 60px}
+  header.top{padding:28px 20px 20px;border-bottom:1px solid var(--line);background:linear-gradient(180deg,var(--accent-soft-2),transparent)}
+  .top-inner{max-width:1120px;margin:0 auto}
+  .eyebrow{font-size:12.5px;letter-spacing:.12em;text-transform:uppercase;color:var(--accent);font-weight:700}
+  h1{font-size:clamp(26px,4vw,34px);font-weight:700;margin:4px 0 6px;letter-spacing:-.01em}
+  .subtitle{color:var(--ink-soft);margin:0;max-width:70ch}
+  .meta-row{display:flex;gap:10px;flex-wrap:wrap;align-items:center;margin-top:14px;font-size:13.5px;color:var(--ink-faint)}
+  .pill{background:var(--surface);border:1px solid var(--line);padding:4px 10px;border-radius:99px}
+  .upd-btn{font:inherit;color:var(--accent);background:var(--accent-soft-2);border:1px solid var(--accent);padding:4px 12px;border-radius:99px;cursor:pointer;font-weight:700}
+  .upd-btn:hover:not(:disabled){background:var(--accent);color:var(--on-accent)}
+  .upd-btn:disabled{opacity:.6;cursor:progress}
+  .upd-msg.err{color:var(--crit)}
+  .cards{display:grid;grid-template-columns:repeat(4,1fr);gap:12px;margin-top:18px}
+  .card{background:var(--surface);border:1px solid var(--line);border-radius:14px;padding:14px 16px;box-shadow:var(--shadow);min-width:0}
+  .card h3{margin:0;font-size:13.5px;color:var(--ink-faint);font-weight:600}
+  .big{font-size:22px;font-weight:800;font-variant-numeric:tabular-nums;margin:4px 0 2px;letter-spacing:-.02em}
+  .chg{font-size:13.5px;font-weight:700;font-variant-numeric:tabular-nums}
+  .up{color:var(--good)} .down{color:var(--crit)}
+  .kv{display:flex;justify-content:space-between;gap:8px;font-size:13px;color:var(--ink-soft);margin-top:4px;font-variant-numeric:tabular-nums}
+  .kv b{color:var(--ink);font-weight:600}
+  section{margin-top:32px}
+  .sec-head{display:flex;flex-wrap:wrap;align-items:baseline;justify-content:space-between;gap:8px 16px;margin-bottom:12px}
+  .sec-head h2{margin:0;font-size:20px;letter-spacing:-.01em}
+  .note{font-size:13px;color:var(--ink-faint)}
+  .seg{display:inline-flex;background:var(--surface);border:1px solid var(--line);border-radius:99px;padding:2px;gap:2px;flex-wrap:wrap}
+  .seg button{font:inherit;font-size:13.5px;font-weight:600;color:var(--ink-soft);background:transparent;border:0;border-radius:99px;padding:6px 12px;cursor:pointer}
+  .seg button[aria-pressed="true"]{background:var(--accent);color:var(--on-accent)}
+  select{font:inherit;font-size:13.5px;font-weight:600;color:var(--ink);background:var(--surface);border:1px solid var(--line);border-radius:99px;padding:6px 12px}
+  .controls{display:flex;flex-wrap:wrap;gap:8px;margin-bottom:10px;align-items:center}
+  /* eras */
+  .eras{display:grid;grid-template-columns:repeat(5,1fr);gap:10px}
+  .era{background:var(--surface);border:1px solid var(--line);border-top:4px solid var(--ec);border-radius:12px;padding:12px 13px;box-shadow:var(--shadow);cursor:pointer;min-width:0;display:flex;flex-direction:column}
+  .era[aria-pressed="true"]{box-shadow:inset 0 0 0 2px var(--ec)}
+  .era .no{font-size:12px;font-weight:800;color:var(--ec);letter-spacing:.06em}
+  .era h3{margin:2px 0 4px;font-size:15px;line-height:1.35}
+  .era .per{font-size:12px;color:var(--ink-faint);font-variant-numeric:tabular-nums}
+  .era p{margin:6px 0;font-size:13px;color:var(--ink-soft)}
+  .era .bn{font-size:12.5px;font-weight:700;background:var(--surface-2);border-radius:6px;padding:3px 7px;margin:2px 0 6px;align-self:flex-start}
+  .era ul{list-style:none;margin:auto 0 0;padding:6px 0 0;border-top:1px dashed var(--line)}
+  .era li{display:flex;justify-content:space-between;gap:6px;font-size:12.5px;padding:2px 0;font-variant-numeric:tabular-nums}
+  .era li span:first-child{overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+  .era li b{white-space:nowrap}
+  .era li small{color:var(--ink-faint);font-weight:500}
+  .ten{background:var(--crit-soft);color:var(--crit);border-radius:4px;padding:0 4px;font-size:11px;font-weight:800;margin-left:3px}
+  /* chart */
+  .chart-box{background:var(--surface);border:1px solid var(--line);border-radius:14px;padding:12px 12px 6px;box-shadow:var(--shadow)}
+  .chart-box svg{width:100%;height:auto;display:block;overflow:visible}
+  .c-grid{stroke:var(--line);stroke-width:1}
+  .c-axis{fill:var(--ink-faint);font-size:11px;font-family:inherit}
+  .c-line{fill:none;stroke:var(--accent);stroke-width:1.8}
+  .c-area{fill:var(--accent-soft)}
+  .band-lbl{font-size:10.5px;font-weight:800;font-family:inherit}
+  #chart [data-ev]{cursor:pointer}
+  .hit{stroke:transparent;stroke-width:14}
+  .vl{stroke-width:1;stroke-dasharray:3 3;opacity:.5;pointer-events:none}
+  .dot{stroke:var(--surface)!important;stroke-width:1.5}
+  .vl.hi,.vl.pin{opacity:1;stroke-width:2;stroke-dasharray:none}
+  .dot.hi,.dot.pin{r:6.5}
+  .dot.tagged{r:5.5}
+  .t-up{stroke:var(--good);fill:var(--good)} .t-down{stroke:var(--crit);fill:var(--crit)} .t-neutral{stroke:var(--ink-faint);fill:var(--ink-faint)}
+  .legend{display:flex;flex-wrap:wrap;gap:6px 14px;font-size:12.5px;color:var(--ink-faint);padding:6px 4px 4px}
+  .legend i{display:inline-block;width:9px;height:9px;border-radius:99px;margin-right:5px;vertical-align:0}
+  .c-stat{display:flex;flex-wrap:wrap;gap:6px 16px;font-size:13px;color:var(--ink-soft);padding:2px 4px 8px;font-variant-numeric:tabular-nums}
+  .c-stat b{color:var(--ink)}
+  /* timeline */
+  .chips{display:flex;flex-wrap:wrap;gap:6px}
+  .chip{font:inherit;font-size:13px;font-weight:600;border:1px solid var(--line);background:var(--surface);color:var(--ink-soft);border-radius:99px;padding:4px 10px;cursor:pointer}
+  .chip[aria-pressed="true"]{border-color:var(--accent);background:var(--accent-soft);color:var(--accent)}
+  .year{font-size:18px;font-weight:800;margin:22px 0 8px;color:var(--ink-soft);display:flex;align-items:baseline;gap:10px}
+  .year small{font-size:12.5px;font-weight:600;color:var(--ink-faint)}
+  .tl{display:flex;flex-direction:column;gap:8px}
+  .item{background:var(--surface);border:1px solid var(--line);border-left:4px solid var(--line);border-radius:10px;padding:10px 14px;scroll-margin:90px 0;cursor:pointer}
+  .item.i-up{border-left-color:var(--good)} .item.i-down{border-left-color:var(--crit)} .item.i-neutral{border-left-color:var(--ink-faint)}
+  .item.hi,.item.pin{background:var(--accent-soft-2);box-shadow:inset 0 0 0 1px var(--accent)}
+  .item-top{display:flex;flex-wrap:wrap;align-items:center;gap:6px 8px}
+  .date{font-weight:800;font-variant-numeric:tabular-nums}
+  .tag{font-size:11.5px;font-weight:700;padding:2px 7px;border-radius:6px;background:var(--surface-2);color:var(--ink-soft)}
+  .tag.ai{background:var(--accent-soft);color:var(--accent)}
+  .tag.era-tag{color:var(--ec);background:transparent;border:1px solid var(--ec)}
+  .item h4{margin:4px 0 2px;font-size:15.5px}
+  .item p{margin:0;color:var(--ink-soft);font-size:14px}
+  .px{font-size:12.5px;color:var(--ink-faint);margin-top:5px;font-variant-numeric:tabular-nums;display:flex;flex-wrap:wrap;gap:4px 10px;align-items:center}
+  .stk{font:inherit;font-size:12px;font-weight:700;border:1px solid var(--line);background:var(--surface-2);color:var(--ink);border-radius:6px;padding:1px 6px;cursor:pointer}
+  .stk:hover{border-color:var(--accent);color:var(--accent)}
+  .src{font-size:12.5px;margin-top:4px}
+  .src a{margin-right:8px}
+  /* bottleneck map */
+  .flow{display:flex;flex-wrap:wrap;gap:6px;align-items:center;font-size:13px;font-weight:700;margin-bottom:12px}
+  .flow span{padding:4px 10px;border-radius:99px;background:var(--surface);border:1px solid var(--line)}
+  .flow span.past{color:var(--ink-faint)} .flow span.now{border-color:var(--crit);color:var(--crit);background:var(--crit-soft)} .flow span.next{border-style:dashed;color:var(--accent)}
+  .flow i{font-style:normal;color:var(--ink-faint)}
+  .bns{display:grid;grid-template-columns:repeat(2,1fr);gap:12px}
+  .bn-card{background:var(--surface);border:1px solid var(--line);border-radius:12px;padding:13px 15px;box-shadow:var(--shadow);min-width:0}
+  .bn-card.now{border-color:var(--crit)}
+  .bn-card.next{border-style:dashed;border-color:var(--accent)}
+  .bn-card h3{margin:0;font-size:15.5px;display:flex;flex-wrap:wrap;gap:6px;align-items:center}
+  .st{font-size:11.5px;font-weight:800;border-radius:6px;padding:2px 7px}
+  .st.past{background:var(--surface-2);color:var(--ink-faint)} .st.ing{background:var(--warn-soft);color:var(--warn)} .st.now{background:var(--crit-soft);color:var(--crit)} .st.next{background:var(--accent-soft);color:var(--accent)}
+  .bn-card p{margin:6px 0 0;font-size:14px;color:var(--ink-soft)}
+  .bn-card .sig{font-size:13px;color:var(--ink-soft);margin-top:6px}
+  .bn-card .sig b{color:var(--ink)}
+  .tick-row{display:flex;flex-wrap:wrap;gap:6px;margin-top:8px}
+  .tick{font:inherit;font-size:12.5px;border:1px solid var(--line);background:var(--surface-2);border-radius:8px;padding:3px 8px;cursor:pointer;color:var(--ink);font-variant-numeric:tabular-nums}
+  .tick:hover{border-color:var(--accent)}
+  .tick small{margin-left:4px;font-weight:700}
+  .qs{margin:14px 0 0;padding:14px 18px 14px 34px;background:var(--surface);border:1px solid var(--line);border-radius:12px}
+  .qs li{margin:4px 0;font-size:14px;color:var(--ink-soft)}
+  .qs li b{color:var(--ink)}
+  /* leaderboard */
+  .tbl-wrap{overflow-x:auto;border:1px solid var(--line);border-radius:12px;background:var(--surface)}
+  table{width:100%;border-collapse:collapse;font-size:13.5px}
+  th,td{padding:7px 10px;border-bottom:1px solid var(--line);text-align:left;vertical-align:middle;white-space:nowrap}
+  th{background:var(--surface-2);font-weight:700;color:var(--ink-soft);font-size:12.5px;position:sticky;top:0}
+  th[data-sort]{cursor:pointer;user-select:none}
+  th[data-sort]:hover{color:var(--accent)}
+  td.num,th.num{text-align:right;font-variant-numeric:tabular-nums}
+  tr[data-sym]{cursor:pointer}
+  tr[data-sym]:hover td{background:var(--accent-soft-2)}
+  .grp{font-size:11.5px;color:var(--ink-faint)}
+  .ncard{background:var(--surface);border:1px solid var(--line);border-radius:12px;padding:12px 14px;margin-bottom:8px}
+  .ncard h4{margin:4px 0;font-size:15px}
+  .ncard p{margin:4px 0 0;font-size:14px;color:var(--ink-soft)}
+  .ncard .why{color:var(--accent)}
+  .nfoot{font-size:12.5px;color:var(--ink-faint);margin-top:6px}
+  .nline{display:flex;gap:10px;padding:7px 0;border-bottom:1px solid var(--line);font-size:14px}
+  .nline .d{color:var(--ink-faint);font-variant-numeric:tabular-nums;white-space:nowrap}
+  .nline small{color:var(--ink-faint);margin-left:6px}
+  .learn{display:grid;grid-template-columns:repeat(2,1fr);gap:12px}
+  .learn .card p{margin:6px 0 0;font-size:14px;color:var(--ink-soft)}
+  .learn .card h3{font-size:15px;color:var(--ink)}
+  .empty{color:var(--ink-faint);font-size:14px;padding:10px 0}
+  footer{margin-top:40px;font-size:12.5px;color:var(--ink-faint);text-align:center}
+  @media (max-width:980px){ .eras{grid-template-columns:repeat(2,1fr)} .cards{grid-template-columns:repeat(2,1fr)} }
+  @media (max-width:760px){
+    .cards{grid-template-columns:1fr 1fr}
+    .eras,.bns,.learn{grid-template-columns:1fr}
+    .wrap{padding:0 16px 48px}
+    header.top{padding:22px 16px 16px}
+    .big{font-size:19px}
+  }
+</style>
+</head>
+<body>
+<header class="top">
+  <div class="top-inner">
+    <div class="eyebrow">AI Study Board</div>
+    <h1>AI 스터디보드</h1>
+    <p class="subtitle">트랜스포머 논문(2017)과 GPT-3에서 시작해 ChatGPT, GPU 골드러시, 전력·네트워크 확장, 추론 시대의 메모리·SSD 슈퍼사이클까지. AI 붐의 병목이 어디로 옮겨 다녔는지, 그때 나스닥과 특징주가 어떻게 움직였는지 따라가며 <b>다음 병목</b>을 고민해 보는 학습용 대시보드입니다.</p>
+    <div class="meta-row">
+      <span class="pill" id="upd-date">히스토리 기준 2026.09</span>
+      <button type="button" class="upd-btn" id="upd-btn" hidden title="Claude Sonnet 5.5 (medium)가 웹 검색으로 새 사건과 뉴스를 찾아 추가해요">🔄 AI 업데이트</button>
+      <span class="upd-msg" id="upd-msg"></span>
+      <span class="pill">정보 제공 목적 · 투자 권유 아님</span>
+    </div>
+    <div class="cards" id="cards"></div>
+  </div>
+</header>
+
+<main class="wrap">
+  <section>
+    <div class="sec-head">
+      <h2>🎬 AI 붐의 5막 — 병목이 옮겨 간 순서</h2>
+      <span class="note">수익률은 각 시기 시작 주의 종가 대비(실시간 계산) · 카드를 누르면 차트와 히스토리가 그 시기로 좁혀져요</span>
+    </div>
+    <div class="eras" id="eras"></div>
+  </section>
+
+  <section>
+    <div class="sec-head">
+      <h2>📈 나스닥과 특징주 차트</h2>
+      <span class="note">주간 종가 · 선이나 점을 누르면 아래 히스토리의 해당 사건으로 이동해요</span>
+    </div>
+    <div class="controls">
+      <div class="seg" role="group" aria-label="빠른 선택" id="quick"></div>
+      <select id="sym-select" aria-label="종목 선택"></select>
+      <div class="seg" role="group" aria-label="눈금"><button type="button" data-scale="log" aria-pressed="true">로그</button><button type="button" data-scale="lin" aria-pressed="false">일반</button></div>
+    </div>
+    <div class="chart-box">
+      <div class="c-stat" id="c-stat"></div>
+      <div id="chart"><p class="empty">차트를 불러오는 중…</p></div>
+      <div class="legend"><span><i style="background:var(--good)"></i>호재</span><span><i style="background:var(--crit)"></i>악재</span><span><i style="background:var(--ink-faint)"></i>중립</span><span>큰 점 = 이 종목이 특징주로 언급된 사건</span><span>배경색 = 시기(1~4막)</span></div>
+    </div>
+  </section>
+
+  <section>
+    <div class="sec-head">
+      <h2>🗓 히스토리 <span class="note" id="tl-count"></span></h2>
+      <div class="seg" role="group" aria-label="정렬"><button type="button" data-order="asc" aria-pressed="true">과거부터</button><button type="button" data-order="desc" aria-pressed="false">최신부터</button></div>
+    </div>
+    <div class="controls">
+      <div class="seg" role="group" aria-label="시기 필터" id="era-filter"></div>
+    </div>
+    <div class="controls"><div class="chips" id="type-chips"></div></div>
+    <div id="timeline"></div>
+  </section>
+
+  <section>
+    <div class="sec-head">
+      <h2>🧩 병목 지도 — 다음은 어디가 막힐까?</h2>
+      <span class="note">지나간 병목 → 현재 병목 → 다음 후보 · 종목을 누르면 차트로 봐요 · 괄호는 1년 수익률</span>
+    </div>
+    <div class="flow" id="flow"></div>
+    <div class="bns" id="bns"></div>
+    <ol class="qs">
+      <li><b>지금 값이 오르는 부품은 무엇인가?</b> 병목은 늘 '가격'과 '납기(리드타임)'로 먼저 보여요. 계약가격이 오르고 주문이 밀리면 병목, 가격 상승이 둔화하면 해소의 신호예요.</li>
+      <li><b>돈은 계속 들어오는가?</b> 빅테크 capex 가이던스가 분기마다 올라가는 동안은 공급망 전체가 수혜를 받아요. 가이던스가 꺾이는 순간이 가장 위험해요.</li>
+      <li><b>공급은 언제 따라오는가?</b> 공장·전력망 증설은 2~4년이 걸려요. 증설 물량이 쏟아지는 시점이 보통 그 병목 주식의 고점과 겹쳐요(2018년 메모리, 2024년 엔비디아 리드타임 단축).</li>
+      <li><b>효율 혁신은 수요를 줄일까, 늘릴까?</b> 딥시크(2025.1, 2026.9) 때마다 '덜 필요하다'는 공포가 왔지만, 값이 싸지면 사용량이 폭발하는 제번스 역설도 반복됐어요.</li>
+      <li><b>얼마나 반영됐나?</b> 텐배거 뒤에는 한 달 -30% 같은 급락도 따라와요(2026년 7월 메모리). 이야기가 맞아도 가격이 이미 앞서 있을 수 있어요.</li>
+    </ol>
+  </section>
+
+  <section>
+    <div class="sec-head">
+      <h2>🏆 특징주 성적표</h2>
+      <span class="note" id="lb-note">제목을 누르면 정렬 · 행을 누르면 차트로 봐요</span>
+    </div>
+    <div class="controls"><div class="chips" id="grp-chips"></div></div>
+    <div class="tbl-wrap"><table id="lb"></table></div>
+  </section>
+
+  <section>
+    <div class="sec-head"><h2>📰 뉴스</h2><span class="note" id="news-note"></span></div>
+    <div id="news-ai"></div>
+    <div id="news-live"></div>
+  </section>
+
+  <section>
+    <div class="sec-head"><h2>📚 기본 지식</h2></div>
+    <div class="learn">
+      <div class="card"><h3>🧠 학습(Training)과 추론(Inference)</h3><p>학습은 모델을 만드는 단계로 GPU 수만 개를 몇 달 돌려요. 추론은 만든 모델을 사람들이 쓰는 단계예요. 사용자가 늘고, o1처럼 '오래 생각하는' 추론 모델과 스스로 일하는 에이전트가 나오면서 2025년부터는 추론에 드는 연산·메모리가 학습을 앞지르기 시작했어요.</p></div>
+      <div class="card"><h3>💾 HBM이란?</h3><p>DRAM을 수직으로 쌓아 GPU 바로 옆에 붙인 초고속 메모리예요. GPU가 아무리 빨라도 데이터를 제때 못 받으면 놀게 되는데(메모리 벽), 이걸 푸는 게 HBM이에요. SK하이닉스가 먼저 양산해 엔비디아의 핵심 공급사가 됐고, 쌓는 장비(TC 본더)를 만드는 한미반도체도 함께 주목받았어요.</p></div>
+      <div class="card"><h3>📦 KV 캐시와 SSD가 왜 필요할까</h3><p>AI가 긴 대화나 문서를 다룰 때 앞부분을 계산한 결과(KV 캐시)를 저장해 두고 재사용해요. 문맥이 길어지고 에이전트가 오래 일할수록 이 캐시가 HBM에 다 안 들어가서 DRAM, 다시 SSD로 넘겨요. 그래서 추론 시대에는 메모리뿐 아니라 낸드·SSD(샌디스크 등)까지 부족해졌어요.</p></div>
+      <div class="card"><h3>🧱 CoWoS(첨단 패키징)</h3><p>GPU 칩과 HBM을 하나의 기판 위에 촘촘히 묶는 TSMC의 패키징 기술이에요. 2023~2024년에는 GPU 칩 자체보다 이 패키징 용량이 모자라서 엔비디아 출하가 막혔어요. '칩을 만드는 공정'이 아닌 '조립 공정'도 병목이 될 수 있다는 사례예요.</p></div>
+      <div class="card"><h3>⚡ 왜 'GW(기가와트)'로 말할까</h3><p>2025년부터 AI 투자 규모를 GPU 개수가 아니라 전력(GW)으로 말하기 시작했어요. 1GW는 원전 1기 수준이고, 1GW 데이터센터에 수십조 원이 들어요. 결국 전기를 얼마나 확보하느냐가 연산 규모의 상한이 됐다는 뜻이에요.</p></div>
+      <div class="card"><h3>🔁 capex 사이클과 '순환 투자' 논란</h3><p>빅테크의 설비투자(capex)가 GPU·메모리·전력 회사의 매출이 돼요. 엔비디아가 오픈AI에 투자하고 오픈AI가 그 돈으로 엔비디아 칩을 사는 구조처럼 돈이 돌고 도는 '순환 투자'가 늘면서, 실제 최종 수요(AI로 버는 돈)가 따라오는지가 핵심 쟁점이 됐어요.</p></div>
+    </div>
+  </section>
+
+  <footer>가격: Yahoo Finance(미국 종목·지수는 달러/포인트, 국내 종목은 원화) · 히스토리는 공개 보도 기준이며 수치는 대략적이에요 · 투자 판단의 근거로 쓰지 마세요</footer>
+</main>
+
+<script>
+(function(){
+  'use strict';
+  /* Seed history (hand-written). Figures are approximate; the AI update adds later events on top. */
+  /*EVENTS:BEGIN*/
+  var EVENTS = [
+    {"date":"2017-06-12","type":"model","impact":"neutral","stocks":["GOOGL"],"title":"트랜스포머 논문 'Attention Is All You Need'","desc":"구글 연구진이 '어텐션'만으로 문장을 이해하는 트랜스포머 구조를 발표했어요. GPT·제미나이·클로드 같은 지금의 거대 언어모델이 모두 이 구조 위에 서 있어요."},
+    {"date":"2018-06-11","type":"model","impact":"neutral","stocks":[],"title":"오픈AI GPT-1 공개","desc":"대량의 글을 먼저 읽혀(사전학습) 언어를 익히게 한 뒤 과제에 맞게 다듬는 방식을 선보였어요. GPT 시리즈의 출발점이에요."},
+    {"date":"2018-10-11","type":"model","impact":"neutral","stocks":["GOOGL"],"title":"구글 BERT 공개","desc":"트랜스포머 기반 언어모델 BERT가 여러 언어 이해 시험에서 기록을 갈아치웠어요. 1년 뒤 구글 검색에도 적용됐어요."},
+    {"date":"2018-11-16","type":"earnings","impact":"down","stocks":["NVDA"],"title":"엔비디아 실적 쇼크, 하루 약 -19%","desc":"암호화폐 채굴 붐이 꺼지며 게이밍 GPU 재고가 쌓였고, 가이던스가 예상을 크게 밑돌았어요. 10월 고점 대비 주가가 절반 이하로 떨어졌어요. 한 가지 용도에 쏠린 수요는 반대로도 크게 흔들린다는 교훈이에요."},
+    {"date":"2018-12-24","type":"macro","impact":"down","stocks":[],"title":"나스닥 2018년 4분기 급락의 바닥","desc":"연준의 금리 인상과 미중 무역전쟁 우려로 나스닥이 10월 고점 대비 약 24% 떨어진 뒤 크리스마스 이브에 바닥을 찍고 반등했어요."},
+    {"date":"2019-02-14","type":"model","impact":"neutral","stocks":[],"title":"GPT-2, '위험할 수 있어 공개 보류'","desc":"오픈AI가 그럴듯한 글을 지어내는 GPT-2를 발표하면서 악용 우려로 전체 모델 공개를 미뤘어요. 모델을 키우면 능력이 커진다는 신호가 뚜렷해졌어요."},
+    {"date":"2019-03-11","type":"chip","impact":"up","stocks":["NVDA"],"title":"엔비디아, 멜라녹스 약 69억 달러 인수 발표","desc":"데이터센터 네트워킹(인피니밴드) 회사를 사들였어요. 훗날 GPU 수만 개를 하나처럼 묶는 AI 클러스터의 핵심이 되면서 '신의 한 수'로 평가돼요."},
+    {"date":"2019-07-22","type":"capex","impact":"neutral","stocks":["MSFT"],"title":"마이크로소프트, 오픈AI에 10억 달러 투자","desc":"MS가 오픈AI에 투자하고 애저(Azure)를 독점 클라우드로 공급하기로 했어요. 3년 뒤 ChatGPT 붐에서 MS가 가장 먼저 수혜를 받는 계기가 됐어요."},
+    {"date":"2020-03-16","type":"macro","impact":"down","stocks":[],"title":"코로나 폭락, 나스닥 하루 -12%","desc":"코로나19 공포로 나스닥이 하루에 약 12% 떨어졌어요. 이후 제로금리·양적완화와 재택·클라우드 수요로 빅테크가 V자 반등을 이끌었어요."},
+    {"date":"2020-05-14","type":"chip","impact":"up","stocks":["NVDA"],"title":"엔비디아 A100(암페어) 발표","desc":"데이터센터용 GPU A100이 나왔어요. GPT-3 이후 거대 모델 학습의 표준 장비가 됐고, ChatGPT도 A100 클러스터에서 학습됐어요."},
+    {"date":"2020-06-11","type":"model","impact":"up","stocks":["NVDA","MSFT"],"title":"GPT-3 공개, AI의 태동","desc":"파라미터 1,750억 개짜리 GPT-3가 API로 공개됐어요. 예시 몇 개만 주면 번역·요약·코딩을 해내면서, 모델과 데이터·연산을 키우면 성능이 계속 오른다는 '스케일링 법칙'이 확인됐어요. 거대 모델 경쟁과 GPU 수요의 출발점이에요."},
+    {"date":"2021-11-19","type":"rally","impact":"neutral","stocks":["NVDA"],"title":"나스닥 2021년 고점","desc":"초저금리 성장주 랠리가 정점을 찍었어요(종가 약 16,057). 엔비디아도 11월 말 고점을 찍은 뒤 이듬해 금리 인상기에 약 66% 하락했어요."},
+    {"date":"2022-03-16","type":"macro","impact":"down","stocks":[],"title":"연준 금리 인상 시작","desc":"연준이 2018년 이후 처음 금리를 올렸어요. 2022년 한 해 기준금리가 0%대에서 4%대로 오르며 나스닥이 약 33% 떨어졌어요."},
+    {"date":"2022-03-22","type":"chip","impact":"neutral","stocks":["NVDA"],"title":"엔비디아 H100(호퍼) 발표","desc":"트랜스포머 연산을 빠르게 하는 전용 엔진을 넣은 H100을 발표했어요. 이듬해 ChatGPT 붐에서 '없어서 못 파는' GPU의 대명사가 됐어요."},
+    {"date":"2022-08-31","type":"policy","impact":"down","stocks":["NVDA","AMD"],"title":"美, A100·H100 중국 수출 제한","desc":"미국 정부가 엔비디아·AMD의 최고급 AI 칩을 중국에 팔지 못하게 했어요. 이후 중국용 저사양 칩을 만들면 다시 막히는 일이 반복됐어요."},
+    {"date":"2022-10-07","type":"policy","impact":"down","stocks":["NVDA","ASML"],"title":"美 대중 반도체 수출통제 발표","desc":"첨단 AI 칩과 반도체 장비의 중국 수출을 광범위하게 막는 규제가 발표됐어요. AI 반도체가 '안보 자산'이 된 계기예요."},
+    {"date":"2022-10-13","type":"crash","impact":"down","stocks":["NVDA"],"title":"엔비디아·나스닥 하락장 바닥권","desc":"엔비디아가 2021년 고점 대비 약 66% 떨어진 수준(분할 반영 약 11달러)까지 밀렸어요. 이 바닥에서 불과 1년 반 뒤 세계 시총 1위가 될 줄은 거의 아무도 몰랐어요."},
+    {"date":"2022-11-30","type":"model","impact":"up","stocks":["MSFT","NVDA"],"title":"ChatGPT 출시","desc":"오픈AI가 ChatGPT를 공개했어요. 5일 만에 사용자 100만 명, 두 달 만에 약 1억 명으로 추정되며 역사상 가장 빠르게 퍼진 서비스가 됐어요. 생성형 AI 시대의 시작이에요."},
+    {"date":"2023-01-23","type":"capex","impact":"up","stocks":["MSFT"],"title":"MS, 오픈AI에 수년간 수십억 달러 추가 투자","desc":"약 100억 달러 규모로 보도된 추가 투자예요. 빅테크들이 앞다퉈 생성형 AI에 돈을 쏟아붓는 경쟁이 시작됐어요."},
+    {"date":"2023-02-08","type":"model","impact":"down","stocks":["GOOGL"],"title":"구글 바드 시연 오류, 알파벳 하루 -7.7%","desc":"구글이 서둘러 공개한 챗봇 바드가 홍보 영상에서 틀린 답을 하면서 시총이 하루에 약 1,000억 달러 빠졌어요. '검색 왕좌가 흔들린다'는 우려가 커졌어요."},
+    {"date":"2023-03-14","type":"model","impact":"up","stocks":["MSFT"],"title":"GPT-4 공개","desc":"변호사 시험 상위권 수준의 성적을 내는 GPT-4가 나왔어요. 기업들이 AI 도입을 본격 검토하기 시작했어요."},
+    {"date":"2023-05-25","type":"earnings","impact":"up","stocks":["NVDA","SMCI","000660.KS"],"title":"엔비디아 '가이던스 쇼크', 하루 +24%","desc":"다음 분기 매출 전망을 약 110억 달러로 제시해 예상(약 70억 달러)을 크게 웃돌았어요. 하루에 24% 올랐고 닷새 뒤 장중 시총 1조 달러를 넘었어요. GPU가 모자란다는 사실이 숫자로 확인된 날이에요."},
+    {"date":"2023-07-18","type":"model","impact":"neutral","stocks":["META"],"title":"메타 Llama 2 오픈소스 공개","desc":"메타가 상업적으로도 쓸 수 있는 거대 언어모델을 공개했어요. 누구나 모델을 돌리게 되면서 GPU 수요가 빅테크 밖으로도 퍼졌어요."},
+    {"date":"2023-10-17","type":"policy","impact":"down","stocks":["NVDA"],"title":"美 수출통제 강화, H800·A800도 막혀","desc":"중국용으로 사양을 낮춘 칩까지 수출이 막혔어요. 엔비디아는 이후 H20 같은 더 낮은 사양 칩을 다시 내놨어요."},
+    {"date":"2023-11-17","type":"model","impact":"neutral","stocks":["MSFT"],"title":"오픈AI 샘 올트먼 해임 소동","desc":"이사회가 CEO를 전격 해임했다가 직원 대부분이 사직을 예고하자 5일 만에 복귀시켰어요. AI 안전과 상업화 속도를 둘러싼 갈등이 드러났어요."},
+    {"date":"2023-12-06","type":"model","impact":"up","stocks":["GOOGL"],"title":"구글 제미나이 공개","desc":"구글이 텍스트·이미지·음성을 함께 다루는 제미나이를 내놨어요. 자체 칩(TPU)으로 학습했다는 점도 주목받았어요."},
+    {"date":"2024-02-22","type":"earnings","impact":"up","stocks":["NVDA","SMCI"],"title":"엔비디아 실적, 하루 +16%","desc":"데이터센터 매출이 1년 새 몇 배로 늘며 하루 시총이 약 2,770억 달러 늘어 당시 미국 증시 사상 최대 증가를 기록했어요. 서버 조립사 슈퍼마이크로도 폭등했어요."},
+    {"date":"2024-03-18","type":"chip","impact":"up","stocks":["NVDA"],"title":"블랙웰 발표 (GTC 2024)","desc":"칩 두 개를 하나처럼 묶은 차세대 GPU 블랙웰을 공개했어요. 랙 전체를 하나의 컴퓨터로 파는 'NVL72' 방식이 전력·냉각 수요도 키웠어요."},
+    {"date":"2024-03-19","type":"bottleneck","impact":"up","stocks":["000660.KS","042700.KS","MU"],"title":"SK하이닉스 HBM3E 양산, HBM이 새 병목으로","desc":"SK하이닉스가 HBM3E를 가장 먼저 양산해 엔비디아에 공급하기 시작했어요. TSMC의 CoWoS 패키징과 함께 HBM이 'GPU를 만들 재료'의 병목이 됐고, HBM 적층 장비를 만드는 한미반도체도 급등했어요."},
+    {"date":"2024-06-10","type":"rally","impact":"neutral","stocks":["NVDA"],"title":"엔비디아 10대 1 액면분할","desc":"주가가 1,000달러를 넘자 10대 1로 분할했어요. 개인 투자자가 사기 쉬워졌고, 이 보드의 과거 주가는 모두 분할을 반영한 값이에요."},
+    {"date":"2024-06-18","type":"rally","impact":"up","stocks":["NVDA","MSFT"],"title":"엔비디아 시가총액 세계 1위","desc":"시총 약 3.3조 달러로 마이크로소프트를 제치고 처음으로 세계에서 가장 비싼 회사가 됐어요. ChatGPT 출시 후 1년 반 만에 주가가 약 9배가 됐어요."},
+    {"date":"2024-07-24","type":"crash","impact":"down","stocks":["GOOGL","NVDA"],"title":"'AI 투자 대비 수익은?' 의문, 나스닥 -3.6%","desc":"알파벳 실적에서 capex가 커진 데 비해 AI 수익이 안 보인다는 지적이 나오며 나스닥이 2022년 이후 최악의 하루를 보냈어요. 이후 'AI 거품론'은 급락 때마다 반복돼요."},
+    {"date":"2024-08-05","type":"macro","impact":"down","stocks":["000660.KS"],"title":"엔 캐리 청산 폭락","desc":"일본 금리 인상과 미국 경기 우려가 겹치며 나스닥이 약 3.4%, 코스피가 약 8.8% 떨어졌어요. 빚을 낸 투자금이 한꺼번에 빠지면 업황과 무관하게 AI주도 같이 급락해요."},
+    {"date":"2024-09-12","type":"model","impact":"up","stocks":["NVDA"],"title":"오픈AI o1, '생각하는' 추론 모델 등장","desc":"답하기 전에 오래 생각할수록 성능이 오르는 추론 모델이에요. 학습뿐 아니라 '사용할 때(추론)'도 연산을 많이 쓰는 새 수요가 생겼어요. 추론 시대와 이후 메모리 병목의 출발점이에요."},
+    {"date":"2024-09-20","type":"bottleneck","impact":"up","stocks":["CEG","VST"],"title":"MS–컨스텔레이션, 스리마일섬 원전 재가동 계약","desc":"마이크로소프트가 데이터센터 전력을 위해 멈춘 원전을 20년간 사기로 했어요. 컨스텔레이션이 하루 약 22% 올랐고, '전력이 AI의 병목'이라는 인식이 시장에 자리 잡았어요."},
+    {"date":"2024-10-14","type":"capex","impact":"up","stocks":["OKLO","CEG"],"title":"구글·아마존, 소형모듈원전(SMR) 계약","desc":"구글(카이로스 파워)과 아마존(X-에너지)이 잇따라 소형원전 전력 구매·투자를 발표했어요. 아직 상업 가동 전인 원전 스타트업 주가까지 급등했어요."},
+    {"date":"2024-11-08","type":"rally","impact":"up","stocks":["NVDA"],"title":"엔비디아 다우지수 편입","desc":"25년간 다우지수에 있던 인텔이 빠지고 엔비디아가 들어갔어요. 반도체 왕좌가 바뀌었다는 상징적인 사건이에요."},
+    {"date":"2024-12-11","type":"rally","impact":"up","stocks":[],"title":"나스닥 사상 첫 20,000 돌파","desc":"AI 대형주가 이끄는 랠리로 나스닥이 처음 20,000선을 넘었어요. 2022년 바닥(약 10,200) 대비 두 배예요."},
+    {"date":"2024-12-13","type":"earnings","impact":"up","stocks":["AVGO"],"title":"브로드컴 +24%, 맞춤형 AI칩(ASIC) 부상","desc":"구글 TPU 같은 빅테크 전용 칩 시장이 2027년 600~900억 달러가 될 거라고 밝히며 하루 24% 올라 시총 1조 달러를 넘었어요. GPU만이 답은 아니라는 신호예요."},
+    {"date":"2025-01-21","type":"capex","impact":"up","stocks":["ORCL","NVDA"],"title":"스타게이트 5,000억 달러 발표","desc":"오픈AI·소프트뱅크·오라클이 미국에 최대 5,000억 달러 규모의 AI 데이터센터를 짓겠다고 발표했어요. 오라클이 'AI 클라우드' 수혜주로 떠올랐어요."},
+    {"date":"2025-01-27","type":"crash","impact":"down","stocks":["NVDA","VST","CEG"],"title":"딥시크 쇼크, 엔비디아 하루 -17%","desc":"중국 딥시크가 훨씬 적은 비용으로 최고 수준 모델을 만들었다고 알려지며 엔비디아 시총이 하루에 약 5,900억 달러 증발했어요(미국 증시 사상 최대). 전력주 비스트라도 약 28% 급락했어요. 이후 '싸지면 더 많이 쓴다'는 제번스 역설 논쟁이 시작됐어요."},
+    {"date":"2025-02-24","type":"bottleneck","impact":"neutral","stocks":["SNDK","WDC"],"title":"샌디스크, 웨스턴디지털에서 분사 상장","desc":"낸드플래시·SSD 사업이 샌디스크로 따로 상장했어요. 처음엔 '경기 민감한 낸드'로 외면받았지만, 1년 뒤 추론용 스토리지 부족으로 대표 텐배거가 됐어요."},
+    {"date":"2025-03-28","type":"capex","impact":"neutral","stocks":["CRWV"],"title":"코어위브 상장, '네오클라우드' 등장","desc":"GPU를 빌려주는 AI 전용 클라우드 코어위브가 공모가 40달러로 상장했어요. 빚을 내 GPU를 사서 임대하는 구조라 AI 투자 사이클의 온도계로 쓰여요."},
+    {"date":"2025-04-04","type":"crash","impact":"down","stocks":["MU","SNDK","000660.KS"],"title":"상호관세 충격, 나스닥 이틀간 약 -11%","desc":"미국의 대규모 관세 발표로 나스닥이 4월 3일 약 6%, 4일 약 6% 떨어져 약세장에 들어갔어요. 마이크론 약 65달러, 샌디스크 약 30달러였던 이 시점이 이후 메모리 슈퍼사이클의 출발점이 됐어요."},
+    {"date":"2025-04-09","type":"rally","impact":"up","stocks":[],"title":"관세 90일 유예, 나스닥 하루 +12%","desc":"관세 유예 발표에 나스닥이 하루 약 12% 올라 역사상 두 번째로 큰 상승을 기록했어요. 공포가 극에 달했을 때가 저점이었던 사례예요."},
+    {"date":"2025-04-15","type":"policy","impact":"down","stocks":["NVDA","AMD"],"title":"엔비디아 H20 중국 수출 제한, 약 55억 달러 비용","desc":"중국용 칩 H20까지 수출 허가가 필요해지며 엔비디아가 약 55억 달러 손실을 반영했어요."},
+    {"date":"2025-07-09","type":"rally","impact":"up","stocks":["NVDA"],"title":"엔비디아 세계 최초 시총 4조 달러","desc":"딥시크·관세 충격을 딛고 세계 최초로 시총 4조 달러를 넘었어요."},
+    {"date":"2025-08-07","type":"model","impact":"neutral","stocks":["MSFT"],"title":"GPT-5 출시","desc":"오픈AI가 GPT-5를 내놨어요. 기대보다 발전 폭이 작다는 평가도 있었지만, 추론·에이전트 사용량은 계속 빠르게 늘었어요."},
+    {"date":"2025-09-10","type":"capex","impact":"up","stocks":["ORCL"],"title":"오라클 +36%, 수주잔고 약 4,550억 달러","desc":"오픈AI 등과 맺은 대형 클라우드 계약으로 남은 수주가 폭증했다고 밝히며 하루 36% 올랐어요(1992년 이후 최대). 다만 이 계약을 지키려면 막대한 빚을 내 데이터센터를 지어야 한다는 우려도 따라붙었어요."},
+    {"date":"2025-09-22","type":"capex","impact":"up","stocks":["NVDA"],"title":"엔비디아, 오픈AI에 최대 1,000억 달러 투자(10GW)","desc":"AI 투자 규모를 'GW(전력)'로 말하기 시작한 상징적 계약이에요. 동시에 투자한 돈이 다시 칩 구매로 돌아오는 '순환 투자' 논란도 커졌어요."},
+    {"date":"2025-10-01","type":"bottleneck","impact":"up","stocks":["000660.KS","005930.KS","MU"],"title":"삼성·SK하이닉스, 오픈AI 스타게이트 메모리 협력","desc":"오픈AI가 월 최대 90만 장 웨이퍼 규모의 D램이 필요하다고 밝히며 두 회사와 협력하기로 했어요. 세계 D램 생산의 큰 몫에 해당해 이튿날 SK하이닉스가 약 10% 올랐어요. 메모리가 다음 병목이라는 신호탄이었어요."},
+    {"date":"2025-10-06","type":"capex","impact":"up","stocks":["AMD"],"title":"AMD–오픈AI 6GW 계약, AMD +24%","desc":"오픈AI가 AMD GPU를 6GW 규모로 쓰기로 하고 AMD 지분을 받을 수 있는 계약을 맺었어요. 엔비디아 대안에 대한 수요가 확인됐어요."},
+    {"date":"2025-10-27","type":"rally","impact":"up","stocks":["005930.KS","000660.KS"],"title":"코스피 4,000·삼성전자 10만 원 돌파","desc":"메모리 기대에 삼성전자가 처음 10만 원을, SK하이닉스가 50만 원을 넘고 코스피도 4,000선을 돌파했어요."},
+    {"date":"2025-10-29","type":"rally","impact":"up","stocks":["NVDA"],"title":"엔비디아 세계 최초 시총 5조 달러","desc":"4조 달러를 넘은 지 약 넉 달 만에 5조 달러를 넘었어요."},
+    {"date":"2025-11-24","type":"model","impact":"up","stocks":["GOOGL","AVGO","NVDA"],"title":"제미나이 3와 TPU 부각, 알파벳 급등","desc":"11월 18일 나온 제미나이 3가 호평을 받고 메타가 구글 TPU 도입을 검토한다는 보도가 나오며 알파벳이 하루 약 6% 올랐어요. 다음 날 엔비디아는 약 3% 내렸어요. GPU 독점에 맞춤형 칩이 도전하는 구도예요."},
+    {"date":"2025-12-18","type":"earnings","impact":"up","stocks":["MU"],"title":"마이크론 가이던스 쇼크, 메모리 슈퍼사이클 공식화","desc":"마이크론이 다음 분기 매출 전망을 예상보다 훨씬 높게 내놓으며 하루 약 10% 올랐어요. 범용 D램 가격까지 급등하면서 'AI가 메모리를 빨아들인다'는 이야기가 숫자로 확인됐어요."},
+    {"date":"2025-12-24","type":"chip","impact":"neutral","stocks":["NVDA"],"title":"엔비디아, 그록(Groq) 추론칩 기술 약 200억 달러 라이선스","desc":"추론에 특화된 칩을 만드는 그록의 기술과 인력을 확보했어요. 추론이 학습보다 큰 시장이 되면서 '추론 전용 칩' 경쟁이 본격화됐어요."},
+    {"date":"2026-01-06","type":"bottleneck","impact":"up","stocks":["SNDK","MU","WDC","STX"],"title":"CES 2026, '추론 컨텍스트 메모리'에 SSD 급등","desc":"젠슨 황이 차세대 베라 루빈과 함께 AI가 기억하는 문맥(KV 캐시)을 저장하는 새 스토리지 계층을 소개했어요. 샌디스크가 하루 약 28%, 마이크론이 약 10% 올랐어요. 메모리에 이어 SSD까지 병목이 넓어졌어요."},
+    {"date":"2026-02-04","type":"crash","impact":"down","stocks":["PLTR","ORCL"],"title":"'SaaS 종말론', AI 에이전트 공포에 소프트웨어주 급락","desc":"업무를 스스로 처리하는 AI 에이전트가 기존 소프트웨어를 대체할 수 있다는 우려에 소프트웨어주가 크게 떨어졌어요. AI 수혜가 하드웨어에 쏠리고 응용 소프트웨어는 오히려 피해를 볼 수 있다는 인식이 퍼졌어요."},
+    {"date":"2026-02-06","type":"capex","impact":"neutral","stocks":["AMZN","GOOGL","VRT"],"title":"빅테크 2026 capex 폭증, 아마존 약 2,000억 달러","desc":"아마존이 올해 설비투자를 약 2,000억 달러로 제시하자 '너무 많이 쓴다'는 우려에 주가가 약 6% 떨어졌어요. 반대로 그 돈을 받는 냉각·전력·메모리 공급망 주식은 강세였어요. 버티브는 실적 발표 날 약 24% 올랐어요."},
+    {"date":"2026-03-04","type":"macro","impact":"down","stocks":["000660.KS","005930.KS"],"title":"이란 전쟁·유가 급등, 코스피 하루 -12%","desc":"2월 28일 미국·이스라엘의 이란 공습 이후 호르무즈 해협이 막히며 브렌트유가 한때 약 120달러까지 올랐어요. 코스피는 3월 4일 약 12% 폭락해 서킷브레이커가 걸렸고 반도체주도 크게 밀렸어요."},
+    {"date":"2026-04-08","type":"rally","impact":"up","stocks":["NVDA","000660.KS"],"title":"미·이란 휴전, 위험자산 반등","desc":"휴전 소식에 유가가 100달러 아래로 떨어지고 나스닥과 코스피가 크게 올랐어요. 이후 메모리주가 사상 최대 랠리를 시작했어요."},
+    {"date":"2026-05-27","type":"rally","impact":"up","stocks":["000660.KS","005930.KS","MU"],"title":"SK하이닉스 시총 1조 달러, 메모리 3사 모두 1조 달러","desc":"5월 5일 마이크론, 6일 삼성전자에 이어 SK하이닉스도 시총 1조 달러(약 1,680조 원)를 넘었어요. SK하이닉스는 연초 대비 약 250% 올랐고 코스피도 8,000선을 넘었어요. 추론 시대 메모리 병목의 정점에 가까운 장면이에요."},
+    {"date":"2026-07-02","type":"crash","impact":"down","stocks":["000660.KS","005930.KS","MU"],"title":"메모리주 급락, SK하이닉스 하루 약 -15%","desc":"전날 미국 반도체주 급락에 이어 HBM 가격 상승이 범용 D램보다 느려 실적이 기대에 못 미칠 수 있다는 보고서가 나오며 SK하이닉스가 약 15%, 삼성전자가 약 9% 떨어졌어요."},
+    {"date":"2026-07-13","type":"crash","impact":"down","stocks":["000660.KS"],"title":"하이닉스 美 ADR 상장 직후 사상 최대 낙폭","desc":"7월 10일 나스닥 ADR 상장 첫날 약 13% 올랐지만, 다음 거래일 서울에서 약 15% 떨어져 상장 이후 최대 낙폭을 기록했어요. HBM4 출하 증가가 기대만큼 빠르지 않았다는 우려에 코스피도 약 9% 급락했어요. 7월 코스피는 1997년 이후 최악의 달(약 -22%)이었어요."},
+    {"date":"2026-07-31","type":"rally","impact":"up","stocks":["000660.KS","005930.KS","MSFT","AMZN"],"title":"코스피 하루 +17.9%, 역대 최대 상승","desc":"MS 애저 성장 가속(약 43%)과 아마존의 2027년까지 강한 AI 수요 확인, 'HBM 수요가 공급을 앞선다'는 빅테크 발언에 SK하이닉스가 약 30%(상한가), 삼성전자가 약 27% 올랐어요. 병목 주식은 기대가 꺾일 때와 되살아날 때 모두 극단적으로 움직여요."},
+    {"date":"2026-09-11","type":"bottleneck","impact":"down","stocks":["000660.KS","005930.KS","SNDK"],"title":"딥시크 V4.1, 'HBM 75%·SSD 87.5% 절감' 주장","desc":"딥시크가 KV 캐시를 줄인 새 구조로 이전 모델 대비 HBM은 75%, SSD는 87.5% 덜 쓴다고 밝혔어요. 삼성전자·SK하이닉스가 하락했어요. 효율 혁신이 '현재 병목'을 풀어 버릴 수 있다는 점을 다시 일깨운 사건이에요."}
+  ];
+  /*EVENTS:END*/
+
+  var SYM = {
+    '^IXIC':{n:'나스닥 종합',g:'idx'}, '^SOX':{n:'필라델피아 반도체',g:'idx'}, '^KS11':{n:'코스피',g:'idx'},
+    'NVDA':{n:'엔비디아',g:'chip'}, 'AMD':{n:'AMD',g:'chip'}, 'AVGO':{n:'브로드컴',g:'chip'}, 'TSM':{n:'TSMC',g:'chip'}, 'ASML':{n:'ASML',g:'chip'},
+    'MSFT':{n:'마이크로소프트',g:'cloud'}, 'GOOGL':{n:'알파벳',g:'cloud'}, 'META':{n:'메타',g:'cloud'}, 'AMZN':{n:'아마존',g:'cloud'}, 'ORCL':{n:'오라클',g:'cloud'}, 'CRWV':{n:'코어위브',g:'cloud'},
+    'SMCI':{n:'슈퍼마이크로',g:'sw'}, 'PLTR':{n:'팔란티어',g:'sw'},
+    'MU':{n:'마이크론',g:'mem'}, '000660.KS':{n:'SK하이닉스',g:'mem'}, '005930.KS':{n:'삼성전자',g:'mem'}, '042700.KS':{n:'한미반도체',g:'mem'},
+    'SNDK':{n:'샌디스크',g:'stor'}, 'WDC':{n:'웨스턴디지털',g:'stor'}, 'STX':{n:'씨게이트',g:'stor'},
+    'ANET':{n:'아리스타',g:'net'}, 'LITE':{n:'루멘텀',g:'net'}, 'COHR':{n:'코히런트',g:'net'},
+    'VRT':{n:'버티브',g:'pwr'}, 'CEG':{n:'컨스텔레이션',g:'pwr'}, 'VST':{n:'비스트라',g:'pwr'}, 'GEV':{n:'GE 버노바',g:'pwr'}, 'BE':{n:'블룸에너지',g:'pwr'},
+    'OKLO':{n:'오클로',g:'pwr'}, '267260.KS':{n:'HD현대일렉트릭',g:'pwr'}, '034020.KS':{n:'두산에너빌리티',g:'pwr'}
+  };
+  var GROUPS = [{k:'idx',l:'지수'},{k:'chip',l:'GPU·칩'},{k:'cloud',l:'빅테크·클라우드'},{k:'sw',l:'서버·SW'},{k:'mem',l:'메모리'},{k:'stor',l:'스토리지(SSD)'},{k:'net',l:'네트워크·광'},{k:'pwr',l:'전력·냉각'}];
+  var GROUP_LABEL = {}; GROUPS.forEach(function(g){ GROUP_LABEL[g.k] = g.l; });
+
+  var ERAS = [
+    {k:'e1', no:'1막', title:'태동: 트랜스포머에서 GPT-3까지', start:'2017-01-01', end:'2022-11-29', bn:'병목: 아이디어·데이터',
+     desc:'트랜스포머와 GPT-3로 \'키우면 똑똑해진다\'는 게 확인됐어요. 엔비디아는 아직 게임·채굴 회사로 더 알려져 있었어요.', stocks:['NVDA','AMD','TSM','MSFT','GOOGL']},
+    {k:'e2', no:'2막', title:'ChatGPT 충격과 GPU 골드러시', start:'2022-11-30', end:'2024-06-18', bn:'병목: GPU · CoWoS · HBM',
+     desc:'모두가 GPU를 사려 줄을 섰어요. 엔비디아가 시총 1위가 됐고, HBM을 먼저 만든 SK하이닉스가 함께 떴어요.', stocks:['NVDA','SMCI','AVGO','META','000660.KS','042700.KS']},
+    {k:'e3', no:'3막', title:'인프라 확장: 전력·네트워크', start:'2024-06-18', end:'2025-04-08', bn:'병목: 전력 · 변압기 · 냉각',
+     desc:'GPU는 구해도 꽂을 전기가 없었어요. 원전·변압기·냉각 회사가 AI주가 됐고, 딥시크와 관세 충격으로 막을 내렸어요.', stocks:['CEG','VST','GEV','VRT','267260.KS','PLTR','ANET']},
+    {k:'e4', no:'4막', title:'추론 시대: 메모리·SSD 슈퍼사이클', start:'2025-04-08', end:null, bn:'병목: D램 · HBM · 낸드(SSD) · 광',
+     desc:'추론·에이전트가 KV 캐시를 폭발적으로 늘리며 메모리와 SSD가 바닥났어요. 샌디스크·마이크론·SK하이닉스가 텐배거가 됐어요.', stocks:['SNDK','MU','000660.KS','005930.KS','WDC','STX','LITE','BE']},
+    {k:'e5', no:'5막', title:'다음 병목은 어디일까?', start:null, end:null, bn:'후보: 전력 생산 · 냉각 · 광 · 자본',
+     desc:'병목은 늘 \'가장 늦게 늘릴 수 있는 것\'으로 옮겨 갔어요. 아래 병목 지도에서 후보와 확인할 신호를 정리했어요.', stocks:['GEV','BE','CEG','VRT','LITE','034020.KS']}
+  ];
+  var ERA_COLOR = {e1:'var(--e1)', e2:'var(--e2)', e3:'var(--e3)', e4:'var(--e4)', e5:'var(--e5)'};
+
+  var BOTTLENECKS = [
+    {st:'past', t:'GPU 연산', per:'2023~2024', why:'H100을 받으려면 1년 가까이 기다려야 했어요. 지금은 공급이 크게 늘고 AMD·구글 TPU·브로드컴 맞춤칩 같은 대안이 생겨 \'GPU만 있으면 된다\'는 시기는 지났어요.', sig:'엔비디아 데이터센터 매출 증가율, GPU 임대 가격, ASIC 점유율', s:['NVDA','AMD','AVGO','SMCI']},
+    {st:'ing', t:'첨단 패키징(CoWoS)·HBM', per:'2023~', why:'GPU와 HBM을 붙이는 패키징과 HBM 자체가 출하량의 상한을 정했어요. HBM은 세대가 바뀔 때마다(HBM3E→HBM4) 다시 빠듯해져요.', sig:'TSMC CoWoS 증설, HBM4 출하·수율, HBM 가격 협상', s:['TSM','000660.KS','042700.KS','MU']},
+    {st:'ing', t:'전력망·변압기', per:'2024~', why:'데이터센터를 다 지어도 전력망 연결을 몇 년씩 기다려요. 대형 변압기·차단기는 납기가 수년이라 국내 전력기기 회사까지 수혜를 받았어요.', sig:'변압기 수주잔고, 전력망 연결 대기열, 전력 구매 계약 단가', s:['GEV','267260.KS','CEG','VST']},
+    {st:'ing', t:'네트워크·광통신', per:'2025~', why:'GPU 수십만 개를 하나로 묶으려면 GPU 사이 데이터 이동이 빨라야 해요. 800G→1.6T 광트랜시버와 스위치가 부족해졌어요.', sig:'광트랜시버 리드타임, 1.6T 전환 속도, CPO(광 패키징) 채택', s:['LITE','COHR','ANET','AVGO']},
+    {st:'now', t:'메모리(D램·HBM)·SSD', per:'2025~2026', why:'추론 모델과 에이전트가 긴 문맥(KV 캐시)을 쓰면서 HBM→D램→SSD 전 계층이 부족해졌어요. 범용 D램·낸드 가격까지 급등하며 메모리 3사가 시총 1조 달러를 넘었어요.', sig:'D램·낸드 계약가격 상승률, 메모리 증설(캐파) 발표, 딥시크류 효율화 소식, 재고일수', s:['MU','000660.KS','005930.KS','SNDK','WDC','STX']},
+    {st:'next', t:'전력 \'생산\' 자체', per:'후보', why:'전력망보다 더 근본적으로 발전소가 모자라요. 바로 지을 수 있는 가스터빈·연료전지가 먼저, 원전·SMR은 2030년 전후가 돼요.', sig:'가스터빈 수주잔고·납기, 데이터센터 자가발전(비하인드 더 미터) 계약, SMR 인허가', s:['GEV','BE','CEG','OKLO','034020.KS']},
+    {st:'next', t:'냉각·열 관리', per:'후보', why:'랙 하나가 100kW를 넘으면 공기로는 식힐 수 없어 액체냉각이 필수가 돼요. 칩이 뜨거워질수록 냉각 장비 비중이 커져요.', sig:'랙당 전력 밀도, 액체냉각 채택률, 냉각 업체 수주', s:['VRT']},
+    {st:'next', t:'칩 생산능력·장비', per:'후보', why:'메모리 증설 공장은 2027~2028년에야 돌아가요. 그 전까지는 클린룸 공간과 노광장비(EUV)가 공급 상한이에요. 반대로 증설이 몰리는 시점은 메모리 고점의 신호가 될 수 있어요.', sig:'메모리 3사 capex, ASML 수주, 신규 팹 가동 일정', s:['ASML','TSM','042700.KS']},
+    {st:'next', t:'자본·수익성(ROI)', per:'후보', why:'빅테크 capex가 연 수천억 달러로 커지고, 오라클·코어위브처럼 빚을 내 데이터센터를 짓는 회사도 늘었어요. AI로 버는 돈이 따라오지 않으면 \'돈\'이 마지막 병목이 돼요.', sig:'빅테크 잉여현금흐름, AI 매출(클라우드 성장률), 회사채·CDS 스프레드', s:['ORCL','CRWV','MSFT','AMZN']},
+    {st:'next', t:'역(逆)병목: 효율 혁신', per:'상시 위험', why:'딥시크처럼 같은 일을 적은 자원으로 해내면 병목이 갑자기 풀리고 해당 주식이 급락해요. 다만 값이 싸지면 사용량이 폭발해 수요가 더 늘기도 해요(제번스 역설).', sig:'모델당 토큰 단가, KV 캐시 압축·양자화 기술, 전체 토큰 사용량 추이', s:['NVDA','000660.KS','SNDK']}
+  ];
+  var ST_LABEL = {past:'지나간 병목', ing:'진행 중', now:'현재 병목', next:'다음 후보'};
+
+  var TYPES = [
+    {k:'model', l:'AI 모델', i:'🧠'}, {k:'chip', l:'칩·하드웨어', i:'🔲'}, {k:'earnings', l:'실적', i:'📊'},
+    {k:'capex', l:'투자·계약', i:'🏗'}, {k:'bottleneck', l:'병목·공급', i:'🚧'}, {k:'policy', l:'규제·수출통제', i:'⚖️'},
+    {k:'rally', l:'급등·신고가', i:'🚀'}, {k:'crash', l:'급락', i:'📉'}, {k:'macro', l:'거시경제', i:'🌐'}
+  ];
+  var TYPE_MAP = {}; TYPES.forEach(function(t){ TYPE_MAP[t.k] = t; });
+
+  function esc(t){ return String(t==null?'':t).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;'); }
+  function safeUrl(u){ return /^https?:\/\//i.test(String(u||'')) ? String(u).replace(/"/g,'%22') : ''; }
+  function ts(d){ return Date.parse(d + 'T00:00:00Z') / 1000; }
+  function pct(v){ return (v > 0 ? '+' : '') + (Math.abs(v) >= 1000 ? Math.round(v).toLocaleString('en-US') : v.toFixed(1)) + '%'; }
+  function cls(v){ return v >= 0 ? 'up' : 'down'; }
+  function mult(r){ return r >= 10 ? r.toFixed(0) + '배' : r.toFixed(1) + '배'; }
+  function name(s){ return (SYM[s] && SYM[s].n) || s; }
+  function fmtPx(sym, v){
+    if(sym.charAt(0) === '^') return v.toLocaleString('en-US', {maximumFractionDigits: 0});
+    if(/\.KS$/.test(sym)) return '₩' + Math.round(v).toLocaleString('ko-KR');
+    return '$' + (v >= 1000 ? Math.round(v).toLocaleString('en-US') : v.toFixed(2));
+  }
+  function eraOf(date){
+    for(var i = ERAS.length - 2; i >= 0; i--){ if(date >= ERAS[i].start) return ERAS[i]; }
+    return ERAS[0];
+  }
+
+  var state = {sym:'^IXIC', scale:'log', era:'all', types:{}, order:'asc', grp:'all', sort:'r1y', sortDir:-1};
+  var S = {}, Q = {};          // weekly series and live quotes, keyed by symbol
+  var aiEvents = [], pinned = null;
+  function allEvents(){
+    return EVENTS.map(function(e){ return Object.assign({ai:false}, e); })
+      .concat(aiEvents.map(function(e){ return Object.assign({ai:true}, e); }))
+      .sort(function(a, b){ return a.date < b.date ? -1 : a.date > b.date ? 1 : 0; })
+      .map(function(e, i){ e.idx = i; e.stocks = e.stocks || []; return e; });
+  }
+  var events = allEvents();
+
+  /* ---------------- series helpers ---------------- */
+  function idxAt(s, t){                       // last weekly index at or before t (-1 if before the series)
+    var a = s.t, lo = 0, hi = a.length - 1, r = -1;
+    while(lo <= hi){ var m = (lo + hi) >> 1; if(a[m] <= t){ r = m; lo = m + 1; } else hi = m - 1; }
+    return r;
+  }
+  function last(sym){ return Q[sym] ? Q[sym].price : (S[sym] ? S[sym].c[S[sym].c.length - 1] : null); }
+  function retSince(sym, date){               // % since a date (series start if listed later)
+    var s = S[sym], p = last(sym); if(!s || p == null) return null;
+    var i = idxAt(s, ts(date)); if(i < 0) i = 0;
+    return (p / s.c[i] - 1) * 100;
+  }
+  function eraStats(sym, era){
+    var s = S[sym]; if(!s) return null;
+    var i0 = idxAt(s, ts(era.start)), late = s.t[0] > ts(era.start) + 14 * 86400; if(i0 < 0) i0 = 0;
+    var live = !era.end, i1 = live ? s.c.length - 1 : idxAt(s, ts(era.end));
+    if(i1 <= i0) return null;
+    var end = live && Q[sym] ? Q[sym].price : s.c[i1], peak = end;
+    for(var i = i0; i <= i1; i++) if(s.c[i] > peak) peak = s.c[i];
+    return {ret:(end / s.c[i0] - 1) * 100, peak:peak / s.c[i0], late:late};
+  }
+  function moveAfter(sym, date, weeks){
+    var s = S[sym]; if(!s) return null;
+    var i = idxAt(s, ts(date)); if(i < 0 || i + weeks >= s.c.length) return i < 0 ? null : {px:s.c[i], after:null};
+    return {px:s.c[i], after:(s.c[i + weeks] / s.c[i] - 1) * 100};
+  }
+
+  /* ---------------- top cards ---------------- */
+  var CARD_SYMS = ['^IXIC','^SOX','NVDA','000660.KS'];
+  function renderCards(){
+    document.getElementById('cards').innerHTML = CARD_SYMS.map(function(sym){
+      var q = Q[sym], s = S[sym], ytd = retSince(sym, new Date().getFullYear() + '-01-01'), gpt = retSince(sym, '2022-11-30');
+      var ath = null;
+      if(s && q){ var mx = Math.max.apply(null, s.c.concat([q.price])); ath = (q.price / mx - 1) * 100; }
+      return '<div class="card"><h3>'+esc(name(sym))+'</h3>'+
+        '<div class="big">'+(q ? fmtPx(sym, q.price)+' <span class="chg '+cls(q.change)+'">'+pct(q.change)+'</span>' : '—')+'</div>'+
+        (ytd != null ? '<div class="kv"><span>연초 대비</span><b class="'+cls(ytd)+'">'+pct(ytd)+'</b></div>' : '')+
+        (gpt != null ? '<div class="kv"><span>ChatGPT 이후</span><b class="'+cls(gpt)+'">'+pct(gpt)+'</b></div>' : '')+
+        (ath != null ? '<div class="kv"><span>최고 종가 대비</span><b class="'+cls(ath)+'">'+pct(ath)+'</b></div>' : '')+'</div>';
+    }).join('');
+  }
+
+  /* ---------------- eras ---------------- */
+  function renderEras(){
+    document.getElementById('eras').innerHTML = ERAS.map(function(e){
+      var per = e.start ? e.start.slice(0, 7).replace('-', '.') + ' ~ ' + (e.end ? e.end.slice(0, 7).replace('-', '.') : '지금') : '앞으로';
+      var rows = e.stocks.map(function(sym){
+        if(!e.start){ var r1 = retSince(sym, yearAgo()); return '<li><span>'+esc(name(sym))+'</span><b class="'+(r1 != null ? cls(r1) : '')+'">'+(r1 != null ? pct(r1)+' <small>1년</small>' : '—')+'</b></li>'; }
+        var st = eraStats(sym, e);
+        if(!st) return '<li><span>'+esc(name(sym))+'</span><b>—</b></li>';
+        return '<li><span>'+esc(name(sym))+(st.late ? ' <small>상장 후</small>' : '')+'</span><b class="'+cls(st.ret)+'">'+pct(st.ret)+
+          (st.peak >= 10 ? '<span class="ten" title="이 시기 최고 종가 기준">최대 '+mult(st.peak)+'</span>' : '')+'</b></li>';
+      }).join('');
+      return '<div class="era" role="button" tabindex="0" data-era="'+e.k+'" aria-pressed="'+(state.era === e.k)+'" style="--ec:'+ERA_COLOR[e.k]+'">'+
+        '<div class="no">'+e.no+'</div><h3>'+esc(e.title)+'</h3><div class="per">'+per+'</div>'+
+        '<p>'+esc(e.desc)+'</p><div class="bn">'+esc(e.bn)+'</div><ul>'+rows+'</ul></div>';
+    }).join('');
+  }
+  function yearAgo(){ var d = new Date(); d.setFullYear(d.getFullYear() - 1); return d.toISOString().slice(0, 10); }
+
+  /* ---------------- chart ---------------- */
+  var chartEl = document.getElementById('chart');
+  var QUICK = ['^IXIC','NVDA','000660.KS','MU','SNDK'];
+  document.getElementById('quick').innerHTML = QUICK.map(function(s){ return '<button type="button" data-sym="'+s+'" aria-pressed="false">'+esc(name(s))+'</button>'; }).join('');
+  document.getElementById('sym-select').innerHTML = GROUPS.map(function(g){
+    return '<optgroup label="'+g.l+'">'+Object.keys(SYM).filter(function(s){ return SYM[s].g === g.k; })
+      .map(function(s){ return '<option value="'+s+'">'+esc(SYM[s].n)+' ('+s.replace('.KS', '')+')</option>'; }).join('')+'</optgroup>';
+  }).join('');
+
+  function renderChart(){
+    var sym = state.sym, s = S[sym];
+    var st = document.getElementById('c-stat');
+    if(!s){
+      st.innerHTML = '';
+      chartEl.innerHTML = '<p class="empty">'+(onServer ? '차트를 불러오는 중…' : '차트는 서버에서 열었을 때만 보여요.')+'</p>'; return;
+    }
+    var era = ERAS.filter(function(e){ return e.k === state.era && e.start; })[0];
+    var from = era ? ts(era.start) - 8 * 7 * 86400 : s.t[0], to = era && era.end ? ts(era.end) + 8 * 7 * 86400 : Infinity;
+    var pts = [];
+    for(var k = 0; k < s.t.length; k++) if(s.t[k] >= from && s.t[k] <= to) pts.push({t:s.t[k], c:s.c[k]});
+    if(pts.length < 2){ chartEl.innerHTML = '<p class="empty">이 시기에는 '+esc(name(sym))+' 가격이 없어요(상장 전).</p>'; st.innerHTML = ''; return; }
+    var narrow = chartEl.clientWidth < 600;
+    var W = narrow ? 520 : 960, H = narrow ? 380 : 340, pl = narrow ? 50 : 62, pr = 10, pt = 18, pb = 26;
+    var t0 = pts[0].t, t1 = pts[pts.length - 1].t, log = state.scale === 'log';
+    var vals = pts.map(function(p){ return p.c; });
+    var lo = Math.min.apply(null, vals), hi = Math.max.apply(null, vals);
+    var f = log ? Math.log : function(v){ return v; };
+    var ylo = log ? f(lo * .85) : 0, yhi = f(hi * 1.08);
+    function sx(t){ return pl + (t - t0) / (t1 - t0) * (W - pl - pr); }
+    function sy(v){ return pt + (1 - (f(v) - ylo) / (yhi - ylo)) * (H - pt - pb); }
+    function lbl(v){ return v >= 1e6 ? (v / 1e6) + 'M' : v >= 1000 ? (v / 1000) + 'k' : String(v); }
+    var ticks = [];
+    if(log){
+      for(var p10 = Math.pow(10, Math.floor(Math.log10(lo * .85))); p10 <= hi * 1.08; p10 *= 10)
+        [1, 2, 5].forEach(function(m){ var v = p10 * m; if(v >= lo * .85 && v <= hi * 1.08) ticks.push(v); });
+    } else { var step = Math.pow(10, Math.floor(Math.log10(hi))) / 2; for(var v = 0; v <= hi * 1.08; v += step) ticks.push(v); }
+    var grid = ticks.map(function(v){ var y = sy(Math.max(v, 1e-9)).toFixed(1);
+      return '<line class="c-grid" x1="'+pl+'" x2="'+(W-pr)+'" y1="'+y+'" y2="'+y+'"/><text class="c-axis" x="'+(pl-6)+'" y="'+(+y+4)+'" text-anchor="end">'+lbl(+v.toPrecision(3))+'</text>'; }).join('');
+    // era bands behind everything
+    var bands = ERAS.filter(function(e){ return e.start; }).map(function(e){
+      var a = Math.max(ts(e.start), t0), b = Math.min(e.end ? ts(e.end) : t1, t1); if(b <= a) return '';
+      var x = sx(a), w = sx(b) - x;
+      return '<rect x="'+x.toFixed(1)+'" y="'+pt+'" width="'+w.toFixed(1)+'" height="'+(H-pt-pb)+'" fill="'+ERA_COLOR[e.k]+'" opacity=".07"/>'+
+        (w > 30 ? '<text class="band-lbl" x="'+(x + 4).toFixed(1)+'" y="'+(pt - 5)+'" fill="'+ERA_COLOR[e.k]+'">'+e.no+'</text>' : '');
+    }).join('');
+    var years = '', y0 = new Date(t0 * 1000).getUTCFullYear(), y1 = new Date(t1 * 1000).getUTCFullYear(), every = narrow && y1 - y0 > 6 ? 2 : 1;
+    for(var yr = y0; yr <= y1 + 1; yr++){
+      var tx = Date.UTC(yr, 0, 1) / 1000; if(tx < t0 || tx > t1 || (yr - y0) % every) continue;
+      years += '<line class="c-grid" x1="'+sx(tx).toFixed(1)+'" x2="'+sx(tx).toFixed(1)+'" y1="'+pt+'" y2="'+(H-pb)+'" stroke-dasharray="2 4"/><text class="c-axis" x="'+sx(tx).toFixed(1)+'" y="'+(H-8)+'" text-anchor="middle">'+yr+'</text>';
+    }
+    var line = pts.map(function(p, i){ return (i ? 'L' : 'M') + sx(p.t).toFixed(1) + ',' + sy(p.c).toFixed(1); }).join('');
+    var area = line + 'L' + sx(t1).toFixed(1) + ',' + (H - pb) + 'L' + sx(t0).toFixed(1) + ',' + (H - pb) + 'Z';
+    // invisible hit lines, then dashed lines, then dots (tagged events drawn last so they sit on top)
+    var hits = '', vls = '', dots = '';
+    visibleEvents().slice().sort(function(a, b){ return (a.stocks.indexOf(sym) >= 0) - (b.stocks.indexOf(sym) >= 0); }).forEach(function(e){
+      var t = ts(e.date); if(t < t0 || t > t1 + 7 * 86400) return;
+      var i = 0; while(i < pts.length - 1 && pts[i + 1].t <= t) i++;
+      var x = sx(t).toFixed(1), y = sy(pts[i].c).toFixed(1);
+      var c = 't-' + (e.impact === 'mixed' ? 'neutral' : e.impact) + (pinned === e.idx ? ' pin' : '') + (e.stocks.indexOf(sym) >= 0 ? ' tagged' : '');
+      var tip = '<title>'+esc(e.date+' · '+e.title)+'</title>';
+      hits += '<line class="hit" data-ev="'+e.idx+'" x1="'+x+'" x2="'+x+'" y1="'+pt+'" y2="'+(H-pb)+'">'+tip+'</line>';
+      vls += '<line class="vl '+c+'" data-ev="'+e.idx+'" x1="'+x+'" x2="'+x+'" y1="'+pt+'" y2="'+(H-pb)+'"/>';
+      dots += '<circle class="dot '+c+'" data-ev="'+e.idx+'" cx="'+x+'" cy="'+y+'" r="4" tabindex="0">'+tip+'</circle>';
+    });
+    chartEl.innerHTML = '<svg viewBox="0 0 '+W+' '+H+'" role="img" aria-label="'+esc(name(sym))+' 주간 종가 차트">'+bands+grid+years+
+      '<path class="c-area" d="'+area+'" opacity=".55"/><path class="c-line" d="'+line+'"/>'+hits+vls+dots+'</svg>';
+    var first = pts[0], lastP = pts[pts.length - 1], peak = Math.max.apply(null, vals);
+    st.innerHTML = '<span><b>'+esc(name(sym))+'</b> '+sym.replace('.KS', '')+'</span>'+
+      '<span>구간 '+new Date(first.t * 1000).toISOString().slice(0, 10)+' '+fmtPx(sym, first.c)+' → '+fmtPx(sym, lastP.c)+
+      ' <b class="'+cls(lastP.c - first.c)+'">'+pct((lastP.c / first.c - 1) * 100)+'</b> ('+mult(lastP.c / first.c)+')</span>'+
+      '<span>구간 최고 대비 <b class="'+cls(lastP.c - peak)+'">'+pct((lastP.c / peak - 1) * 100)+'</b></span>';
+  }
+
+  /* ---------------- timeline ---------------- */
+  var tlEl = document.getElementById('timeline');
+  document.getElementById('era-filter').innerHTML = '<button type="button" data-fera="all" aria-pressed="true">전체</button>' +
+    ERAS.filter(function(e){ return e.start; }).map(function(e){ return '<button type="button" data-fera="'+e.k+'" aria-pressed="false">'+e.no+'</button>'; }).join('');
+  function visibleEvents(){
+    var anyType = Object.keys(state.types).some(function(k){ return state.types[k]; });
+    return events.filter(function(e){
+      if(state.era !== 'all' && eraOf(e.date).k !== state.era) return false;
+      return !anyType || state.types[e.type];
+    });
+  }
+  function renderTimeline(){
+    var list = visibleEvents();
+    if(state.order === 'desc') list = list.slice().reverse();
+    document.getElementById('tl-count').textContent = list.length + '건';
+    var h = '', year = null;
+    list.forEach(function(e){
+      var y = e.date.slice(0, 4);
+      if(y !== year){
+        year = y;
+        var nq = S['^IXIC'] && yearMove('^IXIC', y), nv = S.NVDA && yearMove('NVDA', y);
+        h += (h ? '</div>' : '') + '<div class="year">'+y+'<small>'+(nq != null ? '나스닥 '+pct(nq) : '')+(nv != null ? ' · 엔비디아 '+pct(nv) : '')+'</small></div><div class="tl">';
+      }
+      var t = TYPE_MAP[e.type] || {l:e.type, i:''}, era = eraOf(e.date);
+      var px = '', nq = moveAfter('^IXIC', e.date, 4);
+      if(nq) px += '<span>나스닥 '+fmtPx('^IXIC', nq.px)+(nq.after != null ? ' → 4주 뒤 <b class="'+cls(nq.after)+'">'+pct(nq.after)+'</b>' : '')+'</span>';
+      e.stocks.forEach(function(sym){
+        var m = moveAfter(sym, e.date, 4), m26 = moveAfter(sym, e.date, 26);
+        px += '<span><button type="button" class="stk" data-sym="'+esc(sym)+'">'+esc(name(sym))+'</button>'+
+          (m && m.after != null ? ' 4주 <b class="'+cls(m.after)+'">'+pct(m.after)+'</b>' : '')+
+          (m26 && m26.after != null ? ' · 6개월 <b class="'+cls(m26.after)+'">'+pct(m26.after)+'</b>' : '')+'</span>';
+      });
+      h += '<div class="item i-'+(e.impact === 'mixed' ? 'neutral' : e.impact)+(pinned === e.idx ? ' pin' : '')+'" data-ev="'+e.idx+'" id="ev-'+e.idx+'">'+
+        '<div class="item-top"><span class="date">'+esc(e.date.replace(/-/g, '.'))+'</span>'+
+        '<span class="tag era-tag" style="--ec:'+ERA_COLOR[era.k]+'">'+era.no+'</span><span class="tag">'+t.i+' '+esc(t.l)+'</span>'+(e.ai ? '<span class="tag ai">AI 추가</span>' : '')+'</div>'+
+        '<h4>'+esc(e.title)+'</h4><p>'+esc(e.desc)+'</p>'+
+        (px ? '<div class="px">'+px+'</div>' : '')+
+        ((e.sources||[]).length ? '<div class="src">'+e.sources.map(function(s){ var u = safeUrl(s.url); return u ? '<a href="'+u+'" target="_blank" rel="noopener">'+esc(s.title||'근거')+' ↗</a>' : ''; }).join('')+'</div>' : '')+
+        '</div>';
+    });
+    tlEl.innerHTML = h ? h + '</div>' : '<p class="empty">조건에 맞는 사건이 없어요.</p>';
+  }
+  function yearMove(sym, y){
+    var s = S[sym], a = ts(y + '-01-01'), b = ts((+y + 1) + '-01-01');
+    var i0 = idxAt(s, a - 1), i1 = idxAt(s, b - 1);
+    if(i0 < 0 || i1 <= i0) return null;
+    var end = i1 === s.c.length - 1 && Q[sym] ? Q[sym].price : s.c[i1];
+    return (end / s.c[i0] - 1) * 100;
+  }
+
+  /* ---------------- linking chart ↔ timeline ---------------- */
+  function setCls(idx, c, on){ document.querySelectorAll('[data-ev="'+idx+'"]').forEach(function(el){ el.classList.toggle(c, on); }); }
+  function pick(idx, fromChart){
+    if(pinned != null) setCls(pinned, 'pin', false);
+    pinned = pinned === idx ? null : idx;
+    if(pinned == null) return;
+    setCls(idx, 'pin', true);
+    if(fromChart){
+      var row = document.getElementById('ev-'+idx);
+      if(row) row.scrollIntoView({behavior:'smooth', block:'center'});
+    } else {
+      var ev = events[idx];
+      if(ev && ev.stocks.length && ev.stocks.indexOf(state.sym) < 0 && state.sym !== '^IXIC'){ state.sym = ev.stocks[0]; syncFilters(); loadChart(); setCls(idx, 'pin', true); }
+      document.querySelector('.chart-box').scrollIntoView({behavior:'smooth', block:'center'});
+    }
+  }
+  [chartEl, tlEl].forEach(function(root){
+    root.addEventListener('mouseover', function(e){ var m = e.target.closest('[data-ev]'); if(m) setCls(m.dataset.ev, 'hi', true); });
+    root.addEventListener('mouseout', function(e){ var m = e.target.closest('[data-ev]'); if(m) setCls(m.dataset.ev, 'hi', false); });
+    root.addEventListener('click', function(e){
+      if(e.target.closest('a,.stk')) return;
+      var m = e.target.closest('[data-ev]'); if(m) pick(+m.dataset.ev, root === chartEl);
+    });
+  });
+  chartEl.addEventListener('keydown', function(e){
+    if(e.key !== 'Enter' && e.key !== ' ') return;
+    var m = e.target.closest('.dot'); if(m){ e.preventDefault(); pick(+m.dataset.ev, true); }
+  });
+
+  /* ---------------- bottleneck map ---------------- */
+  function renderBottlenecks(){
+    document.getElementById('flow').innerHTML = BOTTLENECKS.map(function(b){
+      return '<span class="'+(b.st === 'ing' ? 'past' : b.st)+'">'+esc(b.t)+'</span>';
+    }).join('<i>→</i>');
+    var ya = yearAgo();
+    document.getElementById('bns').innerHTML = BOTTLENECKS.map(function(b){
+      return '<div class="bn-card '+b.st+'"><h3><span class="st '+b.st+'">'+ST_LABEL[b.st]+'</span>'+esc(b.t)+' <span class="note">'+esc(b.per)+'</span></h3>'+
+        '<p>'+esc(b.why)+'</p><div class="sig"><b>🔎 확인할 신호</b> '+esc(b.sig)+'</div>'+
+        '<div class="tick-row">'+b.s.map(function(sym){
+          var r = retSince(sym, ya);
+          return '<button type="button" class="tick" data-sym="'+esc(sym)+'">'+esc(name(sym))+(r != null ? '<small class="'+cls(r)+'">'+pct(r)+'</small>' : '')+'</button>';
+        }).join('')+'</div></div>';
+    }).join('');
+  }
+
+  /* ---------------- leaderboard ---------------- */
+  document.getElementById('grp-chips').innerHTML = '<button type="button" class="chip" data-grp="all" aria-pressed="true">전체</button>' +
+    GROUPS.map(function(g){ return '<button type="button" class="chip" data-grp="'+g.k+'" aria-pressed="false">'+g.l+'</button>'; }).join('');
+  var COLS = [
+    {k:'d1', l:'1일'}, {k:'ytd', l:'연초 대비'}, {k:'r1y', l:'1년'},
+    {k:'gpt', l:'ChatGPT 이후', tip:'2022-11-30 이후'}, {k:'e4', l:'4막 시작 후', tip:'2025-04-08(관세 충격 저점) 이후'}, {k:'dd', l:'고점 대비', tip:'2017년 이후 최고 주간 종가 대비'}
+  ];
+  function lbRows(){
+    var ya = yearAgo(), y0 = new Date().getFullYear() + '-01-01';
+    return Object.keys(SYM).filter(function(s){ return (state.grp === 'all' || SYM[s].g === state.grp) && (S[s] || Q[s]); }).map(function(s){
+      var p = last(s), mx = S[s] ? Math.max.apply(null, S[s].c.concat([p])) : null;
+      return {sym:s, px:p, d1:Q[s] ? Q[s].change : null, ytd:retSince(s, y0), r1y:retSince(s, ya), gpt:retSince(s, '2022-11-30'), e4:retSince(s, '2025-04-08'),
+              dd:mx ? (p / mx - 1) * 100 : null, late:S[s] && S[s].t[0] > ts('2022-11-30')};
+    });
+  }
+  function renderLeaderboard(){
+    var rows = lbRows();
+    rows.sort(function(a, b){ var x = a[state.sort], y = b[state.sort]; if(x == null) return 1; if(y == null) return -1; return (x - y) * state.sortDir; });
+    var head = '<thead><tr><th>종목</th><th class="num">현재가</th>'+COLS.map(function(c){
+      return '<th class="num" data-sort="'+c.k+'"'+(c.tip ? ' title="'+c.tip+'"' : '')+'>'+c.l+(state.sort === c.k ? (state.sortDir < 0 ? ' ▼' : ' ▲') : '')+'</th>'; }).join('')+'</tr></thead>';
+    var body = rows.map(function(r){
+      function cell(v, x){ return '<td class="num">'+(v == null ? '—' : '<b class="'+cls(v)+'">'+pct(v)+'</b>'+(x || ''))+'</td>'; }
+      var e4x = r.e4 != null && r.e4 >= 900 ? '<span class="ten">'+mult(1 + r.e4 / 100)+'</span>' : '';
+      return '<tr data-sym="'+esc(r.sym)+'"><td><b>'+esc(name(r.sym))+'</b> <span class="grp">'+esc(GROUP_LABEL[SYM[r.sym].g])+'</span></td>'+
+        '<td class="num">'+(r.px != null ? fmtPx(r.sym, r.px) : '—')+'</td>'+cell(r.d1)+cell(r.ytd)+cell(r.r1y)+
+        cell(r.gpt, r.late ? ' <span class="grp">상장 후</span>' : '')+cell(r.e4, e4x)+cell(r.dd)+'</tr>';
+    }).join('');
+    document.getElementById('lb').innerHTML = head + '<tbody>' + (body || '<tr><td colspan="8" class="empty">'+(onServer ? '불러오는 중…' : '서버에서 열었을 때만 보여요.')+'</td></tr>') + '</tbody>';
+    document.getElementById('lb-note').textContent = '제목을 누르면 정렬 · 행을 누르면 차트로 봐요' + (lastQuoteAt ? ' · ' + lastQuoteAt : '');
+  }
+  document.getElementById('lb').addEventListener('click', function(e){
+    var th = e.target.closest('th[data-sort]');
+    if(th){ if(state.sort === th.dataset.sort) state.sortDir *= -1; else { state.sort = th.dataset.sort; state.sortDir = -1; } renderLeaderboard(); return; }
+    var tr = e.target.closest('tr[data-sym]'); if(tr) showSym(tr.dataset.sym);
+  });
+
+  /* ---------------- controls ---------------- */
+  document.getElementById('type-chips').innerHTML = TYPES.map(function(t){ return '<button type="button" class="chip" data-type="'+t.k+'" aria-pressed="false">'+t.i+' '+t.l+'</button>'; }).join('');
+  function syncFilters(){
+    document.querySelectorAll('#quick [data-sym]').forEach(function(b){ b.setAttribute('aria-pressed', String(b.dataset.sym === state.sym)); });
+    document.getElementById('sym-select').value = state.sym;
+    document.querySelectorAll('[data-scale]').forEach(function(b){ b.setAttribute('aria-pressed', String(b.dataset.scale === state.scale)); });
+    document.querySelectorAll('[data-fera]').forEach(function(b){ b.setAttribute('aria-pressed', String(b.dataset.fera === state.era)); });
+    document.querySelectorAll('.era').forEach(function(b){ b.setAttribute('aria-pressed', String(b.dataset.era === state.era)); });
+    document.querySelectorAll('[data-order]').forEach(function(b){ b.setAttribute('aria-pressed', String(b.dataset.order === state.order)); });
+    document.querySelectorAll('[data-type]').forEach(function(b){ b.setAttribute('aria-pressed', String(!!state.types[b.dataset.type])); });
+    document.querySelectorAll('[data-grp]').forEach(function(b){ b.setAttribute('aria-pressed', String(b.dataset.grp === state.grp)); });
+  }
+  function showSym(sym){
+    state.sym = sym; syncFilters(); renderChart();
+    document.querySelector('.chart-box').scrollIntoView({behavior:'smooth', block:'center'});
+  }
+  function setEra(k){
+    if(k === 'e5'){ document.getElementById('bns').scrollIntoView({behavior:'smooth', block:'start'}); return; }
+    state.era = state.era === k ? 'all' : k; pinned = null;
+    syncFilters(); renderChart(); renderTimeline();
+  }
+  document.getElementById('sym-select').addEventListener('change', function(e){ state.sym = e.target.value; syncFilters(); renderChart(); });
+  document.getElementById('eras').addEventListener('click', function(e){ var c = e.target.closest('.era'); if(c) setEra(c.dataset.era); });
+  document.getElementById('eras').addEventListener('keydown', function(e){
+    var c = e.target.closest('.era'); if(c && (e.key === 'Enter' || e.key === ' ')){ e.preventDefault(); setEra(c.dataset.era); }
+  });
+  document.addEventListener('click', function(e){
+    var t = e.target.closest('.stk,.tick'); if(t){ showSym(t.dataset.sym); return; }
+    var b = e.target.closest('#quick [data-sym],[data-scale],[data-fera],[data-order],[data-type],[data-grp]'); if(!b) return;
+    if(b.dataset.sym) state.sym = b.dataset.sym;
+    if(b.dataset.scale) state.scale = b.dataset.scale;
+    if(b.dataset.fera){ state.era = b.dataset.fera; pinned = null; }
+    if(b.dataset.order) state.order = b.dataset.order;
+    if(b.dataset.type) state.types[b.dataset.type] = !state.types[b.dataset.type];
+    if(b.dataset.grp){ state.grp = b.dataset.grp; syncFilters(); renderLeaderboard(); return; }
+    syncFilters(); renderChart(); renderTimeline();
+  });
+
+  /* ---------------- news ---------------- */
+  var aiNews = [], liveNews = null;
+  function renderNews(){
+    var IMP = {positive:'▲ 호재', negative:'▼ 악재', mixed:'◆ 엇갈림'};
+    document.getElementById('news-ai').innerHTML = aiNews.slice(0, 12).map(function(n){
+      var u = safeUrl(n.url);
+      return '<div class="ncard"><span class="tag">'+(IMP[n.impact]||'')+'</span>'+
+        '<h4>'+(u ? '<a href="'+u+'" target="_blank" rel="noopener">'+esc(n.title)+' ↗</a>' : esc(n.title))+'</h4>'+
+        '<p>'+esc(n.summary)+'</p>'+(n.why ? '<p class="why">💡 '+esc(n.why)+'</p>' : '')+
+        '<div class="nfoot">'+esc(n.source)+' · '+esc(n.date)+'</div></div>';
+    }).join('');
+    var live = liveNews && liveNews.items || [];
+    document.getElementById('news-live').innerHTML = live.length ? '<h3 style="font-size:15px;margin:16px 0 4px">🔄 최신 헤드라인 <small class="note">'+esc(liveNews.generatedAt||'')+' 자동 수집 · 제목만</small></h3>'+
+      live.slice(0, 20).map(function(n){ var u = safeUrl(n.url);
+        return '<div class="nline"><span class="d">'+esc(n.date.slice(5).replace('-', '.'))+'</span><span>'+(u ? '<a href="'+u+'" target="_blank" rel="noopener">'+esc(n.title)+'</a>' : esc(n.title))+'<small>'+esc(n.source)+'</small></span></div>'; }).join('') : '';
+    document.getElementById('news-note').textContent = aiNews.length ? 'AI 요약 '+aiNews.length+'건' : (onServer ? '' : '뉴스는 서버에서 열었을 때만 보여요');
+  }
+
+  /* ---------------- server data ---------------- */
+  var onServer = /^https?:$/.test(location.protocol), lastQuoteAt = '';
+  function getJSON(u){ return fetch(u, {cache:'no-store'}).then(function(r){ return r.ok ? r.json() : null; }).catch(function(){ return null; }); }
+  function renderData(){ renderCards(); renderEras(); renderChart(); renderTimeline(); renderBottlenecks(); renderLeaderboard(); }
+  function loadChart(){ renderChart(); }
+  function loadQuotes(){
+    getJSON('api/quotes').then(function(d){ if(d && d.ok){ Q = d.items; lastQuoteAt = d.asOf || ''; renderCards(); renderEras(); renderBottlenecks(); renderLeaderboard(); } });
+  }
+
+  /* AI refresh: POST api/update has the server run Claude (Sonnet 5.5, medium, web search);
+     update/latest.json adds events after the seed history plus summarized news */
+  var updBtn = document.getElementById('upd-btn'), updMsg = document.getElementById('upd-msg'), updPoll = null, updApplied = '';
+  function loadUpdate(){
+    getJSON('update/latest.json').then(function(u){
+      var running = !!u && u.status === 'running';
+      updBtn.disabled = running;
+      updBtn.textContent = running ? '⏳ 업데이트 중…' : '🔄 AI 업데이트';
+      updMsg.classList.toggle('err', !!u && u.status === 'error');
+      updMsg.textContent = !u ? '' : running ? (u.startedAt||'')+' 시작 · 웹 검색 중이라 몇 분 걸려요' :
+        u.status === 'error' ? '업데이트 실패: '+(u.error||'')+' — 기존 내용은 그대로예요.' : '마지막 AI 업데이트 '+String(u.finishedAt||'').slice(0, 16);
+      updMsg.title = (u && u.data && u.data.summary) || '';
+      if(u && u.data && u.finishedAt && u.finishedAt !== updApplied){
+        updApplied = u.finishedAt;
+        aiEvents = u.data.events || []; aiNews = u.data.news || [];
+        events = allEvents(); pinned = null;
+        if(u.data.asOf) document.getElementById('upd-date').textContent = '업데이트 ' + u.data.asOf;
+        renderChart(); renderTimeline(); renderNews();
+      }
+      clearTimeout(updPoll);
+      if(running) updPoll = setTimeout(loadUpdate, 10000);
+    });
+  }
+  updBtn.addEventListener('click', function(){
+    if(!confirm('AI가 웹 검색으로 새 사건과 뉴스를 찾아 히스토리에 추가합니다 (Claude Sonnet 5.5 · medium, 수 분 소요). 진행할까요?')) return;
+    updBtn.disabled = true;
+    fetch('api/update', {method:'POST'}).then(function(r){ return r.json(); }).then(function(d){
+      if(!d.ok) alert(d.error || '업데이트 요청 실패');
+      loadUpdate();
+    }).catch(function(){ alert('업데이트 요청 실패'); loadUpdate(); });
+  });
+
+  var wasNarrow = null;
+  window.addEventListener('resize', function(){ var n = chartEl.clientWidth < 600; if(n !== wasNarrow){ wasNarrow = n; renderChart(); } });
+  syncFilters(); renderData(); renderNews();
+  if(onServer){
+    updBtn.hidden = false;
+    getJSON('api/series').then(function(d){ if(d && d.ok){ S = d.series; renderData(); } else chartEl.innerHTML = '<p class="empty">가격 데이터를 불러오지 못했어요.</p>'; });
+    loadQuotes(); loadUpdate();
+    getJSON('api/news').then(function(d){ if(d && d.ok){ liveNews = d; renderNews(); } });
+    setInterval(loadQuotes, 120000);
+  }
+})();
+</script>
+</body>
+</html>
