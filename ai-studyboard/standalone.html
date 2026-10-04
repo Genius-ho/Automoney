@@ -133,7 +133,44 @@
   .tick{font:inherit;font-size:12.5px;border:1px solid var(--line);background:var(--surface-2);border-radius:8px;padding:3px 8px;cursor:pointer;color:var(--ink);font-variant-numeric:tabular-nums}
   .tick:hover{border-color:var(--accent)}
   .tick small{margin-left:4px;font-weight:700}
-  .qs{margin:14px 0 0;padding:14px 18px 14px 34px;background:var(--surface);border:1px solid var(--line);border-radius:12px}
+  .thesis{display:grid;grid-template-columns:repeat(4,1fr);gap:10px;margin-bottom:14px}
+  .thesis .card h3{font-size:12.5px;color:var(--accent);font-weight:800}
+  .thesis .card p{margin:4px 0 0;font-size:13.5px;color:var(--ink-soft)}
+  .thesis .card b{color:var(--ink)}
+  .grid2{display:grid;grid-template-columns:1fr 1fr;gap:14px}
+  .viz .chart-box{padding:12px 14px}
+  .viz-h{margin:0 0 6px;font-size:15px}
+  .viz-h small{display:block;font-size:12px;font-weight:500;color:var(--ink-faint)}
+  .g-row{cursor:pointer}
+  .g-row:hover .g-lbl{fill:var(--accent)}
+  .g-lbl{fill:var(--ink);font-size:11.5px;font-weight:600;font-family:inherit}
+  .g-lbl.past{fill:var(--ink-faint);font-weight:500}
+  .sc-dot{cursor:pointer;stroke:var(--surface);stroke-width:1.5}
+  .sc-lbl{fill:var(--ink);font-size:11px;font-weight:700;font-family:inherit;pointer-events:none}
+  .q-lbl{fill:var(--ink-faint);font-size:10.5px;font-family:inherit}
+  .deep{display:flex;flex-direction:column;gap:12px;margin-top:14px}
+  .dp{background:var(--surface);border:1px solid var(--line);border-left:4px solid var(--dc);border-radius:12px;box-shadow:var(--shadow);scroll-margin:80px}
+  .dp > summary{list-style:none;cursor:pointer;padding:13px 16px;display:grid;grid-template-columns:1fr auto;gap:4px 14px;align-items:center}
+  .dp > summary::-webkit-details-marker{display:none}
+  .dp h3{margin:0;font-size:16px;display:flex;flex-wrap:wrap;align-items:center;gap:6px}
+  .dp .one{grid-column:1;font-size:14px;color:var(--ink-soft)}
+  .dp .meters{grid-row:1 / span 2;grid-column:2;display:flex;flex-direction:column;gap:3px;font-size:12px;color:var(--ink-faint);min-width:150px}
+  .meter{display:flex;align-items:center;gap:6px;justify-content:flex-end}
+  .meter i{display:inline-flex;gap:2px}
+  .meter i span{width:12px;height:7px;border-radius:2px;background:var(--surface-2)}
+  .meter i span.on{background:var(--dc)}
+  .dp .chev{font-size:12px;color:var(--accent);font-weight:700}
+  .dp[open] .chev{display:none}
+  .dp-body{padding:0 16px 14px;display:grid;grid-template-columns:1fr 1fr;gap:10px 20px}
+  .dp-body h4{margin:8px 0 3px;font-size:13px;color:var(--accent)}
+  .dp-body p{margin:0;font-size:14px;color:var(--ink-soft)}
+  .dp-body ul{margin:0;padding-left:18px;font-size:13.5px;color:var(--ink-soft)}
+  .dp-body li{margin:3px 0}
+  .dp-body li a{font-size:12px;margin-left:4px;white-space:nowrap}
+  .dp-body .full{grid-column:1 / -1}
+  .chain{display:flex;flex-wrap:wrap;gap:6px;align-items:center}
+  .chain .lv{font-size:12px;color:var(--ink-faint);font-weight:700;margin-right:2px}
+  .qs{margin:8px 0 0;padding:14px 18px 14px 34px;background:var(--surface);border:1px solid var(--line);border-radius:12px}
   .qs li{margin:4px 0;font-size:14px;color:var(--ink-soft)}
   .qs li b{color:var(--ink)}
   /* leaderboard */
@@ -160,10 +197,13 @@
   .learn .card h3{font-size:15px;color:var(--ink)}
   .empty{color:var(--ink-faint);font-size:14px;padding:10px 0}
   footer{margin-top:40px;font-size:12.5px;color:var(--ink-faint);text-align:center}
-  @media (max-width:980px){ .eras{grid-template-columns:repeat(2,1fr)} .cards{grid-template-columns:repeat(2,1fr)} }
+  @media (max-width:980px){ .eras,.thesis{grid-template-columns:repeat(2,1fr)} .cards{grid-template-columns:repeat(2,1fr)} }
   @media (max-width:760px){
     .cards{grid-template-columns:1fr 1fr}
-    .eras,.bns,.learn{grid-template-columns:1fr}
+    .eras,.bns,.learn,.grid2,.dp-body,.thesis{grid-template-columns:1fr}
+    .dp > summary{grid-template-columns:1fr}
+    .dp .meters{grid-row:auto;grid-column:1;flex-direction:row;flex-wrap:wrap;gap:4px 12px;min-width:0}
+    .meter{justify-content:flex-start}
     .wrap{padding:0 16px 48px}
     header.top{padding:22px 16px 16px}
     .big{font-size:19px}
@@ -226,11 +266,25 @@
 
   <section>
     <div class="sec-head">
-      <h2>🧩 병목 지도 — 다음은 어디가 막힐까?</h2>
-      <span class="note">지나간 병목 → 현재 병목 → 다음 후보 · 종목을 누르면 차트로 봐요 · 괄호는 1년 수익률</span>
+      <h2>🧩 병목 지도: 지금까지 막혔던 곳</h2>
+      <span class="note">지나간 병목 → 현재 병목 · 종목을 누르면 차트로 봐요 · 숫자는 1년 수익률</span>
     </div>
     <div class="flow" id="flow"></div>
     <div class="bns" id="bns"></div>
+  </section>
+
+  <section id="next">
+    <div class="sec-head">
+      <h2>🔭 다음 병목 심층 분석</h2>
+      <span class="note">2026년 10월 기준 공개 자료로 정리한 공부용 가설이에요 · 투자 권유가 아니에요</span>
+    </div>
+    <div class="thesis" id="thesis"></div>
+    <div class="grid2 viz">
+      <div class="chart-box"><h3 class="viz-h">🗓 병목 로드맵 <small>막대 = 공급이 빠듯한 기간 · 진한 칸 = 가장 빠듯한 해(추정)</small></h3><div id="gantt"></div></div>
+      <div class="chart-box"><h3 class="viz-h">🎯 지속성 vs 주가 반영도 <small>가로 = 병목이 얼마나 오래 갈지 · 세로 = 관련주 1년 수익률 중앙값(실시간)</small></h3><div id="scatter"></div></div>
+    </div>
+    <div class="deep" id="deep"></div>
+    <h3 class="viz-h" style="margin-top:22px">🤔 다음 병목을 찾을 때 던질 질문</h3>
     <ol class="qs">
       <li><b>지금 값이 오르는 부품은 무엇인가?</b> 병목은 늘 '가격'과 '납기(리드타임)'로 먼저 보여요. 계약가격이 오르고 주문이 밀리면 병목, 가격 상승이 둔화하면 해소의 신호예요.</li>
       <li><b>돈은 계속 들어오는가?</b> 빅테크 capex 가이던스가 분기마다 올라가는 동안은 공급망 전체가 수혜를 받아요. 가이던스가 꺾이는 순간이 가장 위험해요.</li>
@@ -355,9 +409,11 @@
     'SNDK':{n:'샌디스크',g:'stor'}, 'WDC':{n:'웨스턴디지털',g:'stor'}, 'STX':{n:'씨게이트',g:'stor'},
     'ANET':{n:'아리스타',g:'net'}, 'LITE':{n:'루멘텀',g:'net'}, 'COHR':{n:'코히런트',g:'net'},
     'VRT':{n:'버티브',g:'pwr'}, 'CEG':{n:'컨스텔레이션',g:'pwr'}, 'VST':{n:'비스트라',g:'pwr'}, 'GEV':{n:'GE 버노바',g:'pwr'}, 'BE':{n:'블룸에너지',g:'pwr'},
-    'OKLO':{n:'오클로',g:'pwr'}, '267260.KS':{n:'HD현대일렉트릭',g:'pwr'}, '034020.KS':{n:'두산에너빌리티',g:'pwr'}
+    'OKLO':{n:'오클로',g:'pwr'}, '267260.KS':{n:'HD현대일렉트릭',g:'pwr'}, '034020.KS':{n:'두산에너빌리티',g:'pwr'},
+    'ETN':{n:'이튼',g:'pwr'}, '010120.KS':{n:'LS ELECTRIC',g:'pwr'}, '298040.KS':{n:'효성중공업',g:'pwr'}, 'MRVL':{n:'마벨',g:'net'}, 'AMAT':{n:'어플라이드 머티어리얼즈',g:'chip'},
+    '009150.KS':{n:'삼성전기',g:'sub'}, '007660.KS':{n:'이수페타시스',g:'sub'}, '3110.T':{n:'닛토보',g:'sub'}, '4062.T':{n:'이비덴',g:'sub'}
   };
-  var GROUPS = [{k:'idx',l:'지수'},{k:'chip',l:'GPU·칩'},{k:'cloud',l:'빅테크·클라우드'},{k:'sw',l:'서버·SW'},{k:'mem',l:'메모리'},{k:'stor',l:'스토리지(SSD)'},{k:'net',l:'네트워크·광'},{k:'pwr',l:'전력·냉각'}];
+  var GROUPS = [{k:'idx',l:'지수'},{k:'chip',l:'GPU·칩'},{k:'cloud',l:'빅테크·클라우드'},{k:'sw',l:'서버·SW'},{k:'mem',l:'메모리'},{k:'stor',l:'스토리지(SSD)'},{k:'net',l:'네트워크·광'},{k:'sub',l:'기판·소재'},{k:'pwr',l:'전력·냉각'}];
   var GROUP_LABEL = {}; GROUPS.forEach(function(g){ GROUP_LABEL[g.k] = g.l; });
 
   var ERAS = [
@@ -369,8 +425,8 @@
      desc:'GPU는 구해도 꽂을 전기가 없었어요. 원전·변압기·냉각 회사가 AI주가 됐고, 딥시크와 관세 충격으로 막을 내렸어요.', stocks:['CEG','VST','GEV','VRT','267260.KS','PLTR','ANET']},
     {k:'e4', no:'4막', title:'추론 시대: 메모리·SSD 슈퍼사이클', start:'2025-04-08', end:null, bn:'병목: D램 · HBM · 낸드(SSD) · 광',
      desc:'추론·에이전트가 KV 캐시를 폭발적으로 늘리며 메모리와 SSD가 바닥났어요. 샌디스크·마이크론·SK하이닉스가 텐배거가 됐어요.', stocks:['SNDK','MU','000660.KS','005930.KS','WDC','STX','LITE','BE']},
-    {k:'e5', no:'5막', title:'다음 병목은 어디일까?', start:null, end:null, bn:'후보: 전력 생산 · 냉각 · 광 · 자본',
-     desc:'병목은 늘 \'가장 늦게 늘릴 수 있는 것\'으로 옮겨 갔어요. 아래 병목 지도에서 후보와 확인할 신호를 정리했어요.', stocks:['GEV','BE','CEG','VRT','LITE','034020.KS']}
+    {k:'e5', no:'5막', title:'다음 병목은 어디일까?', start:null, end:null, bn:'후보: 전력 생산 · 전력기기 · 냉각 · 광 · 기판 · 자본',
+     desc:'병목은 늘 \'가장 늦게 늘릴 수 있는 것\'으로 옮겨 갔어요. 아래 \'다음 병목 심층 분석\'에서 후보 8가지를 근거·해소 시점·반론과 함께 정리했어요.', stocks:['GEV','BE','267260.KS','VRT','LITE','3110.T']}
   ];
   var ERA_COLOR = {e1:'var(--e1)', e2:'var(--e2)', e3:'var(--e3)', e4:'var(--e4)', e5:'var(--e5)'};
 
@@ -379,14 +435,101 @@
     {st:'ing', t:'첨단 패키징(CoWoS)·HBM', per:'2023~', why:'GPU와 HBM을 붙이는 패키징과 HBM 자체가 출하량의 상한을 정했어요. HBM은 세대가 바뀔 때마다(HBM3E→HBM4) 다시 빠듯해져요.', sig:'TSMC CoWoS 증설, HBM4 출하·수율, HBM 가격 협상', s:['TSM','000660.KS','042700.KS','MU']},
     {st:'ing', t:'전력망·변압기', per:'2024~', why:'데이터센터를 다 지어도 전력망 연결을 몇 년씩 기다려요. 대형 변압기·차단기는 납기가 수년이라 국내 전력기기 회사까지 수혜를 받았어요.', sig:'변압기 수주잔고, 전력망 연결 대기열, 전력 구매 계약 단가', s:['GEV','267260.KS','CEG','VST']},
     {st:'ing', t:'네트워크·광통신', per:'2025~', why:'GPU 수십만 개를 하나로 묶으려면 GPU 사이 데이터 이동이 빨라야 해요. 800G→1.6T 광트랜시버와 스위치가 부족해졌어요.', sig:'광트랜시버 리드타임, 1.6T 전환 속도, CPO(광 패키징) 채택', s:['LITE','COHR','ANET','AVGO']},
-    {st:'now', t:'메모리(D램·HBM)·SSD', per:'2025~2026', why:'추론 모델과 에이전트가 긴 문맥(KV 캐시)을 쓰면서 HBM→D램→SSD 전 계층이 부족해졌어요. 범용 D램·낸드 가격까지 급등하며 메모리 3사가 시총 1조 달러를 넘었어요.', sig:'D램·낸드 계약가격 상승률, 메모리 증설(캐파) 발표, 딥시크류 효율화 소식, 재고일수', s:['MU','000660.KS','005930.KS','SNDK','WDC','STX']},
-    {st:'next', t:'전력 \'생산\' 자체', per:'후보', why:'전력망보다 더 근본적으로 발전소가 모자라요. 바로 지을 수 있는 가스터빈·연료전지가 먼저, 원전·SMR은 2030년 전후가 돼요.', sig:'가스터빈 수주잔고·납기, 데이터센터 자가발전(비하인드 더 미터) 계약, SMR 인허가', s:['GEV','BE','CEG','OKLO','034020.KS']},
-    {st:'next', t:'냉각·열 관리', per:'후보', why:'랙 하나가 100kW를 넘으면 공기로는 식힐 수 없어 액체냉각이 필수가 돼요. 칩이 뜨거워질수록 냉각 장비 비중이 커져요.', sig:'랙당 전력 밀도, 액체냉각 채택률, 냉각 업체 수주', s:['VRT']},
-    {st:'next', t:'칩 생산능력·장비', per:'후보', why:'메모리 증설 공장은 2027~2028년에야 돌아가요. 그 전까지는 클린룸 공간과 노광장비(EUV)가 공급 상한이에요. 반대로 증설이 몰리는 시점은 메모리 고점의 신호가 될 수 있어요.', sig:'메모리 3사 capex, ASML 수주, 신규 팹 가동 일정', s:['ASML','TSM','042700.KS']},
-    {st:'next', t:'자본·수익성(ROI)', per:'후보', why:'빅테크 capex가 연 수천억 달러로 커지고, 오라클·코어위브처럼 빚을 내 데이터센터를 짓는 회사도 늘었어요. AI로 버는 돈이 따라오지 않으면 \'돈\'이 마지막 병목이 돼요.', sig:'빅테크 잉여현금흐름, AI 매출(클라우드 성장률), 회사채·CDS 스프레드', s:['ORCL','CRWV','MSFT','AMZN']},
-    {st:'next', t:'역(逆)병목: 효율 혁신', per:'상시 위험', why:'딥시크처럼 같은 일을 적은 자원으로 해내면 병목이 갑자기 풀리고 해당 주식이 급락해요. 다만 값이 싸지면 사용량이 폭발해 수요가 더 늘기도 해요(제번스 역설).', sig:'모델당 토큰 단가, KV 캐시 압축·양자화 기술, 전체 토큰 사용량 추이', s:['NVDA','000660.KS','SNDK']}
+    {st:'now', t:'메모리(D램·HBM)·SSD', per:'2025~2026', why:'추론 모델과 에이전트가 긴 문맥(KV 캐시)을 쓰면서 HBM→D램→SSD 전 계층이 부족해졌어요. 범용 D램·낸드 가격까지 급등하며 메모리 3사가 시총 1조 달러를 넘었어요.', sig:'D램·낸드 계약가격 상승률, 메모리 증설(캐파) 발표, 딥시크류 효율화 소식, 재고일수', s:['MU','000660.KS','005930.KS','SNDK','WDC','STX']},,,,,
   ];
-  var ST_LABEL = {past:'지나간 병목', ing:'진행 중', now:'현재 병목', next:'다음 후보'};
+  var ST_LABEL = {past:'지나간 병목', ing:'진행 중', now:'현재 병목'};
+  /* Next-bottleneck deep dive. sev = how short supply is, dur = how long it should last (1-5, judgement
+     from the cited reports as of 2026-10). tight = [first, last] tight year, peak = tightest year. */
+  var NEXT = [
+    {k:'power', c:'var(--e3)', t:'전력 생산 (발전소 자체)', when:'2026~2031', tight:[2026,2031], peak:2028, sev:5, dur:5,
+     one:'전력망보다 더 근본적으로, 전기를 만드는 기계가 모자라요. 가장 오래 갈 가능성이 큰 병목이에요.',
+     why:'AI 데이터센터 1GW는 원전 1기 규모예요. 전력회사에 연결을 신청하면 수년을 기다려야 해서, 데이터센터가 직접 발전기를 들이는 \'비하인드 더 미터\'가 빠르게 늘었어요. 당장 지을 수 있는 건 가스터빈과 연료전지뿐인데, 대형 가스터빈은 GE 버노바·지멘스 에너지·미쓰비시 세 회사가 사실상 전부 만들어요.',
+     facts:[['GE 버노바 가스터빈 수주잔고·예약 116GW(2026년 2분기), 연말 125GW 이상 전망. 지금 2031년 납품분 예약을 받는 중','https://www.utilitydive.com/news/ge-vernova-gas-turbine-backlog-climbs-to-116-gw/826039/'],
+            ['오라클, 블룸에너지 연료전지 최대 2.8GW 계약(2026년 4월). 브룩필드는 블룸과 50억 달러 규모 금융 협력','https://introl.com/blog/fuel-cells-data-center-power-dark-horse-7-billion'],
+            ['데이터센터 개발자가 체감하는 전력 확보 기간이 예상보다 1.5~2년 더 길어짐(블룸 2026년 3월 조사)','https://www.datacenterknowledge.com/energy-power-supply/why-data-centers-produce-their-own-power']],
+     supply:'GE 버노바 연간 생산능력은 20GW(2026)에서 24GW(2028), 30GW(2030)로 늘어날 계획이에요. 원전 재가동과 SMR은 2030년 전후에야 본격적으로 보태져요. 2028년 전후까지는 공급이 수요를 못 따라갈 가능성이 커요.',
+     risk:'전력 효율이 좋은 추론 전용 칩이나 모델 효율화로 GW당 연산량이 크게 늘면 전력 수요 증가세가 꺾일 수 있어요. 2026년 이란 전쟁 같은 가스 가격 급등과 규제·인허가도 변수예요.',
+     sig:'가스터빈 예약 연도(2031년에서 더 밀리면 더 빠듯), 연료전지·소형 발전 대형 계약, 미국 전력 도매가격, SMR 인허가 진행',
+     s1:['GEV','BE','034020.KS'], s2:['CEG','VST','OKLO']},
+    {k:'grid', c:'var(--e3)', t:'전력기기·숙련 인력', when:'2025~2028', tight:[2025,2028], peak:2027, sev:4, dur:4,
+     one:'전기를 만들어도 그걸 옮기고 나눌 장비와 설치할 사람이 없어요.',
+     why:'대형 변압기는 코어용 전기강판과 코일을 감는 숙련공이 부족해 몇 년씩 기다려요. 고압 차단기(스위치기어)도 마찬가지예요. 데이터센터를 짓는 전기·기계 기술자도 모자라서 인력이 부지 선정 조건이 될 정도예요. 한국 전력기기 회사들이 미국 수출로 크게 오른 이유예요.',
+     facts:[['대형 변압기 납기 2년 이상, 빠듯한 구간은 최대 4년. 중압 스위치기어도 1년 이상','https://build.inc/insights/data-center-transformer-procurement-2026'],
+            ['미국 건설업에 2026년 약 34.9만 명, 2027년 약 45.6만 명의 순증 인력이 필요','https://www.tomshardware.com/tech-industry/data-centers/ai-data-center-boom-hits-a-human-bottleneck-critical-skilled-labor-shortages-could-slow-deployment-despite-billions-in-funding'],
+            ['2026년 개장 예정 데이터센터의 30~50%가 지연·취소될 수 있다는 업계 추정(발표 약 16GW 중 착공 약 5GW)','https://build.inc/insights/data-center-construction-labor-shortage-2026']],
+     supply:'변압기 회사들이 공장을 늘리고 있지만 숙련공 양성에 수년이 걸려요. 2027~2028년까지 빠듯할 가능성이 커요.',
+     risk:'2024년부터 주가가 크게 올라 상당 부분 반영됐어요. 데이터센터 착공이 지연되면 주문 인식도 늦어질 수 있어요.',
+     sig:'변압기·차단기 수주잔고와 단가, 미국 데이터센터 착공 대비 발표 비율, 전기기술자 임금 상승률',
+     s1:['267260.KS','298040.KS','010120.KS','ETN'], s2:['GEV']},
+    {k:'cool', c:'var(--e4)', t:'800V 직류 전력·액체냉각', when:'2026~2028', tight:[2026,2028], peak:2027, sev:4, dur:3,
+     one:'랙 하나가 200kW를 넘으면서 데이터센터 내부 설계를 통째로 바꿔야 해요.',
+     why:'엔비디아 베라 루빈 NVL72는 랙당 약 190~230kW이고 100% 액체냉각이 필수예요(공랭 버전이 없어요). 전기를 48V로 나눠 보내던 방식으로는 구리 케이블이 감당하지 못해 800V 직류(DC)로 바꾸는 중인데, 이걸 만들 수 있는 회사가 아직 몇 곳뿐이에요.',
+     facts:[['베라 루빈 NVL72: 랙당 190~230kW, 100% 액체냉각, 800V DC 전력 구조 (GTC 2026)','https://www.theaiconsultingnetwork.com/blog/nvidia-vera-rubin-nvl72-liquid-cooling-data-center-cre-investors-2026'],
+            ['엔비디아는 800V DC가 2028년 데이터센터 표준이 될 것으로 예상. 액체냉각 납기 6~12개월, 800V 배전 9~18개월','https://medium.com/teradata-labs/the-data-center-isnt-ready-4034e2e59161'],
+            ['800V 제품을 낼 수 있는 곳은 소수: 버티브(2026년 하반기), 델타(출하 중), 이튼(고체 변압기 개발 중)','https://medium.com/teradata-labs/the-data-center-isnt-ready-4034e2e59161']],
+     supply:'기술이 바뀌는 시기라 2026~2027년이 가장 빠듯하고, 표준이 자리 잡는 2028년 이후 공급사가 늘어날 거예요.',
+     risk:'기술 전환기에는 승자가 바뀔 수 있어요. 대만 델타 같은 경쟁사와 서버 회사의 직접 진출이 변수예요. 버티브는 2026년 7월 하루 -17%처럼 기대가 어긋날 때 크게 흔들렸어요.',
+     sig:'버티브 수주잔고와 수주/매출 비율(book-to-bill), 800V 제품 채택 발표, 랙당 전력 밀도(kW) 추이',
+     s1:['VRT','ETN'], s2:['SMCI']},
+    {k:'optic', c:'var(--e2)', t:'광 인터커넥트·InP 레이저', when:'2025~2027', tight:[2025,2027], peak:2026, sev:4, dur:3,
+     one:'GPU 수십만 개를 잇는 빛(레이저)이 모자라요.',
+     why:'GPU를 크게 묶을수록 구리선 대신 광통신을 써야 해요. 1.6T 광트랜시버의 핵심인 200G 인듐인화물(InP) EML 레이저는 수율이 낮고 만들 수 있는 회사가 몇 곳뿐이에요. 스위치에 광부품을 직접 붙이는 CPO(공동 패키징 광학)도 같은 계열의 레이저가 필요해요.',
+     facts:[['200G EML이 1.6T 전환 과정에서 광 공급망의 가장 빠듯한 부품. 엔비디아가 주요 업체 생산능력을 선점','https://www.astutegroup.com/news/memory-shortages/co-packaged-optics-demand-reshapes-ai-chip-supply-chains-in-2026/'],
+            ['엔비디아, 2026년 3월 코히런트·루멘텀에 약 40억 달러를 투자해 레이저 증설 확보','https://io-fund.com/ai-stocks/nvidia-4b-optical-strategy-cpo-ai-data-centers'],
+            ['엔비디아 CPO 이더넷 스위치 2026년 5월 말 양산. 2026년 1.6T 수요 860만~2,000만 개 추정','https://www.vitextech.com/blogs/blog/1-6t-optical-for-ai-data-centers-the-complete-technical-guide']],
+     supply:'레이저 증설은 1~2년이면 되는 편이라 2027년쯤 완화될 수 있어요. 다만 CPO로 넘어가면 부품 구성이 바뀌어 승자가 달라질 수 있어요.',
+     risk:'루멘텀은 1년 새 몇 배가 올라 이미 많이 반영됐어요. 중국 트랜시버 업체와의 가격 경쟁, CPO 전환 속도가 변수예요.',
+     sig:'EML 리드타임과 가격, 1.6T 출하량, CPO 채택 일정, 광 업체 가이던스',
+     s1:['LITE','COHR'], s2:['MRVL','ANET','AVGO']},
+    {k:'sub', c:'var(--e1)', t:'기판·소재 (T-글라스·ABF)', when:'2025~2027', tight:[2025,2027], peak:2026, sev:3, dur:2,
+     one:'잘 알려지지 않은 소재 하나가 칩 패키지 전체를 막을 수 있어요.',
+     why:'AI 칩은 패키지가 커지고 층수가 늘어 기판(ABF)이 훨씬 많이 들어가요. 기판 속 특수 유리섬유(T-글라스)는 일본 닛토보가 세계 공급의 약 90%를 쥐고 있어요. 하나가 막히면 기판이 막히고, 다시 칩 출하가 막혀요.',
+     facts:[['닛토보가 특수 T-글라스 세계 공급의 약 90%. 부족은 2026년 정점, 2027년까지 지속 전망','https://www.fusionww.com/insights/understanding-the-t-glass-shortage-and-its-role-in-ai-growth'],
+            ['T-글라스 가격 20~30% 상승, 동박적층판(CCL) 납기 8~10주에서 20주 이상으로','https://www.fusionww.com/insights/understanding-the-t-glass-shortage-and-its-role-in-ai-growth'],
+            ['닛토보 후쿠시마 공장 생산능력 3배 증설 중이지만 시장 투입까지 수년','https://www.tomshardware.com/tech-industry/shortages-of-crucial-chip-packaging-material-threatens-ai-accelerator-supply-chains-nittobos-fukushima-plant-is-tripling-capacity-but-itll-take-years-before-market']],
+     supply:'닛토보·대만·중국 업체 증설분이 2027년 초부터 나오며 완화될 전망이에요. 2026년이 가장 빠듯한 해예요.',
+     risk:'공급이 몇 회사에 몰려 있어 증설 한 번에 상황이 빠르게 바뀔 수 있어요. 유리기판 같은 차세대 기술이 오면 소재 구성이 바뀌어요.',
+     sig:'T-글라스·CCL 가격과 납기, 닛토보·이비덴 실적, 유리기판 상용화 일정',
+     s1:['3110.T','4062.T','009150.KS'], s2:['007660.KS']},
+    {k:'fab', c:'var(--e2)', t:'칩 생산능력 (팹·패키징·장비)', when:'2026~2028', tight:[2026,2028], peak:2027, sev:4, dur:4,
+     one:'메모리 공장과 CoWoS 증설이 수요를 못 따라가요. 공급이 풀리는 순간이 사이클 고점이 될 수도 있어요.',
+     why:'메모리 새 공장은 짓는 데 2~3년이 걸려요. TSMC CoWoS도 계속 늘리지만 수요가 1년 만에 두 배가 되는 속도라 모자라요. 결국 반도체 장비(노광·증착·식각)와 클린룸 공간이 공급의 상한이에요.',
+     facts:[['CoWoS 수급 격차 약 20%에서 2026년 말 10%로 축소 전망. 하지만 수요는 2026년 130만~140만 장에서 2027년 250만~270만 장으로 두 배','https://www.trendforce.com/news/2026/06/15/news-tsmc-cowos-supply-demand-gap-reportedly-seen-narrowing-from-20-to-10-by-end-2026-as-capacity-expands/'],
+            ['새 공장 가동: SK하이닉스 청주 HBM 팹 2027년·미국 인디애나 2028년 말, 삼성 평택 신규 라인 2028년, 마이크론 아이다호 D램 2027 회계연도','https://spectrum.ieee.org/dram-shortage'],
+            ['삼성·SK하이닉스, 메모리 부족이 2027년까지 이어질 것으로 전망','https://www.datacenterdynamics.com/en/news/samsung-and-sk-hynix-post-record-profits-but-warn-memory-chip-shortages-will-likely-persist-into-2027/']],
+     supply:'새 공장이 2027~2028년에 줄줄이 가동돼요. 역사적으로 메모리 가격은 증설 물량이 쏟아질 때 꺾였어요. 그래서 장비주는 증설 \'전\'에 좋고, 메모리주는 증설 \'후\'에 위험해지는 경향이 있어요.',
+     risk:'2027~2028년 신규 공장 가동이 메모리 사이클의 고점 신호가 될 수 있어요. 미중 수출통제로 장비 수출이 막히는 것도 변수예요.',
+     sig:'메모리 3사 capex, 장비 회사 수주, 신규 팹 가동 시점, D램 계약가격 상승률 둔화',
+     s1:['ASML','AMAT','TSM'], s2:['042700.KS','MU','000660.KS']},
+    {k:'capital', c:'var(--e5)', t:'자본·신용 (돈줄)', when:'2027~', tight:[2027,2031], peak:null, sev:3, dur:4,
+     one:'수조 달러짜리 투자를 계속 빚으로 할 수 있을까요? 물건이 아니라 돈이 막히는 병목이에요.',
+     why:'빅테크 capex가 너무 커져 현금만으로 감당이 안 되자 회사채와 데이터센터 리스(임대) 구조로 돈을 끌어오고 있어요. 투자한 돈이 칩 구매로 돌아오는 \'순환 금융\'도 늘었어요. 금리가 오르거나 AI 매출이 기대에 못 미치면 돈줄이 마지막 병목이 돼요.',
+     facts:[['하이퍼스케일러 capex 2026년 약 7,000억 달러, 2027년 약 1.2조 달러 전망','https://www.jpmorgan.com/insights/banking/capital-markets/financing-ai-infrastructure-data-centers'],
+            ['빅테크 투자등급 회사채 발행 2025년 1,080억 달러에서 2026년 상반기에만 1,940억 달러. 2027년 약 4,000억 달러 전망','https://www.jpmorgan.com/insights/banking/capital-markets/financing-ai-infrastructure-data-centers'],
+            ['국제결제은행(BIS)이 2026년 연례보고서에서 하이퍼스케일러·네오클라우드 간 순환 금융을 세계 금융안정 3대 위험 중 하나로 지목','https://introl.com/blog/hyperscaler-capex-600b-ai-infrastructure-debt-financing-2026']],
+     supply:'이 병목은 \'부족\'이 아니라 \'의지\'의 문제라 해소 시점이 정해져 있지 않아요. 빅테크 실적 때마다 capex 가이던스와 AI 매출(클라우드 성장률)을 함께 보는 게 핵심이에요.',
+     risk:'AI 매출이 빠르게 늘면(2026년 7월 애저 성장 가속처럼) 이 걱정은 계속 뒤로 밀려요. 언제 터질지 맞히기 가장 어려운 위험이에요.',
+     sig:'빅테크 잉여현금흐름, 회사채 스프레드, 오라클·코어위브 CDS, 클라우드 매출 성장률',
+     s1:['ORCL','CRWV'], s2:['MSFT','AMZN','META']},
+    {k:'eff', c:'var(--crit)', t:'역(逆)병목: 효율 혁신', when:'상시', tight:null, peak:null, sev:3, dur:1,
+     one:'병목은 공급을 늘려서만 풀리지 않아요. 소프트웨어 하나로 하룻밤에 풀릴 수도 있어요.',
+     why:'딥시크처럼 같은 일을 적은 자원으로 해내면 병목이 갑자기 풀리고 그 병목으로 오른 주식이 급락해요. 2025년 1월에는 GPU·전력주가, 2026년 9월에는 메모리주가 이 충격을 받았어요. 다만 값이 싸지면 사용량이 폭발해 전체 수요는 오히려 늘기도 해요(제번스 역설).',
+     facts:[['딥시크 V4.1: KV 캐시를 줄여 이전 모델 대비 HBM 75%·SSD 87.5% 절감 주장(2026년 9월), 삼성전자·SK하이닉스 하락','https://www.bloomberg.com/news/articles/2026-09-11/deepseek-hands-memory-stock-investors-fresh-reason-for-caution'],
+            ['2025년 1월 딥시크 쇼크: 엔비디아 하루 -17%(시총 약 5,900억 달러), 비스트라 -28%. 이후 GPU 수요는 오히려 더 늘었어요','']],
+     supply:'정해진 시점이 없어요. 어느 병목이든 \'효율로 우회할 수 있나\'를 같이 물어봐야 해요.',
+     risk:'효율 충격은 보통 단기 급락 뒤 회복됐지만, 병목이 정점에 가까울 때 오면 사이클을 끝내는 방아쇠가 될 수 있어요.',
+     sig:'토큰당 비용 하락 속도, KV 캐시 압축·양자화 기술, 전체 토큰 사용량(줄어드는지 늘어나는지)',
+     s1:['NVDA','000660.KS','SNDK'], s2:[]}
+  ];
+  /* past bottlenecks shown above the candidates on the roadmap, for context */
+  var ROAD_PAST = [{t:'GPU 연산', tight:[2023,2024], peak:2023}, {t:'CoWoS·HBM', tight:[2023,2027], peak:2024}, {t:'메모리·SSD (현재)', tight:[2025,2028], peak:2026}];
+  var THESIS = [
+    ['가장 오래 갈 병목', '<b>전력 생산.</b> 가스터빈은 2031년 납품분을 예약받고 있고, 원전·SMR은 2030년 전후에야 보태져요.'],
+    ['가장 먼저 풀릴 병목', '<b>기판 소재와 광 레이저.</b> 증설 기간이 1~2년이라 2027년쯤 완화될 전망이에요. 이미 많이 오른 만큼 꺾이는 신호에 민감해야 해요.'],
+    ['2027~2028년의 갈림길', '<b>메모리 신규 공장이 줄줄이 가동돼요.</b> 장비는 증설 전에, 메모리는 증설 후에 위험해지는 과거 패턴을 기억해 두세요.'],
+    ['마지막 병목', '<b>돈(자본).</b> capex의 3분의 1 이상이 빚으로 채워지고 있어요. 클라우드 매출 성장이 capex 증가를 따라오는지가 사이클 전체의 열쇠예요.']
+  ];
+
 
   var TYPES = [
     {k:'model', l:'AI 모델', i:'🧠'}, {k:'chip', l:'칩·하드웨어', i:'🔲'}, {k:'earnings', l:'실적', i:'📊'},
@@ -405,6 +548,7 @@
   function fmtPx(sym, v){
     if(sym.charAt(0) === '^') return v.toLocaleString('en-US', {maximumFractionDigits: 0});
     if(/\.KS$/.test(sym)) return '₩' + Math.round(v).toLocaleString('ko-KR');
+    if(/\.T$/.test(sym)) return '¥' + Math.round(v).toLocaleString('ja-JP');
     return '$' + (v >= 1000 ? Math.round(v).toLocaleString('en-US') : v.toFixed(2));
   }
   function eraOf(date){
@@ -651,6 +795,87 @@
     }).join('');
   }
 
+
+  /* ---------------- next-bottleneck deep dive ---------------- */
+  function median(a){ a = a.filter(function(v){ return v != null; }).sort(function(x, y){ return x - y; }); if(!a.length) return null; var m = a.length >> 1; return a.length % 2 ? a[m] : (a[m - 1] + a[m]) / 2; }
+  function nextRet(n){ var ya = yearAgo(); return median(n.s1.concat(n.s2).map(function(s){ return retSince(s, ya); })); }
+  function meter(label, v){ var b = ''; for(var i = 1; i <= 5; i++) b += '<span'+(i <= v ? ' class="on"' : '')+'></span>'; return '<span class="meter">'+label+' <i>'+b+'</i></span>'; }
+  function tickBtn(sym, ya){
+    var r = retSince(sym, ya);
+    return '<button type="button" class="tick" data-sym="'+esc(sym)+'">'+esc(name(sym))+(r != null ? '<small class="'+cls(r)+'">'+pct(r)+'</small>' : '')+'</button>';
+  }
+  function renderNext(){
+    document.getElementById('thesis').innerHTML = THESIS.map(function(x){ return '<div class="card"><h3>'+x[0]+'</h3><p>'+x[1]+'</p></div>'; }).join('');
+    var ya = yearAgo(), wasOpen = {}, first = !document.querySelector('.dp');
+    document.querySelectorAll('.dp').forEach(function(d){ wasOpen[d.id] = d.open; });   // keep what the reader expanded across price refreshes
+    document.getElementById('deep').innerHTML = NEXT.map(function(n, i){
+      var r = nextRet(n);
+      return '<details class="dp" id="dp-'+n.k+'" style="--dc:'+n.c+'"'+((first ? i === 0 : wasOpen['dp-'+n.k]) ? ' open' : '')+'><summary>'+
+        '<h3>'+esc(n.t)+' <span class="tag">'+esc(n.when)+'</span>'+(r != null ? '<span class="tag">관련주 1년 중앙값 <b class="'+cls(r)+'">'+pct(r)+'</b></span>' : '')+'</h3>'+
+        '<div class="one">'+esc(n.one)+' <span class="chev">자세히 ▾</span></div>'+
+        '<div class="meters">'+meter('부족 강도', n.sev)+meter('지속 기간', n.dur)+'</div></summary>'+
+        '<div class="dp-body">'+
+          '<div><h4>왜 막히나</h4><p>'+esc(n.why)+'</p></div>'+
+          '<div><h4>숫자로 보는 근거</h4><ul>'+n.facts.map(function(f){ var u = safeUrl(f[1]); return '<li>'+esc(f[0])+(u ? '<a href="'+u+'" target="_blank" rel="noopener">출처 ↗</a>' : '')+'</li>'; }).join('')+'</ul></div>'+
+          '<div><h4>공급은 언제 풀리나</h4><p>'+esc(n.supply)+'</p></div>'+
+          '<div><h4>반론·리스크</h4><p>'+esc(n.risk)+'</p></div>'+
+          '<div class="full"><h4>🔎 확인할 신호</h4><p>'+esc(n.sig)+'</p></div>'+
+          '<div class="full"><h4>밸류체인 (숫자는 1년 수익률, 누르면 차트)</h4><div class="chain"><span class="lv">직접 수혜</span>'+n.s1.map(function(s){ return tickBtn(s, ya); }).join('')+
+            (n.s2.length ? '<span class="lv" style="margin-left:8px">간접</span>'+n.s2.map(function(s){ return tickBtn(s, ya); }).join('') : '')+'</div></div>'+
+        '</div></details>';
+    }).join('');
+    renderGantt(); renderScatter();
+  }
+  function openDeep(k){
+    var d = document.getElementById('dp-'+k); if(!d) return;
+    d.open = true; d.scrollIntoView({behavior:'smooth', block:'start'});
+  }
+  function renderGantt(){
+    var rows = ROAD_PAST.map(function(r){ return {t:r.t, tight:r.tight, peak:r.peak, past:true, c:'var(--ink-faint)'}; })
+      .concat(NEXT.filter(function(n){ return n.tight; }).map(function(n){ return {t:n.t.replace(/ \(.*\)/, ''), tight:n.tight, peak:n.peak, k:n.k, c:n.c}; }));
+    var Y0 = 2023, Y1 = 2031, W = 520, lw = 150, rh = 24, top = 22, H = top + rows.length * rh + 6;
+    function x(y){ return lw + (y - Y0) / (Y1 + 1 - Y0) * (W - lw - 6); }
+    var g = '';
+    for(var y = Y0; y <= Y1; y++){
+      g += '<line class="c-grid" x1="'+x(y).toFixed(1)+'" x2="'+x(y).toFixed(1)+'" y1="'+(top-4)+'" y2="'+(H-4)+'" stroke-dasharray="2 4"/>'+
+        '<text class="c-axis" x="'+(x(y) + (x(y + 1) - x(y)) / 2).toFixed(1)+'" y="13" text-anchor="middle">'+String(y).slice(2)+'</text>';
+    }
+    rows.forEach(function(r, i){
+      var yy = top + i * rh, bx = x(r.tight[0]), bw = x(r.tight[1] + 1) - bx;
+      g += '<g class="g-row"'+(r.k ? ' data-deep="'+r.k+'"' : '')+'><text class="g-lbl'+(r.past ? ' past' : '')+'" x="0" y="'+(yy + 15)+'">'+esc(r.t)+'</text>'+
+        '<rect x="'+bx.toFixed(1)+'" y="'+(yy + 5)+'" width="'+bw.toFixed(1)+'" height="13" rx="4" fill="'+r.c+'" opacity="'+(r.past ? .25 : .35)+'"/>'+
+        (r.peak ? '<rect x="'+x(r.peak).toFixed(1)+'" y="'+(yy + 5)+'" width="'+(x(r.peak + 1) - x(r.peak)).toFixed(1)+'" height="13" rx="4" fill="'+r.c+'" opacity="'+(r.past ? .55 : .9)+'"/>' : '')+'</g>';
+    });
+    var now = new Date(), nx = x(now.getFullYear() + now.getMonth() / 12);
+    g += '<line x1="'+nx.toFixed(1)+'" x2="'+nx.toFixed(1)+'" y1="'+(top-6)+'" y2="'+(H-2)+'" stroke="var(--crit)" stroke-width="1.5"/><text x="'+(nx + 3).toFixed(1)+'" y="'+(top - 8 + 6)+'" class="q-lbl" fill="var(--crit)" style="fill:var(--crit)">지금</text>';
+    document.getElementById('gantt').innerHTML = '<svg viewBox="0 0 '+W+' '+H+'" style="width:100%;height:auto;display:block" role="img" aria-label="병목 로드맵">'+g+'</svg>';
+  }
+  function renderScatter(){
+    var pts = NEXT.filter(function(n){ return n.tight; }).map(function(n){ return {n:n, r:nextRet(n)}; }).filter(function(p){ return p.r != null; });
+    var el = document.getElementById('scatter');
+    if(!pts.length){ el.innerHTML = '<p class="empty">'+(onServer ? '가격을 불러오는 중…' : '서버에서 열었을 때만 보여요.')+'</p>'; return; }
+    var W = 520, H = 300, pl = 44, pr = 14, pt = 12, pb = 30;
+    var rs = pts.map(function(p){ return p.r; }), rlo = Math.min(-30, Math.min.apply(null, rs) * 1.3), rhi = Math.max.apply(null, rs) * 1.12;
+    function sx(d){ return pl + (d - .5) / 5 * (W - pl - pr); }
+    function sy(r){ return pt + (1 - (r - rlo) / (rhi - rlo)) * (H - pt - pb); }
+    var mid = median(rs), g = '';
+    var step = Math.pow(10, Math.floor(Math.log10(Math.max(rhi, 10)))) / (rhi / Math.pow(10, Math.floor(Math.log10(Math.max(rhi, 10)))) > 4 ? 1 : 2);
+    for(var v = 0; v <= rhi; v += step) g += '<line class="c-grid" x1="'+pl+'" x2="'+(W-pr)+'" y1="'+sy(v).toFixed(1)+'" y2="'+sy(v).toFixed(1)+'"/><text class="c-axis" x="'+(pl-5)+'" y="'+(sy(v)+4).toFixed(1)+'" text-anchor="end">+'+v+'%</text>';
+    ['짧음','','보통','','김'].forEach(function(l, i){ if(l) g += '<text class="c-axis" x="'+sx(i + 1).toFixed(1)+'" y="'+(H-10)+'" text-anchor="middle">'+l+'</text>'; });
+    g += '<line x1="'+sx(3)+'" x2="'+sx(3)+'" y1="'+pt+'" y2="'+(H-pb)+'" stroke="var(--line)" stroke-width="1.5"/><line x1="'+pl+'" x2="'+(W-pr)+'" y1="'+sy(mid).toFixed(1)+'" y2="'+sy(mid).toFixed(1)+'" stroke="var(--line)" stroke-width="1.5"/>';
+    g += '<text class="q-lbl" x="'+(W-pr-4)+'" y="'+(sy(mid)+14).toFixed(1)+'" text-anchor="end">오래 가는데 덜 오른 쪽</text><text class="q-lbl" x="'+(W-pr-4)+'" y="'+(pt+12)+'" text-anchor="end">오래 가고 이미 많이 오른 쪽</text>'+
+      '<text class="q-lbl" x="'+(pl+4)+'" y="'+(pt+12)+'">곧 풀리는데 많이 오른 쪽</text>';
+    var used = {};
+    pts.forEach(function(p){
+      var d = p.n.dur, k = d + ':' + Math.round(sy(p.r) / 26); used[k] = (used[k] || 0) + 1;
+      var cx = sx(d) + (used[k] - 1) * 16, cy = sy(p.r);
+      g += '<g data-deep="'+p.n.k+'" style="cursor:pointer"><circle class="sc-dot" cx="'+cx.toFixed(1)+'" cy="'+cy.toFixed(1)+'" r="'+(4 + p.n.sev * 1.6)+'" fill="'+p.n.c+'" opacity=".85"><title>'+esc(p.n.t+' · 1년 중앙값 '+pct(p.r))+'</title></circle>'+
+        '<text class="sc-lbl" x="'+(cx + 8 + p.n.sev * 1.6).toFixed(1)+'" y="'+(cy + 4).toFixed(1)+'"'+(cx > W - 120 ? ' text-anchor="end" dx="'+(-(16 + p.n.sev * 3.2))+'"' : '')+'>'+esc(p.n.t.split(/[ (·]/)[0])+'</text></g>';
+    });
+    el.innerHTML = '<svg viewBox="0 0 '+W+' '+H+'" style="width:100%;height:auto;display:block" role="img" aria-label="병목 지속성 대비 주가 반영도">'+g+'</svg><p class="note" style="margin:4px 0 0">원 크기 = 부족 강도 · 가운데 선 = 중앙값 · 누르면 해당 분석으로 이동</p>';
+  }
+  document.addEventListener('click', function(e){ var d = e.target.closest('[data-deep]'); if(d) openDeep(d.dataset.deep); });
+
   /* ---------------- leaderboard ---------------- */
   document.getElementById('grp-chips').innerHTML = '<button type="button" class="chip" data-grp="all" aria-pressed="true">전체</button>' +
     GROUPS.map(function(g){ return '<button type="button" class="chip" data-grp="'+g.k+'" aria-pressed="false">'+g.l+'</button>'; }).join('');
@@ -704,7 +929,7 @@
     document.querySelector('.chart-box').scrollIntoView({behavior:'smooth', block:'center'});
   }
   function setEra(k){
-    if(k === 'e5'){ document.getElementById('bns').scrollIntoView({behavior:'smooth', block:'start'}); return; }
+    if(k === 'e5'){ document.getElementById('next').scrollIntoView({behavior:'smooth', block:'start'}); return; }
     state.era = state.era === k ? 'all' : k; pinned = null;
     syncFilters(); renderChart(); renderTimeline();
   }
@@ -746,10 +971,10 @@
   /* ---------------- server data ---------------- */
   var onServer = /^https?:$/.test(location.protocol), lastQuoteAt = '';
   function getJSON(u){ return fetch(u, {cache:'no-store'}).then(function(r){ return r.ok ? r.json() : null; }).catch(function(){ return null; }); }
-  function renderData(){ renderCards(); renderEras(); renderChart(); renderTimeline(); renderBottlenecks(); renderLeaderboard(); }
+  function renderData(){ renderCards(); renderEras(); renderChart(); renderTimeline(); renderBottlenecks(); renderNext(); renderLeaderboard(); }
   function loadChart(){ renderChart(); }
   function loadQuotes(){
-    getJSON('api/quotes').then(function(d){ if(d && d.ok){ Q = d.items; lastQuoteAt = d.asOf || ''; renderCards(); renderEras(); renderBottlenecks(); renderLeaderboard(); } });
+    getJSON('api/quotes').then(function(d){ if(d && d.ok){ Q = d.items; lastQuoteAt = d.asOf || ''; renderCards(); renderEras(); renderBottlenecks(); renderNext(); renderLeaderboard(); } });
   }
 
   /* AI refresh: POST api/update has the server run Claude (Sonnet 5.5, medium, web search);
