@@ -28,6 +28,8 @@ CLAUDE_BIN = Path.home() / ".npm-global" / "bin" / "claude"
 ANALYSIS_TIMEOUT = 20 * 60
 ANALYSIS_COOLDOWN = 10 * 60
 KEY_RE = re.compile(r"^[0-9A-Z][0-9A-Z.]{0,11}$")
+# Private (unlisted) companies have no symbol; the page sends PRIV_<ID> for their AI analysis
+PRIVATE_RE = re.compile(r"^PRIV_[A-Z0-9]{1,24}$")
 
 PRICE_TTL = 60
 NEWS_INTERVAL = 3 * 3600
@@ -327,6 +329,8 @@ def analyzed_symbols() -> dict[str, str]:
     for path in ANALYSIS_DIR.glob("*.json") if ANALYSIS_DIR.exists() else []:
         try:
             meta = json.loads(path.read_text(encoding="utf-8"))
+            if PRIVATE_RE.match(meta["key"]):
+                continue   # no quote to fetch for an unlisted company
             symbols[meta["key"]] = meta["region"]
         except (OSError, ValueError, KeyError):
             continue
@@ -335,11 +339,18 @@ def analyzed_symbols() -> dict[str, str]:
 
 def _prompt(name: str, key: str, market: str, region: str) -> str:
     today = time.strftime("%Y-%m-%d")
+    private = bool(PRIVATE_RE.match(key))
     where = "국내(한국) 상장" if region == "kr" else "해외(미국) 상장"
+    target = f"{name} (비상장 기업, {'국내' if region == 'kr' else '해외'})" if private else f"{name} (종목코드 {key}, {market}, {where})"
+    extra = """
+비상장 기업이므로 목표주가 대신 다음을 조사하세요:
+- 투자 라운드(시기·금액·기업가치·주요 투자자)를 funding 에, 상장(IPO) 계획이나 소문·S-1 제출 여부를 clinical.note 에
+- 이 기술에 투자할 수 있는 상장 관련주(경쟁사·파트너·지분 보유사)를 competitors 에 상장사 우선으로
+""" if private else ""
     return f"""오늘은 {today}입니다. 바이오 투자 학습용 대시보드에 넣을 기업 분석을 해주세요.
 
-대상: {name} (종목코드 {key}, {market}, {where})
-
+대상: {target}
+{extra}
 웹 검색으로 최신 자료를 충분히 찾아서 조사하세요:
 - 핵심 기술/플랫폼, 주요 파이프라인(단계·적응증·효과 데이터·다음 이벤트), 최근 임상 결과
 - 기술수출·파트너십·유상증자 등 자금 현황, 현금 소진 리스크
@@ -396,7 +407,7 @@ def start_analysis(body: dict) -> dict[str, object]:
     name = str(body.get("name") or "").strip()[:60]
     market = str(body.get("market") or "").strip()[:20]
     region = "kr" if body.get("region") == "kr" else "gl"
-    if not KEY_RE.match(key) or not name:
+    if not (KEY_RE.match(key) or PRIVATE_RE.match(key)) or not name:
         raise ValueError("종목코드와 기업명이 필요합니다.")
     with _jobs_lock:
         if key in _running:

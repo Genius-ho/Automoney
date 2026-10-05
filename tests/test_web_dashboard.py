@@ -591,3 +591,21 @@ class SettingsCommandHttpTests(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class BioPrivateAnalysisTests(unittest.TestCase):
+    def test_private_company_key_is_accepted_and_skipped_for_quotes(self):
+        from web_gui.dashboard import bio
+
+        with tempfile.TemporaryDirectory() as tmp, \
+                patch.object(bio, "ANALYSIS_DIR", Path(tmp)), \
+                patch.object(bio.threading, "Thread") as thread:
+            result = bio.start_analysis({"key": "PRIV_SCIENCECORP", "name": "Science Corp.", "region": "gl"})
+            self.assertEqual(result["status"], "running")
+            thread.return_value.start.assert_called_once()
+            self.assertEqual(bio.analyzed_symbols(), {})   # no quote lookup for an unlisted company
+            bio._running.discard("PRIV_SCIENCECORP")
+
+        with self.assertRaises(ValueError):
+            bio.start_analysis({"key": "PRIV_../X", "name": "x"})
+        self.assertIn("비상장 기업", bio._prompt("Science Corp.", "PRIV_SCIENCECORP", "", "gl"))

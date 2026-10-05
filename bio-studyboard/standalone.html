@@ -2494,7 +2494,12 @@
   var analyses = {};
   // hand-curated companies get the same per-company AI refresh; its result overlays the curated fields
   function aiEligible(c){ return !c.custom && c.id !== 'xbi' && !!aiKey(c); }
-  function aiKey(c){ var k = tickerKeyOf(c).toUpperCase(); return /^[0-9A-Z][0-9A-Z.]{0,11}$/.test(k) ? k : ''; }
+  function aiKey(c){
+    var k = tickerKeyOf(c).toUpperCase();
+    if(/^[0-9A-Z][0-9A-Z.]{0,11}$/.test(k)) return k;
+    // unlisted companies have no symbol: key the analysis by the company id instead
+    return tickerKeyOf(c) === '비상장' ? 'PRIV_' + String(c.id).toUpperCase().replace(/[^A-Z0-9]/g, '').slice(0, 24) : '';
+  }
   function aiPanel(c){
     var key = aiKey(c), a = (analyses || {})[key];
     var h = '<div class="profile-section ai-panel" style="border-top:none;background:var(--accent-soft-2);border-radius:10px;padding:12px 14px">';
