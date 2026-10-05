@@ -193,6 +193,12 @@
   .rk-why .p{color:#24804a} .rk-why .m{color:#b7473a}
   .rk-next{font-size:12.5px;white-space:normal;max-width:220px}
   .rk-cards{display:none}
+  .rk-formula-box{background:var(--surface);border:1px solid var(--line);border-radius:12px;padding:10px 14px;margin-bottom:14px}
+  .rk-formula-box summary{cursor:pointer;font-weight:700;font-size:14px}
+  .rk-fgrid{display:grid;grid-template-columns:1fr 1fr;gap:14px;margin-top:8px;font-size:13px}
+  .rk-fgrid ul{margin:4px 0 8px;padding-left:18px;color:var(--ink-soft)}
+  .rk-fgrid li{margin:3px 0}
+  html[data-view="mobile"] .rk-fgrid{grid-template-columns:1fr}
   .rk-scen{display:block;font-size:12.5px;font-weight:700;margin-top:3px;color:var(--ink)}
   .rk-scen .m,.rk-small.m{color:#b7473a}
   .rk-more{font-size:12px;color:var(--accent);font-weight:700}
@@ -886,24 +892,40 @@
 
   <!-- ===================== RANK ===================== -->
   <section class="panel" id="panel-rank">
-    <div class="section-head"><h2>🏆 폭발력 × 생존력 랭킹</h2><span class="section-note">Claude가 26.10.05 기준 보드 정보와 공개 자료로 매긴 공부용 점수예요 · 투자 권유가 아니에요</span></div>
+    <div class="section-head"><h2>🏆 폭발력 × 생존력 랭킹</h2><span class="section-note">재무 숫자로 계산하고 일부 입력은 Claude가 판단한 공부용 점수예요(26.10.05) · 투자 권유가 아니에요</span></div>
     <div class="rk-method">
-      <div class="rk-col"><b class="rk-h up">🚀 폭발력 = 얼마나 오를 수 있나</b>
-        <ul><li><b>기대 배수(50%)</b> 파이프라인마다 피크 매출 × 성공 확률 × 할인으로 가치를 계산해 더하고 시가총액으로 나눠요. 시총이 큰 회사는 증권가 목표주가를 써요</li>
-            <li><b>성공 시 배수(35%)</b> 가장 큰 약이 성공하면 시총의 몇 배가 되나</li>
-            <li><b>촉매(15%)</b> 12개월 안에 결과·허가·계약 같은 큰 사건이 있나</li></ul></div>
-      <div class="rk-col"><b class="rk-h safe">🛡 생존력 = 망하지 않을 힘</b>
-        <ul><li><b>현금 런웨이(30%)</b> 현금 ÷ 연간 현금 소진. 3년 이상이거나 흑자면 만점</li>
-            <li><b>희석(15%)</b> 1년간 주식 수가 얼마나 늘었나</li>
-            <li><b>분산(20%)</b> 가장 큰 약 하나가 기업가치에서 차지하는 비중</li>
-            <li><b>실패 시 남는 가치(20%)</b> 가장 큰 약이 실패하면 시총의 몇 %가 남나</li>
-            <li><b>외부 검증(15%)</b> 빅파마 계약·규제 승인</li></ul></div>
+      <div class="rk-col"><b class="rk-h up">🚀 폭발력 (0~100) = 얼마나 오를 수 있나</b>
+        <ul><li><b>기대 배수 점수 × 50%</b> 기대 배수(아래 '정확한 계산식')가 0.5배 이하면 0점, 3배 이상이면 100점, 그 사이는 로그 눈금</li>
+            <li><b>성공 시 배수 점수 × 35%</b> 1배 이하면 0점, 8배면 100점. 파이프라인 모델은 '성공하면 가치가 가장 크게 늘어나는 약'이 성공했을 때, 목표주가 방식은 기대 배수 × e<sup>연 변동성</sup>(좋은 1년)</li>
+            <li><b>촉매 × 15%</b> 12개월 안에 결과·허가·계약 같은 큰 사건이 있나 (판단 입력 0~100)</li></ul></div>
+      <div class="rk-col"><b class="rk-h safe">🛡 생존력 (0~100) = 망하지 않을 힘</b>
+        <ul><li><b>현금 런웨이 × 30%</b> 현금 ÷ 연간 소진. 흑자거나 3년 이상 100 · 2년 75 · 1년 45 · 6개월 20</li>
+            <li><b>희석 × 15%</b> 1년간 주식 수 증가율. 0% 100점 → 60% 이상 30점</li>
+            <li><b>분산 × 20%</b> 100 − 의존도 × 80. 의존도 = 가장 큰 약의 기대가치 ÷ 전체 (목표주가 방식은 판단 입력)</li>
+            <li><b>실패 시 남는 가치 × 20%</b> 지금 가치를 가장 많이 떠받치는 약이 실패하면 남는 가치 ÷ 시총 (최대 100). 목표주가 방식은 기대 배수 × e<sup>−연 변동성</sup>(나쁜 1년)</li>
+            <li><b>외부 검증 × 15%</b> 빅파마 계약·규제 승인 (판단 입력 0~100)</li></ul></div>
       <div class="rk-col rk-formula"><b class="rk-h">🧮 종합 점수</b>
-        <p>종합 = 100 × 폭발력<sup>w</sup> × 생존력<sup>1−w</sup></p>
-        <p class="rk-small">곱하기(기하평균)라 한쪽이 약하면 종합도 낮아져요. 성공 확률은 업계 평균(1상 10% · 2상 18% · 3상 55% · 허가신청 88%)에 분야(항암 ×0.8, 알츠하이머 ×0.6, 희귀질환 ×1.2 등)와 데이터 질 보정을 곱했어요. 재무 숫자는 Yahoo Finance(26.10.05), 시총은 실시간 주가로 다시 계산해요. 행을 누르면 계산 과정이 펼쳐져요.</p>
+        <p>종합 = 100 × (폭발력/100)<sup>w</sup> × (생존력/100)<sup>1−w</sup></p>
+        <p class="rk-small">곱하기(기하평균)라 한쪽이 약하면 종합도 낮아져요. 아래 막대로 폭발력 비중 w를 바꿀 수 있어요. 행을 누르면 그 회사의 자산별 계산과 항목별 점수가 펼쳐져요.</p>
         <label class="rk-slider">폭발력 비중 <input type="range" id="rk-w" min="30" max="70" step="5" value="50"> <b id="rk-wv">50%</b></label>
       </div>
     </div>
+    <details class="rk-formula-box">
+      <summary>📐 기대 배수 정확한 계산식 · 판단이 들어간 입력값</summary>
+      <div class="rk-fgrid">
+        <div><b>① 파이프라인 모델 (21곳)</b> — 임상 단계 약이 기업가치의 중심인 회사
+          <ul><li><b>자산 가치</b> = 회사에 돌아오는 피크 매출 × 4배(로열티는 12배) ÷ 1.1<sup>피크까지 햇수</sup>. 피크까지 1상 9년 · 2상 7년 · 3상 5년 · 허가신청 3년 · 승인 2년</li>
+              <li><b>성공 확률</b> = 단계 평균(1상 10% · 2상 18% · 3상 55% · 허가신청 88% · 승인 75%) × 분야 보정(항암 0.8 · 신경 0.75 · 알츠하이머 0.6 · 희귀질환 1.2 · 대사 1.1 · 근골격 0.9 · 의료기기 1.15) × 데이터 질 보정</li>
+              <li><b>기업가치</b> = (기존 사업 매출 × 배수 + 순현금 − 1.5년 치 현금 소진 + Σ 자산 가치 × 성공 확률) × (1 − 질적 감점)</li>
+              <li><b>기대 배수</b> = 기업가치 ÷ 시가총액. 시총이 3억 달러를 넘고 증권가 목표주가가 있으면 이 값 65% + 목표주가 배수 35%</li></ul></div>
+        <div><b>② 목표주가 방식 (18곳)</b> — 이미 매출이 크고 애널리스트가 많이 다루는 회사(거대 제약사, 삼성바이오로직스·삼성에피스홀딩스·SK바이오팜·유한양행, 리제네론·모더나·일루미나·템퍼스·서타라)
+          <ul><li><b>기대 배수</b> = 증권가 평균 목표주가 ÷ 현재가 × (1 − 질적 감점)</li></ul>
+          <b>공통</b>
+          <ul><li>목표주가 배수는 최대 2.5배까지만 반영해요(초소형주의 과장된 목표가 방지)</li>
+              <li>재무 숫자(시총·현금·부채·현금 소진·주식 수·변동성·목표주가)는 Yahoo Finance 26.10.05 스냅숏이고, 시총은 실시간 주가로 다시 계산해요</li>
+              <li><b>판단 입력</b>: 피크 매출, 데이터 질 보정, 촉매, 외부 검증, 질적 감점, (목표주가 방식의) 의존도. 이 값들은 Claude가 보드 정보와 공개 자료로 정했고 틀릴 수 있어요</li></ul></div>
+      </div>
+    </details>
     <div class="rk-controls">
       <div class="seg" role="group" aria-label="지역" id="rk-region"><button type="button" data-rkr="all" class="active">전체</button><button type="button" data-rkr="kr">국내</button><button type="button" data-rkr="gl">해외</button></div>
       <label class="rk-check"><input type="checkbox" id="rk-nomega"> 거대 제약사 제외 (시총 1,000억 달러 이상)</label>
@@ -919,7 +941,7 @@
       <span class="rk-type growth">성장</span> 폭발력·생존력 모두 50 이상: 이 랭킹이 찾는 '균형형'이에요.
       <span class="rk-type balance">균형</span> 그 중간.
       <span class="rk-type lotto">고위험</span> 생존력 40 미만: 한 번의 결과에 주가가 몇 배 또는 반토막이 날 수 있어요.<br>
-      1년 수익률과 고점 대비는 실시간 시세로 계산해 점수에는 넣지 않았어요. 이미 크게 오른 종목은 같은 점수라도 기대가 가격에 먼저 반영돼 있을 수 있어요. 점수는 판단이라 틀릴 수 있고, 새 임상 결과가 나오면 바뀌어야 해요. 각 기업을 누르면 상세 화면으로 가요.
+      1년 수익률과 고점 대비는 참고용이라 점수에 넣지 않았어요(시총 변화는 기대 배수에 이미 반영돼요). 판단 입력은 새 임상 결과가 나오면 바뀌어야 해요. 행을 누르면 계산이 펼쳐지고, '상세 화면 →'을 누르면 기업 상세로 가요.
     </div>
   </section>
 
