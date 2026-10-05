@@ -44,7 +44,7 @@ SYMBOLS = {
     "ANET": "아리스타", "LITE": "루멘텀", "COHR": "코히런트",
     "VRT": "버티브", "CEG": "컨스텔레이션", "VST": "비스트라", "GEV": "GE 버노바", "BE": "블룸에너지",
     "OKLO": "오클로", "267260.KS": "HD현대일렉트릭", "034020.KS": "두산에너빌리티",
-    "ETN": "이튼", "010120.KS": "LS ELECTRIC", "298040.KS": "효성중공업", "MRVL": "마벨", "INTC": "인텔", "ARM": "Arm", "RMBS": "램버스", "ALAB": "아스테라랩스", "AMAT": "어플라이드 머티어리얼즈",
+    "ETN": "이튼", "010120.KS": "LS ELECTRIC", "298040.KS": "효성중공업", "MRVL": "마벨", "INTC": "인텔", "ARM": "Arm", "RMBS": "램버스", "688825.SS": "창신메모리(CXMT)", "ALAB": "아스테라랩스", "AMAT": "어플라이드 머티어리얼즈",
     "009150.KS": "삼성전기", "007660.KS": "이수페타시스", "3110.T": "닛토보", "4062.T": "이비덴",
 }
 TYPES = ("model", "chip", "earnings", "capex", "bottleneck", "policy", "rally", "crash", "macro")
