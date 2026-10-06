@@ -441,7 +441,7 @@
     'ANET':{n:'아리스타',g:'net'}, 'LITE':{n:'루멘텀',g:'net'}, 'COHR':{n:'코히런트',g:'net'},
     'VRT':{n:'버티브',g:'pwr'}, 'CEG':{n:'컨스텔레이션',g:'pwr'}, 'VST':{n:'비스트라',g:'pwr'}, 'GEV':{n:'GE 버노바',g:'pwr'}, 'BE':{n:'블룸에너지',g:'pwr'},
     'OKLO':{n:'오클로',g:'pwr'}, '267260.KS':{n:'HD현대일렉트릭',g:'pwr'}, '034020.KS':{n:'두산에너빌리티',g:'pwr'},
-    'ETN':{n:'이튼',g:'pwr'}, '010120.KS':{n:'LS ELECTRIC',g:'pwr'}, '298040.KS':{n:'효성중공업',g:'pwr'}, 'MRVL':{n:'마벨',g:'net'}, 'INTC':{n:'인텔',g:'chip'}, 'ARM':{n:'Arm',g:'chip'}, 'RMBS':{n:'램버스',g:'mem'}, '688825.SS':{n:'창신메모리(CXMT)',g:'mem'}, 'ALAB':{n:'아스테라랩스',g:'mem'}, 'AMAT':{n:'어플라이드 머티어리얼즈',g:'chip'},
+    'ETN':{n:'이튼',g:'pwr'}, '010120.KS':{n:'LS ELECTRIC',g:'pwr'}, '298040.KS':{n:'효성중공업',g:'pwr'}, 'MRVL':{n:'마벨',g:'net'}, 'INTC':{n:'인텔',g:'chip'}, 'ARM':{n:'Arm',g:'chip'}, 'RMBS':{n:'램버스',g:'mem'}, '688825.SS':{n:'창신메모리(CXMT)',g:'mem'}, 'LRCX':{n:'램리서치',g:'chip'}, 'ASM.AS':{n:'ASM인터내셔널',g:'chip'}, '6525.T':{n:'고쿠사이일렉트릭',g:'chip'}, '084370.KQ':{n:'유진테크',g:'chip'}, '036930.KQ':{n:'주성엔지니어링',g:'chip'}, '240810.KQ':{n:'원익IPS',g:'chip'}, 'ALAB':{n:'아스테라랩스',g:'mem'}, 'AMAT':{n:'어플라이드 머티어리얼즈',g:'chip'},
     '009150.KS':{n:'삼성전기',g:'sub'}, '007660.KS':{n:'이수페타시스',g:'sub'}, '3110.T':{n:'닛토보',g:'sub'}, '4062.T':{n:'이비덴',g:'sub'}
   };
   var GROUPS = [{k:'idx',l:'지수'},{k:'chip',l:'GPU·칩'},{k:'cloud',l:'빅테크·클라우드'},{k:'sw',l:'서버·SW'},{k:'mem',l:'메모리'},{k:'stor',l:'스토리지(SSD)'},{k:'net',l:'네트워크·광'},{k:'sub',l:'기판·소재'},{k:'pwr',l:'전력·냉각'}];
@@ -494,6 +494,18 @@
      risk:'D램 가격이 1년 새 몇 배가 되면서 PC·스마트폰 수요가 줄고 있어요(수요 파괴). 딥시크 V4.1처럼 메모리를 덜 쓰는 기술이 나오면 기대가 빠르게 꺾일 수 있어요. 메모리 주식은 이미 사상 최고 부근이고 2026년 7월처럼 한 달 -30%도 겪었어요.',
      sig:'DDR5 RDIMM 계약가·현물가 상승률, HBM과 범용 D램 사이 웨이퍼 배분 발언, 서버 1대당 D램 탑재량, CXL 메모리 채택, PC·스마트폰 출하 감소 폭',
      s1:['000660.KS','005930.KS','MU'], s2:['RMBS','ALAB']},
+    {k:'dram3d', c:'var(--e2)', t:'기술 변수: 3D D램 (2028~2030)', when:'2028~2030', tight:null, peak:null, sev:3, dur:4, relief:true,
+     l1:'장비(먼저 수혜)', l2:'메모리 3사',
+     one:'D램 공장을 더 짓지 않고도 같은 웨이퍼에서 훨씬 많은 용량을 뽑는 기술이에요. 2030년대 메모리 병목을 푸는 가장 근본적인 해법이에요.',
+     why:'지금 D램 부족의 뿌리는 웨이퍼(공장)가 모자란 것이에요. HBM이 같은 용량에 웨이퍼를 3배 먹으니 더 그래요. 3D D램은 낸드가 10여 년 전에 그랬듯 셀을 위로 쌓아 웨이퍼 한 장의 용량을 크게 늘려요. 먼저 트랜지스터를 세우는 4F² VCT D램(삼성 10a, 2028년 양산 목표)이 오고, 셀 배열을 수십 층 쌓는 진짜 3D D램(삼성 10d·SK하이닉스 VG)이 2030년 전후에 와요. 미세화(EUV) 대신 증착·식각 횟수가 크게 늘어서 장비가 먼저 수혜를 받아요. EUV를 못 쓰는 중국(창신메모리)도 이 길로 우회하려 해요.',
+     facts:[['삼성, 2026년 3월 4F²·VCT 구조 10a D램 작동 칩 확보. 26년 개발 완료 → 27년 품질 테스트 → 28년 양산 목표','https://www.trendforce.com/news/2026/04/24/news-samsung-reportedly-produces-sub-10nm-10a-dram-working-die-using-4f-square-and-vct-targets-2028-production/'],
+            ['삼성, 2026년 9월 10나노 이하 로드맵을 하이브리드 본딩 쪽으로 일부 조정 — 일정이 아직 유동적','https://www.digitimes.com/news/a20260924VL206/samsung-dram-roadmap-technology-development.html'],
+            ['3D D램 3대 핵심 공정: Si/SiGe 다층 에피, SiGe 희생층 제거(측면 선택 식각), 고유전율 커패시터 증착','https://www.researching.cn/articles/OJdc55679f3c1e35ff'],
+            ['SK하이닉스, 3D 적층 D램 전담 인력 확보, 미국 고객사와 메모리·연산칩 공동 설계 추진','https://m.news.nate.com/view/20260724n27209']],
+     supply:'VCT는 2028년, 진짜 3D D램은 2030년 전후라 지금의 메모리 부족(2027~2028년 정점)을 풀지는 못해요. 대신 장비 회사는 양산 2~3년 전부터 연구개발용 장비를 납품하므로 2026~2028년에 먼저 신호가 보여요. 공정별 장비·소재 회사는 반도체 보드의 \'3D D램 지도\' 탭에 정리했어요.',
+     risk:'메모리 로드맵은 수율·원가 때문에 자주 밀려요. 장비주는 이미 지금의 D램 증설 붐으로 크게 올라(주성엔지니어링 1년 약 8배) 3D D램 기대보다 증설 사이클에 묶여 움직여요. HBM처럼 1~2년 만에 폭발하기보다 천천히 전환될 가능성이 높아요. 성공하면 메모리 공급이 크게 늘어 장기적으로 메모리 가격에는 부담이 돼요.',
+     sig:'삼성 10a(VCT) 품질 테스트 진입(2027년 목표), 메모리 3사의 3D D램 파일럿 라인 장비 발주, 장비사 실적 발표의 3D D램 연구개발 매출 언급, IEDM·VLSI 학회의 적층 단수·수율 발표',
+     s1:['LRCX','AMAT','ASM.AS','084370.KQ','036930.KQ'], s2:['005930.KS','000660.KS','MU']},
     {k:'cxmt', c:'var(--crit)', t:'공급 변수: 창신메모리(CXMT) 증설', when:'2026~2028', tight:null, peak:null, sev:3, dur:3, relief:true,
      l1:'압박받을 수 있는 쪽', l2:'중국 쪽',
      one:'병목은 수요만 보면 안 돼요. 중국 D램이 얼마나 빨리 늘어나느냐가 메모리 슈퍼사이클의 길이를 정할 수 있어요.',
@@ -615,7 +627,7 @@
     ['에이전트 시대의 새 병목', '<b>CPU와 서버 D램(DDR5).</b> 에이전트는 도구 실행·조율을 CPU로 하고, CPU마다 D램이 300~400GB씩 붙어요. 그 D램 웨이퍼를 HBM이 3배씩 먼저 가져가서 GPU와 CPU가 같은 공장을 두고 싸워요.'],
     ['가장 오래 갈 병목', '<b>전력 생산.</b> 가스터빈은 2031년 납품분을 예약받고 있고, 원전·SMR은 2030년 전후에야 보태져요.'],
     ['가장 먼저 풀릴 병목', '<b>기판 소재와 광 레이저.</b> 증설 기간이 1~2년이라 2027년쯤 완화될 전망이에요. 이미 많이 오른 만큼 꺾이는 신호에 민감해야 해요.'],
-    ['2027~2028년의 갈림길', '<b>메모리 신규 공장이 줄줄이 가동되고, 중국 창신메모리도 마이크론급으로 커져요.</b> 장비는 증설 전에, 메모리는 증설 후에 위험해지는 과거 패턴을 기억해 두세요.'],
+    ['2027~2028년의 갈림길', '<b>메모리 신규 공장이 줄줄이 가동되고, 중국 창신메모리도 마이크론급으로 커져요. 2028~2030년에는 3D D램이 웨이퍼당 용량을 늘려요.</b> 장비는 증설 전에, 메모리는 증설 후에 위험해지는 과거 패턴을 기억해 두세요.'],
     ['마지막 병목', '<b>돈(자본).</b> capex의 3분의 1 이상이 빚으로 채워지고 있어요. 클라우드 매출 성장이 capex 증가를 따라오는지가 사이클 전체의 열쇠예요.']
   ];
 
@@ -636,9 +648,10 @@
   function name(s){ return (SYM[s] && SYM[s].n) || s; }
   function fmtPx(sym, v){
     if(sym.charAt(0) === '^') return v.toLocaleString('en-US', {maximumFractionDigits: 0});
-    if(/\.KS$/.test(sym)) return '₩' + Math.round(v).toLocaleString('ko-KR');
+    if(/\.(KS|KQ)$/.test(sym)) return '₩' + Math.round(v).toLocaleString('ko-KR');
     if(/\.T$/.test(sym)) return '¥' + Math.round(v).toLocaleString('ja-JP');
     if(/\.SS$/.test(sym)) return 'CN¥' + v.toFixed(2);
+    if(/\.AS$/.test(sym)) return '€' + v.toFixed(2);
     return '$' + (v >= 1000 ? Math.round(v).toLocaleString('en-US') : v.toFixed(2));
   }
   function eraOf(date){
@@ -905,9 +918,9 @@
         '<div class="one">'+esc(n.one)+' <span class="chev">자세히 ▾</span></div>'+
         '<div class="meters">'+meter(n.relief ? '영향력' : '부족 강도', n.sev)+meter('지속 기간', n.dur)+'</div></summary>'+
         '<div class="dp-body">'+
-          '<div><h4>왜 막히나</h4><p>'+esc(n.why)+'</p></div>'+
+          '<div><h4>'+(n.relief ? '무엇이고 왜 중요한가' : '왜 막히나')+'</h4><p>'+esc(n.why)+'</p></div>'+
           '<div><h4>숫자로 보는 근거</h4><ul>'+n.facts.map(function(f){ var u = safeUrl(f[1]); return '<li>'+esc(f[0])+(u ? '<a href="'+u+'" target="_blank" rel="noopener">출처 ↗</a>' : '')+'</li>'; }).join('')+'</ul></div>'+
-          '<div><h4>공급은 언제 풀리나</h4><p>'+esc(n.supply)+'</p></div>'+
+          '<div><h4>'+(n.relief ? '언제 효과가 나나' : '공급은 언제 풀리나')+'</h4><p>'+esc(n.supply)+'</p></div>'+
           '<div><h4>반론·리스크</h4><p>'+esc(n.risk)+'</p></div>'+
           '<div class="full"><h4>🔎 확인할 신호</h4><p>'+esc(n.sig)+'</p></div>'+
           '<div class="full"><h4>'+(n.relief ? '영향받는 종목' : '밸류체인')+' (숫자는 1년 수익률, 누르면 차트)</h4><div class="chain"><span class="lv">'+esc(n.l1 || '직접 수혜')+'</span>'+n.s1.map(function(s){ return tickBtn(s, ya); }).join('')+
