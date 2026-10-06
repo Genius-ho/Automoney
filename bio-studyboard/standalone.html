@@ -194,6 +194,7 @@
   .rk-next{font-size:12.5px;white-space:normal;max-width:220px}
   .rk-cards{display:none}
   .rk-trade{display:inline-block;font-size:11px;font-weight:700;border-radius:5px;padding:1px 6px;margin-left:4px;vertical-align:1px}
+  .rk-trade.ai,.rk-ai{background:#ece6fb;color:#6a4fc4;font-weight:700;border-radius:5px;padding:0 5px}
   .rk-trade.ok{background:#e3f4e8;color:#24804a} .rk-trade.mid{background:#f6ecd9;color:#b8791f} .rk-trade.bad{background:#fbe6e2;color:#b7473a}
   .rk-formula-box{background:var(--surface);border:1px solid var(--line);border-radius:12px;padding:10px 14px;margin-bottom:14px}
   .rk-formula-box summary{cursor:pointer;font-weight:700;font-size:14px}
@@ -899,7 +900,8 @@
       <div class="rk-col"><b class="rk-h up">🚀 폭발력 (0~100) = 얼마나 오를 수 있나</b>
         <ul><li><b>기대 배수 점수 × 50%</b> 기대 배수(아래 '정확한 계산식')가 0.5배 이하면 0점, 3배 이상이면 100점, 그 사이는 로그 눈금</li>
             <li><b>성공 시 배수 점수 × 35%</b> 1배 이하면 0점, 8배면 100점. 파이프라인 모델은 '성공하면 가치가 가장 크게 늘어나는 약'이 성공했을 때, 목표주가 방식은 기대 배수 × e<sup>연 변동성</sup>(좋은 1년)</li>
-            <li><b>촉매 × 15%</b> 12개월 안에 결과·허가·계약 같은 큰 사건이 있나 (판단 입력 0~100)</li></ul></div>
+            <li><b>촉매 × 15%</b> 12개월 안에 결과·허가·계약 같은 큰 사건이 있나 (판단 입력 0~100)</li>
+            <li><b>🤖 AI 회사(10곳)</b> 위 점수 85% + AI 레버리지 15%. AI 레버리지 = 독점 데이터·계약 반복성·검증 실적·AI 수요의 매출 연결 (판단 입력)</li></ul></div>
       <div class="rk-col"><b class="rk-h safe">🛡 생존력 (0~100) = 망하지 않을 힘</b>
         <ul><li><b>현금 런웨이 × 30%</b> 현금 ÷ 연간 소진. 흑자거나 3년 이상 100 · 2년 75 · 1년 45 · 6개월 20</li>
             <li><b>희석 × 15%</b> 1년간 주식 수 증가율. 0% 100점 → 60% 이상 30점</li>
@@ -919,7 +921,8 @@
           <ul><li><b>자산 가치</b> = 회사에 돌아오는 피크 매출 × 4배(로열티는 12배) ÷ 1.1<sup>피크까지 햇수</sup>. 피크까지 1상 9년 · 2상 7년 · 3상 5년 · 허가신청 3년 · 승인 2년</li>
               <li><b>성공 확률</b> = 단계 평균(1상 10% · 2상 18% · 3상 55% · 허가신청 88% · 승인 75%) × 분야 보정(항암 0.8 · 신경 0.75 · 알츠하이머 0.6 · 희귀질환 1.2 · 대사 1.1 · 근골격 0.9 · 의료기기 1.15) × 데이터 질 보정</li>
               <li><b>기업가치</b> = (기존 사업 매출 × 배수 + 순현금 − 1.5년 치 현금 소진 + Σ 자산 가치 × 성공 확률) × (1 − 질적 감점)</li>
-              <li><b>기대 배수</b> = 기업가치 ÷ 시가총액. 시총이 3억 달러를 넘고 증권가 목표주가가 있으면 이 값 65% + 목표주가 배수 35%</li></ul></div>
+              <li><b>기대 배수</b> = 기업가치 ÷ 시가총액. 시총이 3억 달러를 넘고 증권가 목표주가가 있으면 이 값 65% + 목표주가 배수 35%</li>
+              <li><b>🤖 AI 보정</b> AI로 발굴한 약은 1상 성공률이 약 80~90%로 업계(40~65%)보다 높고 2상은 평균과 같다는 분석(BCG·웰컴재단 2024)에 따라, AI 회사의 자체 1상 약은 성공 확률 ×1.55, 2상 약 ×1.1, 3상 이후는 그대로. 앞으로의 플랫폼 계약 가치 = 연간 계약 건수 × 건당 가치 × 6년(연 10% 할인)을 자산으로 더해요</li></ul></div>
         <div><b>② 목표주가 방식 (18곳)</b> — 이미 매출이 크고 애널리스트가 많이 다루는 회사(거대 제약사, 삼성바이오로직스·삼성에피스홀딩스·SK바이오팜·유한양행, 리제네론·모더나·일루미나·템퍼스·서타라)
           <ul><li><b>기대 배수</b> = 증권가 평균 목표주가 ÷ 현재가 × (1 − 질적 감점)</li></ul>
           <b>공통</b>
@@ -2450,18 +2453,18 @@
     {"id": "astrazeneca", "m": "cons", "mcap": 240716, "px": 155.21, "cash": 4968, "debt": 32350, "burn": 0, "dil": 0, "vol": 0.266, "cons": 1.36, "cat": 0.5, "valid": 1, "next": "ADC·종양 파이프라인 데이터", "plus": "항암·희귀질환 파이프라인이 업계 최상위권이에요", "minus": "몸집이 커서 몇 배 상승은 어려워요", "mega": 1, "conc": 0.2, "adv": 494.7},
     {"id": "amgen", "m": "cons", "mcap": 216200, "px": 399.9015, "cash": 13989, "debt": 57304, "burn": 0, "dil": 0, "vol": 0.29, "cons": 0.98, "cat": 0.7, "valid": 1, "next": "월 1회 비만약 마리타이드 3상", "plus": "마리타이드가 성공하면 비만약 3강으로 재평가될 수 있어요", "minus": "부채가 있고 마리타이드 데이터가 기대에 못 미치면 실망이 커요", "mega": 1, "conc": 0.3, "adv": 1025.25},
     {"id": "roche", "m": "cons", "mcap": 332283, "px": 52.13, "cash": 9734, "debt": 33308, "burn": 0, "dil": 0, "vol": 0.282, "cons": 1.16, "cat": 0.3, "valid": 1, "next": "제넨텍 항암·비만 파이프라인", "plus": "신약과 진단 두 축이라 매우 안정적이에요", "minus": "폭발력은 제한적이에요", "mega": 1, "conc": 0.2, "adv": 80.18},
-    {"id": "recursion", "m": "model", "mcap": 2386, "px": 4.45, "cash": 546, "debt": 67, "burn": 350, "dil": 23, "vol": 0.735, "cons": 1.62, "cat": 0.5, "valid": 0.6, "next": "AI 발굴 후보물질 임상 데이터", "plus": "AI 신약 개발의 대표주자로 대형 데이터·컴퓨팅 인프라 보유", "minus": "아직 승인 약이 없고 적자가 커요. 지금까지 임상 결과가 기대에 못 미친 적이 있어요", "q": 0.05, "qn": "과거 임상 결과가 기대에 못 미친 이력", "assets": [["AI 발굴 후보물질 다수", 2, "onc", "prod", 300, 0.8], ["파트너(사노피·로슈·바이엘) 마일스톤", 2, "plat", "roy", 150, 1]], "adv": 55.34},
+    {"id": "recursion", "m": "model", "mcap": 2386, "px": 4.45, "cash": 546, "debt": 67, "burn": 350, "dil": 23, "vol": 0.735, "cons": 1.62, "cat": 0.5, "valid": 0.6, "next": "AI 발굴 후보물질 임상 데이터", "plus": "AI 신약 개발의 대표주자로 대형 데이터·컴퓨팅 인프라 보유", "minus": "아직 승인 약이 없고 적자가 커요. 지금까지 임상 결과가 기대에 못 미친 적이 있어요", "q": 0.05, "qn": "과거 임상 결과가 기대에 못 미친 이력", "assets": [["AI 발굴 후보물질 다수", 2, "onc", "prod", 300, 0.8], ["파트너(사노피·로슈·바이엘) 마일스톤", 2, "plat", "roy", 150, 1]], "adv": 55.34, "ai": {"lev": 0.7, "deals": 1.5, "npv": 40, "why": "업계 최대급 생물 데이터·연산 인프라, 사노피·로슈·바이엘 협업. 다만 임상 결과 실망 이력"}},
     {"id": "illumina", "m": "cons", "mcap": 41801, "px": 276.83, "cash": 1168, "debt": 2527, "burn": 0, "dil": 0, "vol": 0.473, "cons": 0.79, "cat": 0.2, "valid": 1, "next": "유전체 분석 장비 수요 회복", "plus": "유전체 분석 장비 시장의 표준", "minus": "중국 규제와 경쟁 심화로 성장이 둔화됐어요", "conc": 0.3, "adv": 407.71},
-    {"id": "generate", "m": "model", "mcap": 1736, "px": 13.525, "cash": 457, "debt": 63, "burn": 237, "dil": 0, "vol": 0.87, "cons": 2.0, "cat": 0.4, "valid": 0.6, "next": "AI 설계 항체 임상 진입·데이터", "plus": "26.02 상장으로 약 4억 달러를 확보해 당분간 자금 걱정이 적어요", "minus": "승인 약이 없는 초기 단계라 결과가 나오기까지 오래 걸려요", "assets": [["GB-0895 장기지속 항TSLP 중증 천식 3상", 3, "immu", "prod", 1500, 0.8], ["AI 단백질 설계 플랫폼 협업", 1, "plat", "roy", 200, 1]], "adv": 12.69},
-    {"id": "schrodinger", "m": "model", "mcap": 2293, "px": 30.65, "cash": 414, "debt": 108, "burn": 127, "dil": 2, "vol": 0.606, "cons": 0.7, "cat": 0.3, "valid": 0.7, "next": "소프트웨어 매출 성장, 자체 후보물질 데이터", "plus": "업계 표준급 설계 소프트웨어 매출이 받쳐 줘요", "minus": "자체 신약 성과가 아직 뚜렷하지 않아요", "base": [259, 4], "assets": [["자체 후보물질(SGR-1505 등)", 1, "onc", "prod", 200, 1]], "adv": 17.99},
-    {"id": "absci", "m": "model", "mcap": 1903, "px": 11.09, "cash": 201, "debt": 4, "burn": 108, "dil": 34, "vol": 1.017, "cons": 1.3, "cat": 0.8, "valid": 0.4, "next": "ABS-201(탈모) 1상 결과", "plus": "시총이 작아 1상 성공만으로도 크게 오를 수 있어요", "minus": "초기 임상 소형주라 자금 조달(희석) 가능성이 커요", "assets": [["ABS-201 탈모(항PRLR)", 1, "immu", "prod", 1000, 1], ["ABS-101 염증성 장질환(항TL1A)", 1, "immu", "prod", 600, 0.8]], "adv": 25.93},
+    {"id": "generate", "m": "model", "mcap": 1736, "px": 13.525, "cash": 457, "debt": 63, "burn": 237, "dil": 0, "vol": 0.87, "cons": 2.0, "cat": 0.4, "valid": 0.6, "next": "AI 설계 항체 임상 진입·데이터", "plus": "26.02 상장으로 약 4억 달러를 확보해 당분간 자금 걱정이 적어요", "minus": "승인 약이 없는 초기 단계라 결과가 나오기까지 오래 걸려요", "assets": [["GB-0895 장기지속 항TSLP 중증 천식 3상", 3, "immu", "prod", 1500, 0.8]], "adv": 12.69, "ai": {"lev": 0.7, "deals": 1, "npv": 40, "why": "AI 설계 항체(GB-0895)가 3상, 상장으로 4억 달러 확보"}},
+    {"id": "schrodinger", "m": "model", "mcap": 2293, "px": 30.65, "cash": 414, "debt": 108, "burn": 127, "dil": 2, "vol": 0.606, "cons": 0.7, "cat": 0.3, "valid": 0.7, "next": "소프트웨어 매출 성장, 자체 후보물질 데이터", "plus": "업계 표준급 설계 소프트웨어 매출이 받쳐 줘요", "minus": "자체 신약 성과가 아직 뚜렷하지 않아요", "base": [259, 4], "assets": [["자체 후보물질(SGR-1505 등)", 1, "onc", "prod", 200, 1]], "adv": 17.99, "ai": {"lev": 0.7, "deals": 1, "npv": 30, "why": "물리+머신러닝 설계 소프트웨어 업계 표준, AI 수요가 소프트웨어 매출로 연결"}},
+    {"id": "absci", "m": "model", "mcap": 1903, "px": 11.09, "cash": 201, "debt": 4, "burn": 108, "dil": 34, "vol": 1.017, "cons": 1.3, "cat": 0.8, "valid": 0.4, "next": "ABS-201(탈모) 1상 결과", "plus": "시총이 작아 1상 성공만으로도 크게 오를 수 있어요", "minus": "초기 임상 소형주라 자금 조달(희석) 가능성이 커요", "assets": [["ABS-201 탈모(항PRLR)", 1, "immu", "prod", 1000, 1], ["ABS-101 염증성 장질환(항TL1A)", 1, "immu", "prod", 600, 0.8]], "adv": 25.93, "ai": {"lev": 0.6, "deals": 1, "npv": 25, "why": "AI 설계 항체가 임상 진입, 릴리 4천만 달러 지분 투자"}},
     {"id": "abcellera", "m": "model", "mcap": 4371, "px": 13.49, "cash": 540, "debt": 136, "burn": 95, "dil": 3, "vol": 0.832, "cons": 1.24, "cat": 0.5, "valid": 0.7, "next": "ABCL635 3상 계획, 후속 파이프라인", "plus": "안면홍조 2상 성공(26.08)에 현금이 약 6.5억 달러로 풍부해요", "minus": "자체 신약 회사로 바뀌는 중이라 3상 비용과 결과가 관건이에요", "assets": [["ABCL635 폐경 안면홍조(2상 성공, 3상 준비)", 3, "immu", "prod", 1200, 0.85], ["ABCL575 아토피(항OX40L)", 1, "immu", "prod", 500, 1], ["파트너 로열티", 2, "plat", "roy", 80, 1]], "adv": 49.66},
-    {"id": "tempus", "m": "cons", "mcap": 14359, "px": 79.58, "cash": 816, "debt": 1444, "burn": 237, "dil": 4, "vol": 0.72, "cons": 0.88, "cat": 0.4, "valid": 0.8, "next": "흑자 전환 시점, 데이터 라이선스 계약", "plus": "진단 매출과 의료 데이터 라이선스라는 두 개의 돈줄", "minus": "아직 적자이고 기대가 가격에 많이 반영돼 있어요", "conc": 0.3, "adv": 318.02},
-    {"id": "relay", "m": "model", "mcap": 4061, "px": 18.53, "cash": 911, "debt": 31, "burn": 212, "dil": 27, "vol": 0.652, "cons": 1.49, "cat": 0.6, "valid": 0.7, "next": "RLY-2608 유방암 데이터", "plus": "현금이 넉넉하고 정밀 항암 파이프라인이 여러 개예요", "minus": "매출이 없고 핵심 데이터에 주가가 크게 좌우돼요", "assets": [["RLY-2608 PI3Kα 유방암 3상", 3, "onc", "prod", 2000, 1], ["RLY-2608 혈관기형", 2, "rare", "prod", 400, 1], ["RLY-4008(=HLB 리픽투) 로열티", 5, "onc", "roy", 15, 1]], "adv": 51.64},
-    {"id": "insilico", "m": "model", "mcap": 4205, "px": 57.0, "cash": 330, "debt": 3, "burn": 20, "dil": 3, "vol": 0.959, "cons": 1.43, "cat": 0.5, "valid": 0.9, "next": "rentosertib 후속 임상, 빅파마 협업 추가", "plus": "AI 발굴 신약 중 가장 앞서 있고 릴리와 최대 27.5억 달러 협업", "minus": "홍콩 상장이라 접근성이 낮고 매출은 아직 협업금 위주예요", "assets": [["rentosertib 특발성 폐섬유증(2a상 완료)", 2, "rare", "prod", 1500, 1], ["릴리 등 협업 마일스톤·로열티", 2, "plat", "roy", 250, 1], ["기타 AI 발굴 후보", 1, "onc", "prod", 600, 1]], "adv": 88.03},
-    {"id": "lantern", "m": "model", "mcap": 13, "px": 0.8732, "cash": 7, "debt": 0, "burn": 14, "dil": 18, "vol": 1.07, "cons": 20.04, "cat": 0.5, "valid": 0.2, "next": "AI 항암 후보 초기 임상 결과", "plus": "시총이 매우 작아 좋은 소식 하나에 몇 배가 날 수 있어요", "minus": "현금이 적어 증자 가능성이 크고 검증된 성과가 거의 없어요", "assets": [["LP-184 등 AI 항암 후보", 1, "onc", "prod", 150, 0.6]], "adv": 0.3},
-    {"id": "eikon", "m": "model", "mcap": 388, "px": 7.155, "cash": 531, "debt": 252, "burn": 256, "dil": 0, "vol": 0.898, "cons": 3.44, "cat": 1, "valid": 0.5, "next": "후기 임상 항암 데이터", "plus": "26.02 상장으로 약 3.8억 달러 확보, 후기 임상 단계", "minus": "승인 약이 없고 상장 후 주가 이력이 짧아요", "assets": [["EIK1001(TLR7/8)+키트루다 흑색종 2/3상(하반기 중간분석)", 3, "onc", "prod", 800, 0.7], ["EIK1003 PARP1", 1, "onc", "prod", 700, 1], ["EIK1005 WRN", 1, "onc", "prod", 500, 1]], "adv": 3.87},
-    {"id": "certara", "m": "cons", "mcap": 1441, "px": 9.45, "cash": 185, "debt": 302, "burn": 0, "dil": 0, "vol": 0.606, "cons": 0.9, "cat": 0.2, "valid": 0.8, "next": "모델링 사업 성장률 회복", "plus": "신약 개발 실패 위험이 없는 소프트웨어·서비스 회사, 이익률 30%대", "minus": "성장률이 0~4%로 낮아 큰 상승 동력이 부족해요", "conc": 0.3, "adv": 20.58},
+    {"id": "tempus", "m": "cons", "mcap": 14359, "px": 79.58, "cash": 816, "debt": 1444, "burn": 237, "dil": 4, "vol": 0.72, "cons": 0.88, "cat": 0.4, "valid": 0.8, "next": "흑자 전환 시점, 데이터 라이선스 계약", "plus": "진단 매출과 의료 데이터 라이선스라는 두 개의 돈줄", "minus": "아직 적자이고 기대가 가격에 많이 반영돼 있어요", "conc": 0.3, "adv": 318.02, "ai": {"lev": 0.8, "deals": 0, "npv": 0, "why": "대규모 임상·유전체 데이터와 데이터 라이선스 사업"}},
+    {"id": "relay", "m": "model", "mcap": 4061, "px": 18.53, "cash": 911, "debt": 31, "burn": 212, "dil": 27, "vol": 0.652, "cons": 1.49, "cat": 0.6, "valid": 0.7, "next": "RLY-2608 유방암 데이터", "plus": "현금이 넉넉하고 정밀 항암 파이프라인이 여러 개예요", "minus": "매출이 없고 핵심 데이터에 주가가 크게 좌우돼요", "assets": [["RLY-2608 PI3Kα 유방암 3상", 3, "onc", "prod", 2000, 1], ["RLY-2608 혈관기형", 2, "rare", "prod", 400, 1], ["RLY-4008(=HLB 리픽투) 로열티", 5, "onc", "roy", 15, 1]], "adv": 51.64, "ai": {"lev": 0.55, "deals": 0.5, "npv": 40, "why": "단백질 움직임 계산 플랫폼으로 만든 약이 3상"}},
+    {"id": "insilico", "m": "model", "mcap": 4205, "px": 57.0, "cash": 330, "debt": 3, "burn": 20, "dil": 3, "vol": 0.959, "cons": 1.43, "cat": 0.5, "valid": 0.9, "next": "rentosertib 후속 임상, 빅파마 협업 추가", "plus": "AI 발굴 신약 중 가장 앞서 있고 릴리와 최대 27.5억 달러 협업", "minus": "홍콩 상장이라 접근성이 낮고 매출은 아직 협업금 위주예요", "assets": [["rentosertib 특발성 폐섬유증(2a상 완료)", 2, "rare", "prod", 1500, 1], ["릴리 등 협업 마일스톤·로열티", 2, "plat", "roy", 250, 1], ["기타 AI 발굴 후보", 1, "onc", "prod", 600, 1]], "adv": 88.03, "ai": {"lev": 0.85, "deals": 2, "npv": 60, "why": "AI 발굴 약(rentosertib) 2a상 성공·Nature Medicine 게재, 릴리 최대 27.5억 달러 협업, 발굴 후보 수십 개"}},
+    {"id": "lantern", "m": "model", "mcap": 13, "px": 0.8732, "cash": 7, "debt": 0, "burn": 14, "dil": 18, "vol": 1.07, "cons": 20.04, "cat": 0.5, "valid": 0.2, "next": "AI 항암 후보 초기 임상 결과", "plus": "시총이 매우 작아 좋은 소식 하나에 몇 배가 날 수 있어요", "minus": "현금이 적어 증자 가능성이 크고 검증된 성과가 거의 없어요", "assets": [["LP-184 등 AI 항암 후보", 1, "onc", "prod", 150, 0.6]], "adv": 0.3, "ai": {"lev": 0.35, "deals": 0.3, "npv": 5, "why": "AI로 환자군을 좁히는 초소형 항암 개발사, 검증 실적은 적음"}},
+    {"id": "eikon", "m": "model", "mcap": 388, "px": 7.155, "cash": 531, "debt": 252, "burn": 256, "dil": 0, "vol": 0.898, "cons": 3.44, "cat": 1, "valid": 0.5, "next": "후기 임상 항암 데이터", "plus": "26.02 상장으로 약 3.8억 달러 확보, 후기 임상 단계", "minus": "승인 약이 없고 상장 후 주가 이력이 짧아요", "assets": [["EIK1001(TLR7/8)+키트루다 흑색종 2/3상(하반기 중간분석)", 3, "onc", "prod", 800, 0.7], ["EIK1003 PARP1", 1, "onc", "prod", 700, 1], ["EIK1005 WRN", 1, "onc", "prod", 500, 1]], "adv": 3.87, "ai": {"lev": 0.4, "deals": 0.3, "npv": 20, "why": "데이터·AI 기반 발굴을 내세우는 후기 임상 항암사"}},
+    {"id": "certara", "m": "cons", "mcap": 1441, "px": 9.45, "cash": 185, "debt": 302, "burn": 0, "dil": 0, "vol": 0.606, "cons": 0.9, "cat": 0.2, "valid": 0.8, "next": "모델링 사업 성장률 회복", "plus": "신약 개발 실패 위험이 없는 소프트웨어·서비스 회사, 이익률 30%대", "minus": "성장률이 0~4%로 낮아 큰 상승 동력이 부족해요", "conc": 0.3, "adv": 20.58, "ai": {"lev": 0.5, "deals": 0, "npv": 0, "why": "임상 모델링·시뮬레이션 소프트웨어"}},
     {"id": "cortigent", "m": "model", "mcap": 10, "px": 3.82, "cash": 0, "debt": 0, "burn": 7, "dil": 54, "vol": 1.816, "cons": null, "cat": 0.7, "valid": 0.4, "next": "클리어원 역합병 마무리(CRGT 전환)", "plus": "눈이 망가진 실명까지 겨냥하는 뇌 직접 자극 인공시각, FDA 혁신기기 지정", "minus": "합병 조건이 남아 있고 현금이 거의 없어 희석 위험이 매우 커요", "q": 0.15, "qn": "역합병 조건(자금 조달·최소 현금·상장 유지) 미충족 시 무산 위험", "assets": [["Orion 인공시각(클리어원 주주 몫 약 22%)", 2, "device", "prod", 44, 0.8]], "adv": 0.3},
     {"id": "vivani", "m": "model", "mcap": 111, "px": 1.23, "cash": 20, "debt": 18, "burn": 25, "dil": 51, "vol": 0.666, "cons": 3.12, "cat": 0.6, "valid": 0.5, "next": "NPM-139(비만 임플란트) 첫 인체 시험", "plus": "노보와 평가 계약을 맺은 장기 지속형 비만 임플란트 + 코티전트 지분", "minus": "주가 1달러대 초소형주로 자금 조달이 계속 필요해요", "assets": [["NPM-139 세마글루타이드 이식형", 1, "metab", "prod", 800, 0.8], ["코티전트 지분 약 78%(Orion)", 2, "device", "prod", 156, 0.8]], "adv": 0.26},
     {"id": "onward", "m": "model", "mcap": 200, "px": 2.565, "cash": 91, "debt": 15, "burn": 51, "dil": 56, "vol": 0.45, "cons": 3.6, "cat": 0.4, "valid": 0.8, "next": "ARC-EX 판매 성장, ARC-BCI 추가 이식", "plus": "FDA 승인 제품 매출이 1년 새 +240%로 빠르게 늘어요", "minus": "아직 적자라 추가 자금 조달 가능성이 있어요", "base": [9, 4], "assets": [["ARC-EX 판매 확대(美 승인)", 5, "device", "prod", 150, 0.8], ["ARC-IM·ARC-BCI 이식형", 2, "device", "prod", 400, 1]], "adv": 0.25},
@@ -2474,6 +2477,12 @@
   var RK_AREA = {onc:[.8,'항암'], cns:[.75,'신경'], alz:[.6,'알츠하이머'], rare:[1.2,'희귀질환'], immu:[1,'면역·일반'], metab:[1.1,'대사'], ortho:[.9,'근골격'], device:[1.15,'의료기기'], plat:[1,'플랫폼']};
   var RK_MULT = {prod:4, roy:12};                            // value = peak x multiple (royalties are pure margin)
   var RK_DISC = 0.10;
+  // AI-discovered assets: BCG/Wellcome 2024 found ~80-90% phase-1 success vs ~40-65% industry, phase 2 at the
+  // industry average. So an AI company's own phase-1 asset gets x1.55 (phase-1 edge x a small phase-2 edge),
+  // a phase-2 asset x1.1 (patient selection / biomarkers), phase 3+ nothing.
+  var RK_AI_POS = {1:1.55, 2:1.1};
+  var RK_AI_WEIGHT = 0.15;                                    // share of upside taken by the AI-leverage score
+  var RK_DEAL_YEARS = (1 - Math.pow(1 + 0.10, -6)) / 0.10;    // six years of future platform deals, discounted
   function rkClamp(x){ return Math.max(0, Math.min(1, x)); }
   function rkLerp(x, pts){ for(var i = 1; i < pts.length; i++){ if(x <= pts[i][0]){ var a = pts[i - 1], b = pts[i]; return a[1] + (b[1] - a[1]) * (x - a[0]) / (b[0] - a[0]); } } return pts[pts.length - 1][1]; }
   // live market cap: scale the 26.10.05 snapshot by the live price the board already fetches
@@ -2499,10 +2508,15 @@
     // a loss-maker spends about 1.5 years of burn before its next read-outs, so that cash is not value
     var mcap = rkMcap(r, c), spend = r.burn > 0 ? Math.min(r.cash, r.burn * 1.5) : 0, netCash = r.cash - r.debt - spend, q = r.q || 0;
     var assets = (r.assets || []).map(function(a){
-      var area = RK_AREA[a[2]] || [1, a[2]], pos = Math.min(1, RK_POS[a[1]] * area[0] * a[5]);
+      var aiUp = r.ai && a[2] !== 'plat' ? (RK_AI_POS[a[1]] || 1) : 1;
+      var area = RK_AREA[a[2]] || [1, a[2]], pos = Math.min(1, RK_POS[a[1]] * area[0] * a[5] * aiUp);
       var full = a[4] * RK_MULT[a[3]] / Math.pow(1 + RK_DISC, RK_YRS[a[1]]);
-      return {name:a[0], phase:a[1], area:area[1], kind:a[3], peak:a[4], pos:pos, full:full, ev:full * pos};
+      return {name:a[0], phase:a[1], area:area[1], kind:a[3], peak:a[4], pos:pos, full:full, ev:full * pos, aiUp:aiUp};
     });
+    if(r.ai && r.ai.deals > 0){
+      var dv = r.ai.deals * r.ai.npv * RK_DEAL_YEARS;
+      assets.push({name:'앞으로의 AI 플랫폼 계약 (연 '+r.ai.deals+'건 × 건당 '+rkM(r.ai.npv)+' × 6년)', phase:0, area:'플랫폼', kind:'deal', peak:0, pos:1, full:dv, ev:dv, aiUp:1});
+    }
     var base = r.base ? r.base[0] * r.base[1] : 0, pipe = assets.reduce(function(s, a){ return s + a.ev; }, 0);
     // top = the asset most of today's value rests on (downside); swing = the one that adds most if it works (upside)
     var top = assets.slice().sort(function(a, b){ return b.ev - a.ev; })[0];
@@ -2526,6 +2540,8 @@
     out.uE = rkClamp((Math.log(out.E) + Math.log(2)) / Math.log(6));       // 0.5x -> 0, 3x -> 1
     out.uB = rkClamp(Math.log(Math.max(out.bull, 1)) / Math.log(8));       // 8x -> 1
     out.U = 0.5 * out.uE + 0.35 * out.uB + 0.15 * r.cat;
+    out.Ubase = out.U;
+    if(r.ai) out.U = (1 - RK_AI_WEIGHT) * out.U + RK_AI_WEIGHT * r.ai.lev;
     // survival: cash runway, dilution, single-asset dependence, loss if the top asset fails, outside validation
     out.runway = r.burn > 0 ? r.cash / r.burn : null;
     out.sRun = out.runway == null ? 1 : rkLerp(out.runway, [[0,0],[.5,.2],[1,.45],[2,.75],[3,1]]);
@@ -2574,11 +2590,12 @@
       '<div><b>증권가 목표 대비</b> '+(r.cons ? rkFmtPct((r.cons - 1) * 100) : '—')+'</div><div><b>평가 방식</b> '+esc(o.src)+'</div></div>';
     if(o.assets.length){
       h += '<table class="rk-assets"><thead><tr><th>자산</th><th>단계</th><th>분야</th><th class="num">피크 매출*</th><th class="num">성공 확률</th><th class="num">성공 시 가치</th><th class="num">기대 가치</th></tr></thead><tbody>'+
-        o.assets.map(function(a){ return '<tr><td>'+esc(a.name)+'</td><td>'+RK_PHASE[a.phase]+'</td><td>'+esc(a.area)+'</td><td class="num">'+rkM(a.peak)+(a.kind === 'roy' ? ' <small>로열티</small>' : '')+'</td><td class="num">'+(a.pos * 100).toFixed(0)+'%</td><td class="num">'+rkM(a.full)+'</td><td class="num">'+rkM(a.ev)+'</td></tr>'; }).join('')+
+        o.assets.map(function(a){ return '<tr><td>'+esc(a.name)+(a.aiUp > 1 ? ' <small class="rk-ai">AI ×'+a.aiUp+'</small>' : '')+'</td><td>'+(RK_PHASE[a.phase] || '계약 실적 기반')+'</td><td>'+esc(a.area)+'</td><td class="num">'+(a.peak ? rkM(a.peak) : '—')+(a.kind === 'roy' ? ' <small>로열티</small>' : '')+'</td><td class="num">'+(a.pos * 100).toFixed(0)+'%</td><td class="num">'+rkM(a.full)+'</td><td class="num">'+rkM(a.ev)+'</td></tr>'; }).join('')+
         (o.base ? '<tr><td>기존 사업(매출 × 배수)</td><td>—</td><td>—</td><td class="num">—</td><td class="num">100%</td><td class="num">'+rkM(o.base)+'</td><td class="num">'+rkM(o.base)+'</td></tr>' : '')+
         '</tbody></table><p class="rk-small">* 회사에 돌아오는 연 매출 기준(로열티는 로열티 수입). 성공 시 가치 = 피크 매출 × '+RK_MULT.prod+'배(로열티 '+RK_MULT.roy+'배) ÷ 출시·성장까지 연 10% 할인. 성공 확률 = 단계별 업계 평균(승인 제품은 판매 위험을 반영해 75%) × 분야 보정 × 데이터 질 보정. \'성공\' 시나리오는 성공 시 가치가 가장 크게 늘어나는 자산, \'실패\' 시나리오는 지금 가치를 가장 많이 떠받치는 자산 기준이에요.</p>';
     }
-    h += '<div class="rk-dgrid rk-sc"><div><b>🚀 폭발력 '+(o.U * 100).toFixed(0)+'</b> = 기대 배수 '+(o.uE * 100).toFixed(0)+'×50% + 성공 시 배수 '+(o.uB * 100).toFixed(0)+'×35% + 촉매 '+(r.cat * 100).toFixed(0)+'×15%</div>'+
+    if(r.ai) h += '<p class="rk-small">🤖 <b>AI 보정</b> — 자체 1상 약 성공 확률 ×1.55, 2상 ×1.1 · AI 레버리지 '+(r.ai.lev * 100).toFixed(0)+'점이 폭발력의 15% ('+esc(r.ai.why)+')</p>';
+    h += '<div class="rk-dgrid rk-sc"><div><b>🚀 폭발력 '+(o.U * 100).toFixed(0)+'</b>'+(r.ai ? ' = 기본 '+(o.Ubase * 100).toFixed(0)+'×85% + AI 레버리지 '+(r.ai.lev * 100).toFixed(0)+'×15%. 기본' : '')+' = 기대 배수 '+(o.uE * 100).toFixed(0)+'×50% + 성공 시 배수 '+(o.uB * 100).toFixed(0)+'×35% + 촉매 '+(r.cat * 100).toFixed(0)+'×15%</div>'+
       '<div><b>🛡 생존력 '+(o.S * 100).toFixed(0)+'</b> = 런웨이 '+(o.sRun * 100).toFixed(0)+'×30% + 희석 '+(o.sDil * 100).toFixed(0)+'×15% + 분산 '+(o.sConc * 100).toFixed(0)+'×20% + 실패 시 남는 가치 '+((1 - o.loss) * 100).toFixed(0)+'×20% + 외부 검증 '+(r.valid * 100).toFixed(0)+'×15%</div></div>';
     if(r.qn) h += '<p class="rk-small m">⚠ 질적 감점 '+(r.q * 100).toFixed(0)+'%: '+esc(r.qn)+'</p>';
     return h + '</div>';
@@ -2588,7 +2605,7 @@
     document.getElementById('rk-body').innerHTML = rows.map(function(x, i){
       var o = x.o;
       return '<tr data-rkx="'+x.c.id+'"><td class="rk-rank">'+(i + 1)+'</td>'+
-        '<td class="rk-name"><b>'+esc(x.c.name)+'</b><small>'+esc(x.c.ticker)+' · '+rkM(o.mcap)+'</small> '+rkTradeTag(o)+rkScen(o)+rkWhy(x.r)+'<button type="button" class="rk-go" data-rk="'+x.c.id+'">상세 화면 →</button></td>'+
+        '<td class="rk-name"><b>'+esc(x.c.name)+'</b><small>'+esc(x.c.ticker)+' · '+rkM(o.mcap)+'</small> '+rkTradeTag(o)+(x.r.ai ? '<span class="rk-trade ai" title="AI 레버리지 '+(x.r.ai.lev * 100).toFixed(0)+'">AI '+(x.r.ai.lev * 100).toFixed(0)+'</span>' : '')+rkScen(o)+rkWhy(x.r)+'<button type="button" class="rk-go" data-rk="'+x.c.id+'">상세 화면 →</button></td>'+
         '<td><span class="rk-type '+x.type[0]+'">'+x.type[1]+'</span></td>'+
         '<td>'+rkBar('u', o.U)+'</td><td>'+rkBar('s', o.S)+'</td>'+
         '<td class="num rk-total">'+x.total.toFixed(0)+'</td>'+
