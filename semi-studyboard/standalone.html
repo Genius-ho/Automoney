@@ -160,6 +160,36 @@
   }
   .tabs-inner{max-width:1180px;margin:0 auto;display:flex;gap:4px;padding:10px 20px;overflow-x:auto;scrollbar-width:none}
   .tabs-inner::-webkit-scrollbar{display:none}
+  .m3-intro{display:grid;grid-template-columns:1fr 1fr;gap:12px;margin-bottom:12px}
+  .m3-card{background:var(--surface);border:1px solid var(--line);border-radius:12px;padding:12px 14px}
+  .m3-card p{margin:6px 0 0;font-size:13.5px;color:var(--ink-soft)}
+  .m3-timeline{display:grid;grid-template-columns:repeat(5,1fr);gap:0;margin:6px 0 14px;background:var(--surface);border:1px solid var(--line);border-radius:12px;overflow:hidden}
+  .m3-tl{padding:10px 12px;border-right:1px solid var(--line);font-size:12.5px;color:var(--ink-soft)}
+  .m3-tl:last-child{border-right:0}
+  .m3-tl b{display:block;font-size:13.5px;color:var(--ink)}
+  .m3-tl.now{background:var(--accent-soft-2)}
+  .m3-legend{font-size:12.5px;color:var(--ink-faint);margin-bottom:10px;line-height:2}
+  .m3-st{display:inline-block;font-size:11px;font-weight:700;border-radius:5px;padding:1px 6px;margin-right:2px}
+  .m3-st.leader{background:#e3eefa;color:#1d6fb8} .m3-st.supplier{background:#e3f4e8;color:#24804a} .m3-st.candidate{background:#f6ecd9;color:#b8791f}
+  .m3-steps{display:flex;flex-direction:column;gap:10px}
+  .m3-step{display:grid;grid-template-columns:44px 1fr;gap:12px;background:var(--surface);border:1px solid var(--line);border-radius:12px;padding:12px 14px}
+  .m3-no{width:36px;height:36px;border-radius:50%;background:var(--accent);color:#fff;display:grid;place-items:center;font-weight:800}
+  .m3-step h3{margin:0;font-size:15.5px;display:flex;flex-wrap:wrap;gap:6px;align-items:center}
+  .m3-step h3 small{font-size:12px;font-weight:600;color:var(--ink-faint)}
+  .m3-heat{font-size:11px;font-weight:800;border-radius:5px;padding:1px 6px;background:#fbe6e2;color:#b7473a}
+  .m3-heat.mid{background:#f6ecd9;color:#b8791f} .m3-heat.low{background:var(--surface-2);color:var(--ink-soft)}
+  .m3-step p{margin:4px 0 0;font-size:13.5px;color:var(--ink-soft)}
+  .m3-players{display:grid;grid-template-columns:1fr 1fr;gap:6px 16px;margin-top:8px}
+  .m3-side b{font-size:12px;color:var(--ink-faint);display:block;margin-bottom:3px}
+  .m3-chip{display:inline-flex;align-items:center;gap:5px;font:inherit;font-size:12.5px;border:1px solid var(--line);background:var(--surface-2);border-radius:8px;padding:3px 8px;margin:0 5px 5px 0;cursor:pointer;color:var(--ink);text-align:left}
+  .m3-chip:hover{border-color:var(--accent)}
+  .m3-chip small{font-weight:700}
+  .m3-chip .why{display:block;font-size:11.5px;color:var(--ink-faint);font-weight:400}
+  .m3-check td{vertical-align:middle;font-size:13px}
+  .m3-check td.c{text-align:center;font-size:15px}
+  @media (max-width:760px){ .m3-intro,.m3-players{grid-template-columns:1fr} .m3-timeline{grid-template-columns:1fr} .m3-tl{border-right:0;border-bottom:1px solid var(--line)} }
+  html[data-view="mobile"] .m3-intro, html[data-view="mobile"] .m3-players{grid-template-columns:1fr}
+  html[data-view="mobile"] .m3-timeline{grid-template-columns:1fr}
   .tab-btn{
     font-family:inherit;font-size:14.5px;font-weight:600;color:var(--ink-soft);
     background:transparent;border:1px solid transparent;border-radius:99px;
@@ -744,6 +774,7 @@
     <button class="tab-btn" data-tab="detail"><span class="tab-ico" aria-hidden="true">🧬</span><span class="tab-lbl">기업별 상세</span><span class="tab-sh">기업</span></button>
     <button class="tab-btn" data-tab="news"><span class="tab-ico" aria-hidden="true">📰</span><span class="tab-lbl">반도체 뉴스</span><span class="tab-sh">뉴스</span></button>
     <button class="tab-btn" data-tab="compare"><span class="tab-ico" aria-hidden="true">📊</span><span class="tab-lbl">전체 비교</span><span class="tab-sh">비교</span></button>
+    <button class="tab-btn" data-tab="map3d"><span class="tab-ico" aria-hidden="true">🧱</span><span class="tab-lbl">3D D램 지도</span><span class="tab-sh">3D램</span></button>
     <button class="tab-btn" data-tab="learn"><span class="tab-ico" aria-hidden="true">📚</span><span class="tab-lbl">반도체 기본 지식</span><span class="tab-sh">지식</span></button>
   </div>
 </nav>
@@ -847,6 +878,24 @@
 
     <div class="section-head"><h2><span class="tag gl">해외</span> 자금·M&A 환경</h2></div>
     <div class="fund-grid" id="funding-gl"></div>
+  </section>
+
+  <!-- ===================== 3D DRAM MAP ===================== -->
+  <section class="panel" id="panel-map3d">
+    <div class="section-head"><h2>🧱 3D D램 공정별 수혜 지도</h2><span class="section-note">26.10 기준 공개 자료로 정리한 공부용 지도예요 · 투자 권유가 아니에요</span></div>
+    <div class="m3-intro">
+      <div class="m3-card"><b>3D D램이 뭔가요?</b><p>지금 D램은 칩 표면에 셀을 바둑판처럼 깐 '단층집'이에요. 10나노 아래로 줄이기 어려워지자 셀을 위로 쌓는 쪽으로 가고 있어요. 먼저 트랜지스터를 세우는 <b>4F² VCT D램</b>(복층)이 오고, 그다음 셀 배열을 수십 층 쌓는 <b>진짜 3D D램</b>(아파트)이 와요. HBM이 '완성된 칩을 쌓아 붙이는 포장 기술'이라면, 3D D램은 '칩 하나 안에서 셀을 쌓는 제조 기술'이에요.</p></div>
+      <div class="m3-card"><b>왜 투자 포인트인가요?</b><p>미세화(노광) 대신 <b>증착·식각</b> 횟수가 크게 늘어나요. 3D 낸드 때 램리서치·도쿄일렉트론·증착 장비가 수혜를 본 것과 같은 구조예요. 장비 회사는 양산 2~3년 전부터 연구개발용 장비를 납품해요. 또 같은 웨이퍼에서 훨씬 많은 용량을 뽑아 2030년대 D램 공급 병목을 푸는 열쇠가 될 수 있어요.</p></div>
+    </div>
+    <div class="m3-timeline" id="m3-timeline"></div>
+    <div class="m3-legend"><span class="m3-st leader">세계 강자</span> 이 공정의 글로벌 1~2위 <span class="m3-st supplier">공급 확인</span> 지금 D램 라인에 같은 종류 장비·소재를 공급 중(3D D램 채택은 아직 미정) <span class="m3-st candidate">후보</span> 기술적으로 연관되지만 3D D램 공급은 확인 안 됨 · 숫자는 1년 수익률 · 누르면 기업 상세(보드에 있는 회사)</div>
+    <div class="m3-steps" id="m3-steps"></div>
+    <div class="section-head" style="margin-top:22px"><h2>🎯 '제2의 한미반도체' 체크리스트</h2><span class="section-note">한미반도체가 HBM에서 대박 난 4가지 조건에 국내 후보를 대입했어요 (판단)</span></div>
+    <div class="table-wrap"><table class="m3-check"><thead><tr><th>기업</th><th>① 새로 커지는 공정인가</th><th>② 공급사가 적은가</th><th>③ 1등 고객과 붙어 있나</th><th>④ 아직 작은가(배수 여력)</th><th class="num">1년</th><th>한 줄</th></tr></thead><tbody id="m3-check"></tbody></table></div>
+    <div class="divider-note">
+      <b>주의.</b> 3D D램 본격 양산은 2028~2030년이라, 지금 장비주 주가는 3D D램보다 <b>현재 D램 증설 사이클</b>(1b 전환·메모리 슈퍼사이클)에 묶여 움직여요. 2027~2028년 신규 메모리 공장이 가동되며 증설이 꺾이면 3D D램 기대와 상관없이 함께 빠질 수 있어요. 한미반도체는 HBM 수요가 1~2년 만에 폭발해서 대박이 났지만, 3D D램은 수율 문제로 천천히 전환될 가능성이 높아요. '후보'는 기술적 연관성일 뿐 수주가 확인된 게 아니에요.<br>
+      <b>확인할 신호</b> 메모리 3사의 3D D램 파일럿 라인 장비 발주 · 장비사 실적 발표의 "3D D램 R&amp;D 장비" 언급 · 삼성 10a(VCT) 품질 테스트 진입(2027년 목표) · IEDM·VLSI 학회의 적층 단수·수율 발표
+    </div>
   </section>
 
   <!-- ===================== LEARN ===================== -->
@@ -1944,6 +1993,110 @@
   fundingKR.forEach(function(f){ fKR.insertAdjacentHTML('beforeend', fundCard(f)); });
   var fGL = document.getElementById('funding-gl');
   fundingGL.forEach(function(f){ fGL.insertAdjacentHTML('beforeend', fundCard(f)); });
+
+
+  /* ---------------- 3D DRAM PROCESS MAP ----------------
+     Process steps of VCT / stacked 3D DRAM and who supplies each, as of 26.10. st: leader = global top
+     player for the step, supplier = already ships this kind of tool/material to DRAM lines today,
+     candidate = technically related, no confirmed 3D DRAM business. Prices via api/prices?extra=,
+     1-year returns via api/history. */
+  var M3P = {
+    AMAT:{n:'어플라이드 머티어리얼즈', k:'AMAT', r:'gl', id:'amat'}, LRCX:{n:'램리서치', k:'LRCX', r:'gl', id:'lamresearch'},
+    TEL:{n:'도쿄일렉트론', k:'8035.T', r:'gl', id:'tel'}, KLA:{n:'KLA', k:'KLAC', r:'gl', id:'kla'},
+    ASMI:{n:'ASM인터내셔널', k:'ASM.AS', r:'gl'}, KOK:{n:'고쿠사이일렉트릭', k:'6525.T', r:'gl'},
+    BESI:{n:'BESI', k:'BESI.AS', r:'gl', id:'besi'}, ENTG:{n:'엔테그리스', k:'ENTG', r:'gl', id:'entegris'},
+    EUGENE:{n:'유진테크', k:'084370', r:'kr', m:'KOSDAQ'}, JUSUNG:{n:'주성엔지니어링', k:'036930', r:'kr', m:'KOSDAQ', id:'jusung'},
+    WONIK:{n:'원익IPS', k:'240810', r:'kr', m:'KOSDAQ', id:'wonikips'}, PSK:{n:'피에스케이', k:'319660', r:'kr', m:'KOSDAQ'},
+    TES:{n:'테스', k:'095610', r:'kr', m:'KOSDAQ'}, NEXTIN:{n:'넥스틴', k:'348210', r:'kr', m:'KOSDAQ'},
+    AUROS:{n:'오로스테크놀로지', k:'322310', r:'kr', m:'KOSDAQ'}, PARK:{n:'파크시스템스', k:'140860', r:'kr', m:'KOSDAQ'},
+    DNF:{n:'디엔에프', k:'092070', r:'kr', m:'KOSDAQ'}, HANSOL:{n:'한솔케미칼', k:'014680', r:'kr', m:'KOSPI'},
+    LAKE:{n:'레이크머티리얼즈', k:'281740', r:'kr', m:'KOSDAQ'}, TEMC:{n:'티이엠씨', k:'425040', r:'kr', m:'KOSDAQ', id:'temc'},
+    HANMI:{n:'한미반도체', k:'042700', r:'kr', m:'KOSPI', id:'hanmisemi'}
+  };
+  var M3_TIMELINE = [
+    ['2026', '삼성 10a(VCT) 작동 칩 확보(3월)', true], ['2026~2028', '장비 연구개발 납품 구간', true], ['2027', 'VCT 품질 테스트 목표', false],
+    ['2028', 'VCT(4F²) D램 양산 목표', false], ['2030 전후', '진짜 3D D램(삼성 10d·SK하이닉스 VG)', false]
+  ];
+  var M3_STEPS = [
+    {t:'Si/SiGe 다층 에피', s:'아파트 골조 쌓기', heat:'high', d:'실리콘과 실리콘게르마늄을 수십 층 번갈아 키워 셀 층을 만들어요. 3D D램의 출발점이고 층수만큼 공정이 늘어나요. 연구 자료가 꼽는 3대 핵심 공정 중 하나예요.',
+     gl:[['AMAT','leader','에피 장비 세계 1위권'],['ASMI','leader','에피·ALD 강자']], kr:[['EUGENE','supplier','D램용 에피 증착(LPCVD)을 삼성·SK하이닉스·마이크론에 공급']]},
+    {t:'고종횡비 수직 식각', s:'층을 관통하는 깊은 구멍', heat:'high', d:'쌓은 층을 한 번에 뚫는 깊은 구멍과 계단 구조를 만들어요. 3D 낸드와 같은 종류의 공정이라 기존 강자가 유리해요.',
+     gl:[['LRCX','leader','3D 낸드 식각 절대 강자'],['TEL','leader','극저온 식각으로 추격']], kr:[]},
+    {t:'측면 선택 식각 (SiGe 제거)', s:'골조 중 희생층만 녹이기', heat:'high', d:'구멍 옆으로 SiGe 층만 골라 녹여 셀이 들어갈 빈 공간을 만들어요. 실리콘은 거의 건드리지 않아야 해서 3D 낸드보다 까다로운 공정이에요. 연구 자료가 꼽는 3대 핵심 공정 중 하나예요.',
+     gl:[['TEL','leader','선택 식각·세정'],['LRCX','leader','선택적 식각'],['AMAT','leader','선택적 식각']], kr:[['PSK','candidate','건식 스트립·세정 장비 강자'],['TES','candidate','가스 식각·증착 장비']]},
+    {t:'커패시터·게이트 ALD', s:'좁은 틈 안에 막 입히기', heat:'high', d:'만든 빈 공간 안쪽에 데이터를 담는 고유전율(high-k) 막과 전극을 원자 한 층씩 입혀요. 3D 공간이라 ALD 난도와 횟수가 크게 늘어나요. 3대 핵심 공정 중 하나예요.',
+     gl:[['ASMI','leader','단일 웨이퍼 ALD 최대 수혜 후보'],['KOK','leader','배치 ALD(3D 낸드 강자)'],['TEL','leader','증착 전반'],['AMAT','leader','증착 점유율 약 40%']], kr:[['JUSUNG','supplier','SK하이닉스 D램 커패시터 high-k ALD 단독 공급'],['WONIK','supplier','삼성 중심 ALD·CVD'],['EUGENE','supplier','배치형 증착 장비']]},
+    {t:'IGZO 산화물 채널', s:'새 트랜지스터 소재', heat:'mid', d:'전하가 덜 새는 산화물 반도체(IGZO)로 트랜지스터를 만들어 작은 셀에서도 데이터를 오래 지켜요. 메모리에는 새로운 소재라 증착 장비와 원료가 새로 필요해요.',
+     gl:[['AMAT','leader','디스플레이 산화물 증착 경험']], kr:[['JUSUNG','candidate','디스플레이 IGZO 증착 경험(메모리 적용 미확인)'],['LAKE','candidate','증착용 금속 원료']]},
+    {t:'증착 원료·특수가스', s:'공정 횟수만큼 더 쓰는 소모품', heat:'mid', d:'증착·식각이 늘면 프리커서(증착 원료)와 특수가스 사용량도 늘어나요. 장비보다 덜 극적이지만 양산이 시작되면 꾸준히 팔리는 쪽이에요.',
+     gl:[['ENTG','leader','반도체 소재·필터']], kr:[['DNF','supplier','high-k 등 D램 증착 프리커서'],['HANSOL','supplier','프리커서·고순도 과산화수소'],['LAKE','supplier','TMA·high-k 프리커서'],['TEMC','supplier','특수가스(3D D램 수요 대응 언급)']]},
+    {t:'웨이퍼 하이브리드 본딩', s:'셀과 주변회로를 따로 만들어 붙이기', heat:'mid', d:'셀 웨이퍼와 주변회로 웨이퍼를 따로 만든 뒤 구리끼리 직접 붙여요. 셀을 높은 온도로 만들어도 회로가 상하지 않아요. 삼성이 10나노 이하 로드맵을 하이브리드 본딩 쪽으로 조정했다는 보도가 있어요. 웨이퍼끼리 붙이는 방식이라, 칩을 쌓는 HBM용 본더와는 장비가 달라요.',
+     gl:[['TEL','leader','웨이퍼 본딩'],['AMAT','leader','하이브리드 본딩 공정'],['BESI','leader','칩 하이브리드 본더 1위(간접)']], kr:[['HANMI','candidate','칩 하이브리드 본더 개발 — 3D D램 칩으로 HBM을 만들 때 연결(간접)']]},
+    {t:'계측·검사', s:'보이지 않는 내부 들여다보기', heat:'low', d:'층이 쌓일수록 내부 구조를 재고 결함을 찾기 어려워져 계측·검사 장비가 더 중요해져요. 국내 후보들은 1년 수익률이 낮아 상대적으로 덜 반영된 쪽이에요.',
+     gl:[['KLA','leader','계측·검사 절대 강자']], kr:[['NEXTIN','candidate','웨이퍼 패턴 검사'],['AUROS','candidate','오버레이 계측'],['PARK','candidate','원자현미경 계측']]}
+  ];
+  var M3_CHECK = [
+    ['EUGENE', 'y', 'm', 'y', 'y', '3D 골조(에피)를 쌓는 장비를 메모리 3사에 공급 — 가장 공식에 가까운 후보'],
+    ['JUSUNG', 'y', 'y', 'y', 'm', '3D 커패시터 ALD 단독 공급 + IGZO 경험. 다만 1년 새 8배 넘게 올라 이미 크게 반영'],
+    ['WONIK', 'y', 'm', 'y', 'm', '삼성 쪽 ALD·CVD. 삼성이 3D D램을 서두를수록 유리'],
+    ['PSK', 'm', 'm', 'y', 'y', '측면 선택 식각이 세정·스트립 장비 영역으로 넘어오면 수혜'],
+    ['TES', 'm', 'm', 'm', 'y', '가스 식각·증착 장비, 3D 적용은 확인 필요'],
+    ['NEXTIN', 'm', 'm', 'm', 'y', '3D 구조 검사 수요, 1년 수익률이 낮아 덜 반영'],
+    ['DNF', 'm', 'm', 'y', 'y', '증착 횟수만큼 원료 사용 증가, 양산 이후 꾸준한 수혜형'],
+    ['HANMI', 'n', 'y', 'y', 'n', 'HBM의 주인공이지만 3D D램 공정에는 직접 해당하지 않음']
+  ];
+  var m3Q = {}, m3H = {}, m3Loaded = false;
+  function m3Pct(v){ return v == null ? '' : '<small style="color:'+(v >= 0 ? 'var(--good,#2f8f5b)' : 'var(--crit,#b7473a)')+'">'+(v > 0 ? '+' : '')+v.toFixed(0)+'%</small>'; }
+  function m3Chip(e){
+    var p = M3P[e[0]]; if(!p) return '';
+    return '<button type="button" class="m3-chip" data-m3="'+e[0]+'"><span><span class="m3-st '+e[1]+'">'+({leader:'강자', supplier:'공급', candidate:'후보'})[e[1]]+'</span> '+esc(p.n)+' '+m3Pct(m3H[e[0]])+
+      '<span class="why">'+esc(e[2])+'</span></span></button>';
+  }
+  function renderMap3d(){
+    document.getElementById('m3-timeline').innerHTML = M3_TIMELINE.map(function(x){ return '<div class="m3-tl'+(x[2] ? ' now' : '')+'"><b>'+x[0]+'</b>'+esc(x[1])+'</div>'; }).join('');
+    var HEAT = {high:['','핵심 병목 후보'], mid:['mid','수요 증가'], low:['low','중요도 상승']};
+    document.getElementById('m3-steps').innerHTML = M3_STEPS.map(function(s, i){
+      var h = HEAT[s.heat];
+      return '<div class="m3-step"><div class="m3-no">'+(i + 1)+'</div><div><h3>'+esc(s.t)+' <small>'+esc(s.s)+'</small> <span class="m3-heat '+h[0]+'">'+h[1]+'</span></h3><p>'+esc(s.d)+'</p>'+
+        '<div class="m3-players"><div class="m3-side"><b>🌏 해외</b>'+(s.gl.map(m3Chip).join('') || '<span class="note">—</span>')+'</div>'+
+        '<div class="m3-side"><b>🇰🇷 국내</b>'+(s.kr.map(m3Chip).join('') || '<span class="note">뚜렷한 국내 강자 없음</span>')+'</div></div></div></div>';
+    }).join('');
+    var MARK = {y:'✅', m:'🔶', n:'❌'};
+    document.getElementById('m3-check').innerHTML = M3_CHECK.map(function(r){
+      var p = M3P[r[0]];
+      return '<tr data-m3="'+r[0]+'" style="cursor:pointer"><td><b>'+esc(p.n)+'</b></td><td class="c">'+MARK[r[1]]+'</td><td class="c">'+MARK[r[2]]+'</td><td class="c">'+MARK[r[3]]+'</td><td class="c">'+MARK[r[4]]+'</td><td class="num">'+(m3Pct(m3H[r[0]]) || '—')+'</td><td>'+esc(r[5])+'</td></tr>';
+    }).join('');
+  }
+  function loadMap3d(){
+    if(m3Loaded || !/^https?:$/.test(location.protocol)) return;
+    m3Loaded = true;
+    var keys = Object.keys(M3P), queue = keys.slice();
+    function next(){
+      var id = queue.shift(); if(!id) return;
+      var p = M3P[id];
+      fetch('api/history?key='+encodeURIComponent(p.k)+'&region='+p.r+'&market='+encodeURIComponent(p.m || ''), {cache:'no-store'})
+        .then(function(r){ return r.ok ? r.json() : null; }).catch(function(){ return null; })
+        .then(function(d){
+          if(d && d.ok && d.points && d.points.length > 52){
+            var pts = d.points, last = pts[pts.length - 1].c, yearAgo = Date.now() / 1000 - 365 * 86400, i = 0;
+            while(i < pts.length - 1 && pts[i].t < yearAgo) i++;
+            m3H[id] = (last / pts[i].c - 1) * 100;
+          }
+          if(!queue.length || Object.keys(m3H).length % 5 === 0) renderMap3d();
+          next();
+        });
+    }
+    for(var k = 0; k < 4; k++) next();
+  }
+  document.getElementById('panel-map3d').addEventListener('click', function(e){
+    var el = e.target.closest('[data-m3]'); if(!el) return;
+    var p = M3P[el.dataset.m3];
+    if(p && p.id && typeof selectCompany === 'function'){
+      selectCompany(p.id); var b = document.querySelector('.tab-btn[data-tab="detail"]'); if(b) b.click();
+    }
+  });
+  document.querySelector('.tab-btn[data-tab="map3d"]').addEventListener('click', function(){ renderMap3d(); loadMap3d(); });
+  renderMap3d();
 
   /* ---------------- TABS ---------------- */
   var tabBtns = document.querySelectorAll('.tab-btn');
