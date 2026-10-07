@@ -77,6 +77,27 @@ def embedded_events(text: str) -> str:
     return match.group(1) if match else ""
 
 
+def recent_findings(board: Board, days: int = 3) -> str:
+    """Summaries of company analyses finished in the last few days. Web search often misses same-day
+    Korean news, while a per-company analysis (searched by name) catches it; the calendar should agree."""
+    lines = []
+    for path in sorted((board.data_dir / "analysis").glob("*.json")):
+        try:
+            item = json.loads(path.read_text(encoding="utf-8"))
+        except (OSError, ValueError):
+            continue
+        summary = ((item.get("data") or {}).get("summary") or "").strip()
+        if item.get("status") == "done" and summary and time.time() - path.stat().st_mtime < days * 86400:
+            lines.append(f"- {item.get('name')} ({str(item.get('finishedAt', ''))[:10]} 조사): {summary[:400]}")
+    return "\n".join(lines)
+
+
+def _events_text(events: list[dict]) -> str:
+    """The last AI-refreshed calendar, in the same one-line-per-event shape the page source uses."""
+    return "\n".join(json.dumps({k: e.get(k) for k in ("date", "label", "desc", "status", "past", "region")}, ensure_ascii=False)
+                     for e in events)
+
+
 def embedded_macro(text: str) -> str:
     match = re.search(r'<div class="macro"[^>]*>(.*?)\n    </div>\n  </div>\n</header>', text, re.S)
     if not match:
@@ -161,22 +182,26 @@ def schema(board: Board, ids: list[str], part: str) -> dict:
             "required": [*keep, "summary"]}
 
 
-def prompt(board: Board, text: str, ids: dict[str, str], part: str, since: dict[str, str], recent: list[dict]) -> str:
+def prompt(board: Board, text: str, ids: dict[str, str], part: str, since: dict[str, str], recent: list[dict],
+           old_events: list[dict] | None = None) -> str:
     today = time.strftime("%Y-%m-%d")
     cats = ", ".join(f"{k}({v})" for k, v in board.news_cats.items())
     names = ", ".join(f"{k}={v}" for k, v in ids.items())
     regions = company_names(text)
+    findings = recent_findings(board)
     calendar = f"""[촉매 캘린더(events)] 현재 내용 ({since["calendar"]} 무렵까지 반영):
-{embedded_events(text)}
+{_events_text(old_events) if old_events else embedded_events(text)}
 
 - {board.calendar_hint}
 - 국내와 해외를 모두 다루세요. 각 이벤트에 region(kr/gl)을 붙이고, 국내 일정만 채우지 마세요. 해외(gl) 일정은 예정·최근 합쳐 최소 8건이 되도록 검색해서 채우세요(해외 기업의 FDA PDUFA·승인, 임상 결과 발표, 실적 발표일, 주요 학회, 美 정책 등).
 - 수록 국내 기업: {", ".join(regions["kr"])}
 - 수록 해외 기업: {", ".join(regions["gl"])}
+- 오늘 날짜가 지났거나 이번 달에 걸친 예정(past=false) 항목은 하나씩 '기업명 + 일정 + 오늘/최신'으로 검색해서 결과를 꼭 확인하세요. 이미 결정·발표된 일은 past=true 로 바꾸고 결과(허가·실패·연기 등)를 label 과 desc 에 쓰세요. 예전 기사의 '예정'·'목표' 표현을 그대로 옮기지 마세요.
 - 위 목록을 바탕으로 최신 전체 목록을 다시 작성하세요. 이미 일어난 일은 past=true 로 바꾸고 결과를 반영해 설명을 고치세요.
 - 예정 일정이 연기·취소·확정되었으면 반영하고, 새로 확인한 예정 일정은 추가하세요. 너무 오래된(약 2개월 전) 항목은 빼도 됩니다.
 - 날짜순(오래된 것 → 먼 미래)으로 정렬하세요. 확인되지 않은 날짜는 '10월 하순'처럼 대략적으로 쓰고 desc 에 '추정'이라고 표시하세요.
 
+{"[최근 기업 분석에서 확인된 사실] 아래 내용과 캘린더가 어긋나면 아래를 우선하세요(이미 일어난 일은 past=true):" + chr(10) + findings + chr(10) if findings else ""}
 [상단 지표 4칸(macro)] 현재 내용:
 {embedded_macro(text)}
 
@@ -290,7 +315,7 @@ def _run(board: Board, part: str) -> None:
         parts = dict(old.get("parts") or {})
         since = {"calendar": str(parts.get("calendar", ""))[:10] or _page_date(text),
                  "news": max((n.get("date", "") for n in old_news), default="") or _page_date(text)}
-        data = run_claude(board, prompt(board, text, ids, part, since, old_news), schema(board, list(ids), part), web=True)
+        data = run_claude(board, prompt(board, text, ids, part, since, old_news, old.get("events")), schema(board, list(ids), part), web=True)
         new = dict(old)
         finished = time.strftime("%Y-%m-%d %H:%M:%S")
         if part in ("all", "calendar"):
