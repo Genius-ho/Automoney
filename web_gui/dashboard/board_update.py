@@ -188,7 +188,7 @@ def prompt(board: Board, text: str, ids: dict[str, str], part: str, since: dict[
 {have}
 - 카테고리: {cats}
 - 수록 기업 id: {names}
-- 최신순으로, 중요한 소식 위주로.
+- 최신순으로, 중요한 소식 위주로. 반드시 오늘·어제 소식부터 검색하세요('{board.topic} 오늘' 같은 검색어로). 허가·임상 결과·대형 계약·주요 종목 신고가는 빠뜨리지 마세요.
 - summary·why 는 초보 투자자도 이해할 수 있는 한국어로. 확인한 사실만 쓰고 url 은 실제 방문한 기사만."""
     body = "\n\n".join({"calendar": [calendar], "news": [news]}.get(part, [calendar, news]))
     return f"""오늘은 {today}입니다. {board.topic} 투자 학습용 대시보드의 큐레이션 콘텐츠를 최신으로 갱신해 주세요.
