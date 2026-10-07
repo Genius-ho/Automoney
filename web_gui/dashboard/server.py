@@ -252,7 +252,7 @@ class Handler(BaseHTTPRequestHandler):
                     {"Set-Cookie": f"mumae_v2_session=; HttpOnly; SameSite=Strict; Path=/; Max-Age=0{self._cookie_flags()}"},
                 )
                 return
-            if parsed.path in {"/bio/api/analyze", "/semi/api/analyze", "/bio/api/update", "/semi/api/update", "/semi/api/analyze-all", "/crypto/api/update", "/ai/api/update"}:
+            if parsed.path in {"/bio/api/analyze", "/semi/api/analyze", "/bio/api/update", "/semi/api/update", "/semi/api/analyze-all", "/bio/api/analyze-all", "/crypto/api/update", "/ai/api/update"}:
                 # Neither board has a login of its own; accept same-origin requests only.
                 origin = self.headers.get("Origin") or ""
                 if urlparse(origin).netloc != (self.headers.get("Host") or ""):
@@ -262,8 +262,8 @@ class Handler(BaseHTTPRequestHandler):
                     self._json(HTTPStatus.OK, ai.start_update())
                 elif parsed.path == "/crypto/api/update":
                     self._json(HTTPStatus.OK, crypto.start_update())
-                elif parsed.path == "/semi/api/analyze-all":
-                    self._json(HTTPStatus.OK, semi.start_analysis_all())
+                elif parsed.path.endswith("/api/analyze-all"):
+                    self._json(HTTPStatus.OK, mod.start_analysis_all())
                 elif parsed.path.endswith("/api/update"):
                     self._json(HTTPStatus.OK, mod.start_update(parse_qs(parsed.query).get("part", ["all"])[0]))
                 else:

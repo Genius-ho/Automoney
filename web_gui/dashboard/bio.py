@@ -352,6 +352,7 @@ def _prompt(name: str, key: str, market: str, region: str) -> str:
 대상: {target}
 {extra}
 웹 검색으로 최신 자료를 충분히 찾아서 조사하세요:
+- 가장 먼저 '{name} 오늘' '{name} 최근 뉴스'로 검색해서 최근 1주(특히 오늘·어제) 소식을 확인하세요. 허가·임상 결과·계약 같은 새 사건이 있으면 summary·pipeline·clinical 에 꼭 반영하고, 예전 기사의 '예정'·'전망' 표현을 그대로 쓰지 마세요.
 - 핵심 기술/플랫폼, 주요 파이프라인(단계·적응증·효과 데이터·다음 이벤트), 최근 임상 결과
 - 기술수출·파트너십·유상증자 등 자금 현황, 현금 소진 리스크
 - 증권사/애널리스트 목표주가와 의견 (국내는 최근 증권사 리포트, 해외는 컨센서스)
@@ -440,3 +441,104 @@ UPDATE_BOARD = board_update.Board(
 
 def start_update(part: str = "all") -> dict[str, object]:
     return board_update.start_update(UPDATE_BOARD, part)
+
+
+# ---------------------------------------------------------------- refresh every company's AI analysis
+BATCH_PATH = BIO_DATA / "update" / "batch.json"
+BATCH_FRESH = 6 * 3600      # a finished analysis younger than this is skipped, so an aborted batch can resume
+BATCH_PARALLEL = 2
+_batch_running = False
+
+
+def _batch_targets() -> list[dict]:
+    """Every company on the page plus any analysed one (e.g. user-added), as start_analysis bodies."""
+    found: dict[str, dict] = {}
+    text = BIO_PAGE.read_text(encoding="utf-8")
+    for cid, name, ticker, region in re.findall(r'id:"([^"]+)", name:"([^"]+)", ticker:"([^"]*)", region:"(kr|gl)"', text):
+        key, dot, market = ticker.partition("·")
+        key = key.strip().upper()
+        if not dot and key != "비상장":     # no symbol (e.g. the XBI ETF row) - not a company to analyse
+            continue
+        if key == "비상장":     # unlisted companies are keyed by their page id, like aiKey() in the page
+            key = "PRIV_" + re.sub(r"[^A-Z0-9]", "", cid.upper())[:24]
+        if KEY_RE.match(key) or PRIVATE_RE.match(key):
+            found[key] = {"key": key, "name": name, "market": market.strip(), "region": region}
+    for path in ANALYSIS_DIR.glob("*.json") if ANALYSIS_DIR.exists() else []:
+        try:
+            meta = json.loads(path.read_text(encoding="utf-8"))
+            found.setdefault(meta["key"], {k: meta[k] for k in ("key", "name", "market", "region")})
+        except (OSError, ValueError, KeyError):
+            continue
+    return list(found.values())
+
+
+def _is_fresh(key: str) -> bool:
+    path = _analysis_path(key)
+    try:
+        return json.loads(path.read_text(encoding="utf-8")).get("status") == "done" and time.time() - path.stat().st_mtime < BATCH_FRESH
+    except (OSError, ValueError):
+        return False
+
+
+def _write_batch(payload: dict) -> None:
+    BATCH_PATH.parent.mkdir(parents=True, exist_ok=True)
+    tmp = BATCH_PATH.with_suffix(".tmp")
+    tmp.write_text(json.dumps(payload, ensure_ascii=False, indent=1), encoding="utf-8")
+    tmp.replace(BATCH_PATH)
+
+
+def _run_batch(targets: list[dict]) -> None:
+    global _batch_running
+    state = {"status": "running", "startedAt": time.strftime("%Y-%m-%d %H:%M:%S"), "total": len(targets),
+             "done": 0, "failed": 0, "current": [], "error": ""}
+    pending, active = list(targets), {}
+    try:
+        while pending or active:
+            with _jobs_lock:
+                for key in [k for k in active if k not in _running]:
+                    name = active.pop(key)
+                    try:
+                        result = json.loads(_analysis_path(key).read_text(encoding="utf-8"))
+                    except (OSError, ValueError):
+                        result = {}
+                    if result.get("status") == "done":
+                        state["done"] += 1
+                    else:
+                        state["failed"] += 1
+                        if "limit" in str(result.get("error", "")).lower():
+                            raise RuntimeError("사용량 한도에 걸려 중단했어요: " + str(result.get("error", ""))[:200])
+            while pending and len(active) < BATCH_PARALLEL:
+                target = pending[0]
+                try:
+                    start_analysis({**target, "force": True})
+                except ValueError:      # another analysis already holds the slots; retry shortly
+                    break
+                active[target["key"]] = target["name"]
+                pending.pop(0)
+            state["current"] = list(active.values())
+            _write_batch(state)
+            time.sleep(10)
+        state["status"] = "done"
+    except Exception as error:  # noqa: BLE001 - report on the page
+        state["status"], state["error"] = "error", str(error)[:300]
+    finally:
+        state["current"] = []
+        state["finishedAt"] = time.strftime("%Y-%m-%d %H:%M:%S")
+        _write_batch(state)
+        _batch_running = False
+
+
+def start_analysis_all() -> dict[str, object]:
+    global _batch_running
+    with _jobs_lock:
+        if _batch_running:
+            return {"ok": True, "status": "running"}
+        _batch_running = True
+    targets = [t for t in _batch_targets() if not _is_fresh(t["key"])]
+    if not targets:
+        _batch_running = False
+        return {"ok": True, "status": "done", "total": 0}
+    _write_batch({"status": "running", "startedAt": time.strftime("%Y-%m-%d %H:%M:%S"), "total": len(targets),
+                  "done": 0, "failed": 0, "current": [], "error": ""})
+    threading.Thread(target=_run_batch, args=(targets,), name="bio-ai-all", daemon=True).start()
+    return {"ok": True, "status": "running", "total": len(targets)}

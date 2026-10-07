@@ -746,6 +746,8 @@
       <span class="meta-pill"><span class="dot"></span><span id="upd-date">업데이트 2026.09.22</span></span>
       <button type="button" class="upd-btn" data-upd="all" data-label="🔄 전체 AI 업데이트" hidden title="Claude Sonnet 5.5 (medium)가 웹 검색으로 캘린더·뉴스·지표를 한 번에 갱신해요">🔄 전체 AI 업데이트</button>
       <span class="upd-msg" data-upd-msg="all"></span>
+      <button type="button" class="upd-btn" id="batch-btn" hidden title="모든 종목의 AI 분석(기업 개요·파이프라인·자금·목표주가)을 다시 조사해요. 종목 수가 많아 1시간 이상 걸려요">🔄 전 종목 AI 업데이트</button>
+      <span class="upd-msg" id="batch-msg"></span>
       <span class="meta-pill">정보 제공 목적 · 투자 권유 아님</span>
       <div class="view-switch" role="group" aria-label="화면 보기 선택">
         <button type="button" data-view-mode="auto">자동</button>
@@ -3010,6 +3012,39 @@
         fetch('api/update?part='+part, {method:'POST'}).then(function(r){ return r.json(); }).then(function(d){
           if(!d.ok){ alert(d.error || '업데이트 요청 실패'); loadUpdate(); return; }
           loadUpdate();
+    /* refresh every company's AI analysis: POST api/analyze-all queues them on the server (2 at a time);
+       update/batch.json carries the progress */
+    var batchBtn = document.getElementById('batch-btn'), batchMsg = document.getElementById('batch-msg');
+    var batchPoll = null, batchSeen = -1;
+    var loadBatch = function(){
+      getJSON('update/batch.json').then(function(b){
+        var running = !!b && b.status === 'running';
+        batchBtn.disabled = running;
+        batchBtn.textContent = running ? '⏳ 종목 업데이트 중…' : '🔄 전 종목 AI 업데이트';
+        batchMsg.classList.toggle('err', !!b && b.status === 'error');
+        batchMsg.textContent = !b ? '' : running ? (b.done+b.failed)+'/'+b.total+' 완료'+(b.failed ? ' (실패 '+b.failed+')' : '')+' · 진행 중: '+(b.current||[]).join(', ') :
+          b.status === 'error' ? '중단: '+(b.error||'')+' ('+(b.done||0)+'/'+b.total+' 완료)' :
+          '마지막 전 종목 업데이트 '+String(b.finishedAt||'').slice(0,16)+' · 갱신 '+b.done+'개'+(b.failed ? ', 실패 '+b.failed+'개' : '');
+        var progress = b ? b.done + b.failed : 0;
+        if(b && progress !== batchSeen){    // a company finished: pull the fresh analyses in
+          if(batchSeen !== -1) baseCompanies().forEach(function(c){ if(aiKey(c)) loadAnalysis(c, rerender); });
+          batchSeen = progress;
+        }
+        clearTimeout(batchPoll);
+        if(running) batchPoll = setTimeout(loadBatch, 10000);
+      });
+    };
+    batchBtn.hidden = false;
+    batchBtn.addEventListener('click', function(){
+      if(!confirm('모든 종목의 AI 분석을 웹 검색으로 다시 조사합니다 (Claude Sonnet 5.5 · medium, 2개씩 진행, 1시간 이상 소요). 최근 6시간 안에 갱신된 종목은 건너뜁니다. 진행할까요?')) return;
+      batchBtn.disabled = true;
+      fetch('api/analyze-all', {method:'POST'}).then(function(r){ return r.json(); }).then(function(d){
+        if(!d.ok){ alert(d.error || '요청 실패'); }
+        else if(d.status === 'done') alert('모든 종목이 최근 6시간 안에 이미 갱신돼 있어요.');
+        batchSeen = -1; loadBatch();
+      }).catch(function(){ alert('요청 실패'); loadBatch(); });
+    });
+    loadBatch();
         }).catch(function(){ alert('업데이트 요청 실패'); loadUpdate(); });
       });
     });
