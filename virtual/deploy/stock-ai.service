@@ -1,0 +1,17 @@
+[Unit]
+Description=Stock AI paper trading web application
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=stockai
+WorkingDirectory=/opt/stock-ai
+ExecStart=/opt/stock-ai/.venv-stock-ai/bin/python /opt/stock-ai/stock_ai_analyzer.py
+Restart=on-failure
+RestartSec=10
+Environment=TZ=Asia/Seoul
+Environment=PYTHONUNBUFFERED=1
+
+[Install]
+WantedBy=multi-user.target

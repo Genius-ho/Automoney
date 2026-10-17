@@ -30,10 +30,12 @@ from web_gui.dashboard import bio  # noqa: E402
 from web_gui.dashboard import semi  # noqa: E402
 from web_gui.dashboard import crypto  # noqa: E402
 from web_gui.dashboard import ai  # noqa: E402
+from web_gui.dashboard import virtual  # noqa: E402
 from telegram_bot import TelegramCommandLoop  # noqa: E402
 from toss_api import TossApiError  # noqa: E402
 from web_gui.dashboard.service import DashboardService, EngineDashboardService  # noqa: E402
 
+VIRTUAL_MAX_BODY = 12_000_000  # the analysis form can carry a pasted CSV of up to 10 MB
 STATIC_FILES = {"/": "index.html", "/index.html": "index.html", "/app.js": "app.js", "/styles.css": "styles.css"}
 
 
@@ -148,10 +150,13 @@ class Handler(BaseHTTPRequestHandler):
                 self._validate()
                 self._json(HTTPStatus.OK, {"ok": True, "etf_overview": self.service.etf_overview()})
                 return
-            if parsed.path in {"/bio", "/semi", "/crypto", "/ai"}:
+            if parsed.path in {"/bio", "/semi", "/crypto", "/ai", "/virtual"}:
                 self.send_response(HTTPStatus.MOVED_PERMANENTLY)
                 self.send_header("Location", parsed.path + "/")
                 self.end_headers()
+                return
+            if parsed.path.startswith("/virtual/"):
+                self._virtual("GET", parsed)
                 return
             if parsed.path == "/bio/api/history":
                 q = parse_qs(parsed.query)
@@ -230,6 +235,40 @@ class Handler(BaseHTTPRequestHandler):
         except ValueError as error:
             self._json(HTTPStatus.BAD_REQUEST, {"ok": False, "error": str(error)})
 
+    def _virtual(self, method: str, parsed) -> None:
+        """Relay to the virtual investment app. Like the study boards it has no login of its own,
+        so anything that changes state must come from this page (same origin)."""
+        body = None
+        if method != "GET":
+            origin = self.headers.get("Origin") or ""
+            if urlparse(origin).netloc != (self.headers.get("Host") or ""):
+                raise PermissionError("허용되지 않은 요청 출처입니다.")
+            length = int(self.headers.get("Content-Length", "0"))
+            if length > VIRTUAL_MAX_BODY:
+                raise ValueError("요청 본문이 너무 큽니다.")
+            body = self.rfile.read(length) if length > 0 else b""
+        status, headers, data = virtual.relay(
+            method, parsed.path[len(virtual.PREFIX):], parsed.query, body, self.headers.get("Content-Type"))
+        self.send_response(status)
+        for key, value in headers.items():
+            self.send_header(key, value)
+        self.send_header("Content-Length", str(len(data)))
+        self._headers()
+        self.end_headers()
+        self.wfile.write(data)
+
+    def do_PUT(self) -> None:  # noqa: N802
+        parsed = urlparse(self.path)
+        try:
+            if parsed.path.startswith("/virtual/"):
+                self._virtual("PUT", parsed)
+                return
+            self._json(HTTPStatus.NOT_FOUND, {"ok": False, "error": "경로를 찾을 수 없습니다."})
+        except PermissionError as error:
+            self._json(HTTPStatus.UNAUTHORIZED, {"ok": False, "error": str(error)})
+        except ValueError as error:
+            self._json(HTTPStatus.BAD_REQUEST, {"ok": False, "error": str(error)})
+
     def do_POST(self) -> None:  # noqa: N802
         parsed = urlparse(self.path)
         try:
@@ -251,6 +290,9 @@ class Handler(BaseHTTPRequestHandler):
                     {"ok": True},
                     {"Set-Cookie": f"mumae_v2_session=; HttpOnly; SameSite=Strict; Path=/; Max-Age=0{self._cookie_flags()}"},
                 )
+                return
+            if parsed.path.startswith("/virtual/"):
+                self._virtual("POST", parsed)
                 return
             if parsed.path in {"/bio/api/analyze", "/semi/api/analyze", "/bio/api/update", "/semi/api/update", "/semi/api/analyze-all", "/bio/api/analyze-all", "/crypto/api/update", "/ai/api/update"}:
                 # Neither board has a login of its own; accept same-origin requests only.
@@ -366,6 +408,7 @@ def run(
     semi.start_refreshers()
     crypto.start()
     ai.start()
+    virtual.start()
     url = f"http://127.0.0.1:{port}/"
     print(f"Mumae CLI Engine + Emergency Dashboard: {url}")
     print(f"Shared data: {Handler.service.data_dir}")
@@ -378,6 +421,7 @@ def run(
         pass
     finally:
         stopped.set()
+        virtual.stop()
         if telegram_loop is not None:
             telegram_loop.stop()
         server.server_close()

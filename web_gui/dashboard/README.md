@@ -8,6 +8,22 @@
 - Secret Key는 브라우저 응답에 포함하지 않습니다.
 - 현재 V2에는 실주문 엔드포인트가 없습니다.
 
+## 가상투자 보드 (`/virtual/`)
+
+`virtual/`의 주가 AI 가상 투자 앱(매일 08:00 예약, 18:00~18:40 종가 정산)을 대시보드 안에서 돌립니다.
+numpy·xgboost가 필요해 대시보드가 `.venv/bin/python`으로 자식 프로세스를 띄우고(죽으면 자동 재시작),
+`/virtual/*` 요청을 `127.0.0.1:8100`으로 중계합니다. 의존성은 한 번만 설치합니다.
+
+```bash
+.venv/bin/pip install -r virtual/requirements-stock-ai.txt
+```
+
+- 기록(DB·가격·리포트)은 `data/virtualstudy/`에 저장되고 로그는 `data/virtualstudy/virtual.log`입니다.
+- 포트는 `MUMAE_VIRTUAL_PORT`(기본 8100)로 바꿉니다. 이미 그 포트에서 앱이 돌고 있으면 새로 띄우지 않고 그쪽으로 중계합니다.
+- 대시보드가 꺼져 있으면 예약·정산도 멈춥니다. 18시 이후 다시 켜면 그날 정산을 이어서 처리합니다(중복 정산은 DB가 막음).
+- 다른 보드처럼 자체 로그인이 없어서 상태를 바꾸는 요청(PUT·POST)은 같은 출처에서 온 것만 받습니다.
+- 실제 주문은 전송하지 않는 가상 투자입니다.
+
 ## Telegram 자동주문 알림
 
 실주문 자동 루프가 켜진 상태에서 `MUMAE_TELEGRAM_BOT_TOKEN`과

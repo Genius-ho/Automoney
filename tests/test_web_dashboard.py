@@ -609,3 +609,120 @@ class BioPrivateAnalysisTests(unittest.TestCase):
         with self.assertRaises(ValueError):
             bio.start_analysis({"key": "PRIV_../X", "name": "x"})
         self.assertIn("비상장 기업", bio._prompt("Science Corp.", "PRIV_SCIENCECORP", "", "gl"))
+
+
+class VirtualBoardRelayTests(unittest.TestCase):
+    """/virtual/ relays to the stock_ai app and moves its root-absolute URLs under the prefix."""
+
+    PAGE = b'<a href="/"></a><link href="/static/style.css"><script src="/static/app.js"></script>'
+    SCRIPT = b"api('/api/paper');fetch(`/api/jobs/1`);const x='/apple/';"
+
+    def setUp(self):
+        from http.server import BaseHTTPRequestHandler
+        from web_gui.dashboard import virtual
+
+        seen = self.seen = []
+
+        class Child(BaseHTTPRequestHandler):
+            def _reply(self, kind, body):
+                self.send_response(200)
+                self.send_header("Content-Type", kind)
+                self.send_header("Content-Length", str(len(body)))
+                self.end_headers()
+                self.wfile.write(body)
+
+            def do_GET(self):
+                if self.path == "/":
+                    self._reply("text/html; charset=utf-8", VirtualBoardRelayTests.PAGE)
+                elif self.path.startswith("/static/app.js"):
+                    self._reply("text/javascript", VirtualBoardRelayTests.SCRIPT)
+                else:
+                    self._reply("application/json", b'{"path":"/api/x","q":"%s"}' % self.path.encode())
+
+            def do_PUT(self):
+                seen.append((self.command, self.path, self.rfile.read(int(self.headers["Content-Length"]))))
+                self._reply("application/json", b"{}")
+
+            do_POST = do_PUT
+
+            def log_message(self, *args):
+                pass
+
+        self.child = ThreadingHTTPServer(("127.0.0.1", 0), Child)
+        threading.Thread(target=self.child.serve_forever, daemon=True).start()
+        patcher = patch.object(virtual, "PORT", self.child.server_port)
+        patcher.start()
+        self.addCleanup(patcher.stop)
+        self.temp = tempfile.TemporaryDirectory()
+        Handler.service = DashboardService(self.temp.name, broker_factory=FakeBroker, credentials_loader=credentials)
+        Handler.auth = Auth("web-secret")
+        self.server = ThreadingHTTPServer(("127.0.0.1", 0), Handler)
+        threading.Thread(target=self.server.serve_forever, daemon=True).start()
+        self.base = f"http://127.0.0.1:{self.server.server_port}"
+
+    def tearDown(self):
+        for server in (self.server, self.child):
+            server.shutdown()
+            server.server_close()
+        self.temp.cleanup()
+
+    def _send(self, method, path, body=b"{}", origin=True):
+        headers = {"Content-Type": "application/json"}
+        if origin:
+            headers["Origin"] = self.base
+        request = Request(self.base + path, data=body if method != "GET" else None, method=method, headers=headers)
+        try:
+            with urlopen(request, timeout=3) as response:
+                return response.status, response.read()
+        except HTTPError as error:
+            try:
+                return error.code, error.read()
+            finally:
+                error.close()
+
+    def test_page_and_script_urls_are_moved_under_the_virtual_prefix(self):
+        status, page = self._send("GET", "/virtual/")
+        self.assertEqual(status, 200)
+        self.assertIn(b'href="/virtual/static/style.css"', page)
+        self.assertIn(b'src="/virtual/static/app.js"', page)
+        self.assertIn(b'<a href="/virtual/">', page)
+        _, script = self._send("GET", "/virtual/static/app.js")
+        self.assertIn(b"api('/virtual/api/paper')", script)
+        self.assertIn(b"fetch(`/virtual/api/jobs/1`)", script)
+        self.assertIn(b"'/apple/'", script)   # only /api/ and /static/ are rewritten
+
+    def test_json_responses_and_query_strings_pass_through_untouched(self):
+        _, body = self._send("GET", "/virtual/api/symbols?q=%EC%82%BC")
+        self.assertEqual(json.loads(body), {"path": "/api/x", "q": "/api/symbols?q=%EC%82%BC"})
+
+    def test_bare_virtual_redirects_to_the_trailing_slash_page(self):
+        class NoRedirect(__import__("urllib.request").request.HTTPRedirectHandler):
+            def redirect_request(self, *args, **kwargs):
+                return None
+
+        with self.assertRaises(HTTPError) as caught:
+            __import__("urllib.request").request.build_opener(NoRedirect).open(self.base + "/virtual", timeout=3)
+        self.assertEqual(caught.exception.code, 301)
+        self.assertEqual(caught.exception.headers["Location"], "/virtual/")
+        caught.exception.close()
+
+    def test_put_and_post_are_relayed_with_their_body_for_same_origin_requests(self):
+        self.assertEqual(self._send("PUT", "/virtual/api/settings", b'{"a":1}')[0], 200)
+        self.assertEqual(self._send("POST", "/virtual/api/paper/prepare", b"{}")[0], 200)
+        self.assertEqual(self.seen, [("PUT", "/api/settings", b'{"a":1}'), ("POST", "/api/paper/prepare", b"{}")])
+
+    def test_state_changing_requests_without_a_same_origin_header_are_rejected(self):
+        for method in ("PUT", "POST"):
+            status, _ = self._send(method, "/virtual/api/settings", origin=False)
+            self.assertEqual(status, 401)
+        self.assertEqual(self.seen, [])
+
+    def test_a_stopped_virtual_app_gives_a_retryable_503_not_a_crash(self):
+        from web_gui.dashboard import virtual
+
+        self.child.shutdown()
+        self.child.server_close()
+        with patch.object(virtual, "PORT", 1):
+            status, body = self._send("GET", "/virtual/api/paper")
+        self.assertEqual(status, 503)
+        self.assertFalse(json.loads(body)["ok"])

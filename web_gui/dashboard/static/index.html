@@ -2,7 +2,7 @@
 <html lang="ko">
 <head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>무한매수 VR 투자 오토봇</title><link rel="icon" href="data:,"><link rel="stylesheet" href="/styles.css"></head>
 <body>
-  <header><div><p class="eyebrow">무한매수 VR 투자 오토봇</p><h1 id="accountAlias">무한매수 계좌</h1></div><a class="bio-link" href="/bio/" target="_blank" rel="noopener">🧬 바이오 study ↗</a><a class="bio-link" href="/semi/" target="_blank" rel="noopener">🔩 반도체 study ↗</a><a class="bio-link" href="/crypto/" target="_blank" rel="noopener">₿ 크립토 study ↗</a><a class="bio-link" href="/ai/" target="_blank" rel="noopener">🤖 AI study ↗</a><div class="connection"><span id="apiDot" class="dot"></span><div><b id="apiStatus">로그인 필요</b><small id="dataDir"></small></div></div></header>
+  <header><div><p class="eyebrow">무한매수 VR 투자 오토봇</p><h1 id="accountAlias">무한매수 계좌</h1></div><a class="bio-link" href="/bio/" target="_blank" rel="noopener">🧬 바이오 study ↗</a><a class="bio-link" href="/semi/" target="_blank" rel="noopener">🔩 반도체 study ↗</a><a class="bio-link" href="/crypto/" target="_blank" rel="noopener">₿ 크립토 study ↗</a><a class="bio-link" href="/ai/" target="_blank" rel="noopener">🤖 AI study ↗</a><a class="bio-link" href="/virtual/" target="_blank" rel="noopener">💹 가상투자 ↗</a><div class="connection"><span id="apiDot" class="dot"></span><div><b id="apiStatus">로그인 필요</b><small id="dataDir"></small></div></div></header>
   <main id="app" hidden>
     <p id="sessionWarning" class="warning session-warning" role="status" hidden></p>
     <section class="card index-strip" id="indexStrip" aria-label="주요 지수"></section>
@@ -33,7 +33,7 @@
     <article class="card realized-pnl-card collapsible-card">
       <div class="section-title"><div><p class="eyebrow">REALIZED P&amp;L</p><h2>무한매수 누적 실현손익</h2></div><div class="section-title-actions"><span id="realizedPnlMessage" class="sync-message" role="status">-</span><button type="button" id="realizedPnlToggle" class="toggle-btn" aria-expanded="false" aria-controls="realizedPnlSection">펼치기</button></div></div>
       <div class="card-body" id="realizedPnlSection" hidden>
-        <p class="order-help">지금 보유 중인 포지션의 평가손익(미실현)이 아니라, 이미 매도가 체결되어 확정된 손익만 누적한 값입니다.</p>
+        <p class="order-help">지금 보유 중인 포지션의 평가손익(미실현)이 아니라, 이미 매도가 체결되어 확정된 손익만 누적한 값입니다. 누계는 2026년 6월 1일부터 오늘까지 집계합니다.</p>
         <div class="realized-pnl-month-chips" id="realizedPnlMonthChips"></div>
         <div class="realized-pnl-summary">
           <div class="metric-inline"><span id="realizedPnlTotalLabel">누적 실현손익</span><strong id="realizedPnlTotal">-</strong></div>
