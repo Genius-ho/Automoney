@@ -33,14 +33,30 @@ async function startAuto(symbol){try{setMessage(symbol+" 신규 주문계획을 
 async function stopAuto(symbol){if(!confirm(symbol+"의 신규 주문 전송을 중지하시겠습니까? 이미 접수된 미체결 주문은 취소되지 않습니다."))return;try{await api("/api/command",{method:"POST",body:JSON.stringify({command:"auto.stop",payload:{symbol}})});setMessage(symbol+" 신규 주문을 중지했습니다.");await loadEtfOverview()}catch(error){setMessage(error.message,true)}}
 async function clearLastError(symbol){try{await api("/api/command",{method:"POST",body:JSON.stringify({command:"runtime.clear_error",payload:{symbol}})});setMessage(symbol+" 오류 메시지를 지웠습니다.");await loadEtfOverview()}catch(error){setMessage(error.message,true)}}
 function renderRealizedPnl(data){const total=Number(data.realized_pnl||0);$("realizedPnlTotal").textContent=money(data.realized_pnl);$("realizedPnlTotal").style.color=total>=0?"#f04452":"#3182f6";if(!$("realizedPnlStartDate").value)$("realizedPnlStartDate").value=data.start_date;if(!$("realizedPnlEndDate").value)$("realizedPnlEndDate").value=data.end_date;const warning=$("realizedPnlUnknownWarning");if(data.unknown_sales){warning.hidden=false;warning.textContent="매수 이력을 찾지 못한 매도 "+data.unknown_sales+"건은 실현손익 계산에서 제외되었습니다."}else{warning.hidden=true}const body=$("realizedPnlBody");body.replaceChildren();(data.by_symbol||[]).forEach(row=>{const tr=document.createElement("tr"),pnl=Number(row.realized_pnl||0);cell(tr,row.symbol,"side");cell(tr,money(row.realized_pnl),pnl>=0?"positive":"negative");cell(tr,number(row.sell_count,0));body.append(tr)});$("emptyRealizedPnl").hidden=(data.by_symbol||[]).length>0}
-async function loadRealizedPnl(){const button=$("realizedPnlRefresh");button.disabled=true;$("realizedPnlMessage").textContent="집계 중입니다...";try{const startDate=$("realizedPnlStartDate").value,endDate=$("realizedPnlEndDate").value;const payload={};if(startDate)payload.start_date=startDate;if(endDate)payload.end_date=endDate;const data=await api("/api/command",{method:"POST",body:JSON.stringify({command:"history.cumulative_realized_pnl",payload})});renderRealizedPnl(data);$("realizedPnlMessage").textContent="최근 갱신 · "+new Date().toLocaleTimeString("ko-KR")}catch(error){$("realizedPnlMessage").textContent=error.message}finally{button.disabled=false}}
+async function loadRealizedPnl(){if(realizedPnlMonthOffset==="cumulative"){$("realizedPnlStartDate").value="2026-06-01";$("realizedPnlEndDate").value=isoDate(new Date())}$("realizedPnlStartDate").max=isoDate(new Date());$("realizedPnlEndDate").max=isoDate(new Date());const button=$("realizedPnlRefresh");button.disabled=true;$("realizedPnlMessage").textContent="집계 중입니다...";try{const startDate=$("realizedPnlStartDate").value,endDate=$("realizedPnlEndDate").value;const payload={};if(startDate)payload.start_date=startDate;if(endDate)payload.end_date=endDate;const data=await api("/api/command",{method:"POST",body:JSON.stringify({command:"history.cumulative_realized_pnl",payload})});renderRealizedPnl(data);$("realizedPnlMessage").textContent="최근 갱신 · "+new Date().toLocaleTimeString("ko-KR")}catch(error){$("realizedPnlMessage").textContent=error.message}finally{button.disabled=false}}
 $("realizedPnlRefresh").addEventListener("click",loadRealizedPnl);
-// --- Monthly realized P&L shortcuts: auto-set the last 2 calendar months (this
-// month + previous month) so the user can view one month's cut without typing dates.
+// Period shortcuts: cumulative since the program started, this month and last month.
 let realizedPnlMonthOffset=0;
 function isoDate(d){return d.getFullYear()+"-"+String(d.getMonth()+1).padStart(2,"0")+"-"+String(d.getDate()).padStart(2,"0")}
 function realizedPnlMonthRange(offset){const now=new Date();const first=new Date(now.getFullYear(),now.getMonth()-offset,1);const last=new Date(first.getFullYear(),first.getMonth()+1,0);const today=new Date(now.getFullYear(),now.getMonth(),now.getDate());const end=last>today?today:last;return{start:isoDate(first),end:isoDate(end),label:first.toLocaleDateString("ko-KR",{year:"numeric",month:"long"})}}
-function renderRealizedPnlMonthChips(){const wrap=$("realizedPnlMonthChips");wrap.replaceChildren();[0,1].forEach(offset=>{const range=realizedPnlMonthRange(offset),btn=document.createElement("button");btn.type="button";btn.className="month-chip"+(realizedPnlMonthOffset===offset?" active":"");btn.textContent=range.label;btn.addEventListener("click",()=>{realizedPnlMonthOffset=offset;$("realizedPnlStartDate").value=range.start;$("realizedPnlEndDate").value=range.end;$("realizedPnlTotalLabel").textContent=range.label+" 실현손익";renderRealizedPnlMonthChips();loadRealizedPnl()});wrap.append(btn)})}
+function renderRealizedPnlMonthChips(){
+  const wrap=$("realizedPnlMonthChips");wrap.replaceChildren();
+  ["cumulative",0,1].forEach(offset=>{
+    const cumulative=offset==="cumulative";
+    const range=cumulative?{start:"2026-06-01",end:isoDate(new Date()),label:"누계"}:realizedPnlMonthRange(offset);
+    const btn=document.createElement("button"),active=realizedPnlMonthOffset===offset;
+    btn.type="button";btn.className="month-chip"+(active?" active":"");btn.textContent=range.label;
+    btn.setAttribute("aria-pressed",String(active));
+    if(cumulative)btn.title="2026년 6월 1일부터 오늘까지 누적 실현손익";
+    btn.addEventListener("click",()=>{
+      realizedPnlMonthOffset=offset;
+      $("realizedPnlStartDate").value=range.start;$("realizedPnlEndDate").value=range.end;
+      $("realizedPnlTotalLabel").textContent=cumulative?"누계 실현손익 (2026.06~현재)":range.label+" 실현손익";
+      renderRealizedPnlMonthChips();loadRealizedPnl();
+    });
+    wrap.append(btn);
+  });
+}
 function clearRealizedPnlMonthSelection(){if(realizedPnlMonthOffset===null)return;realizedPnlMonthOffset=null;$("realizedPnlTotalLabel").textContent="누적 실현손익";renderRealizedPnlMonthChips()}
 $("realizedPnlStartDate").addEventListener("input",clearRealizedPnlMonthSelection);
 $("realizedPnlEndDate").addEventListener("input",clearRealizedPnlMonthSelection);
@@ -58,8 +74,8 @@ $("emergencyForm").addEventListener("input",()=>{emergencyFormDirty=true;$("emer
 $("emergencyDiscard").addEventListener("click",()=>{clearEmergencyDirty();if(lastSnapshot?.state)fillEmergency(lastSnapshot.state)});
 $("emergencyForm").addEventListener("submit",async event=>{event.preventDefault();const symbol=selectedSymbol();if(!confirm(symbol+"의 전략 상태를 즉시 저장하시겠습니까?"))return;const button=$("saveEmergency");button.disabled=true;const payload={symbol,position_qty:$("editPositionQty").value,avg_cost:$("editAverageCost").value,t_value:$("editTValue").value,cash_usd:$("editCash").value,base_buy_qty:$("editBaseBuyQty").value,final_tp_pct:$("editFinalTpPct").value,final_tp_qty_pct:$("editFinalTpQtyPct").value,second_tp_pct:$("editSecondTpPct").value,big_number_pct:$("editBigNumberPct").value,big_number_enabled:$("editBigNumberEnabled").checked,current_price:lastSnapshot?.quote?.current_price,previous_close:lastSnapshot?.quote?.previous_close};try{const data=await api("/api/strategy/update",{method:"POST",body:JSON.stringify(payload)});const merged={...(lastSnapshot||{}),...data,state:data.state,updated:true};clearEmergencyDirty();render(merged);setMessage(symbol+" 비상 수정값을 state.json에 저장했습니다.")}catch(error){setMessage(error.message,true)}finally{button.disabled=false}});
 $("logout").addEventListener("click",async()=>{try{await api("/api/logout",{method:"POST",body:"{}"})}finally{csrf="";sessionToken="";sessionExpiresAt=0;$("sessionWarning").hidden=true;showLogin("로그아웃했습니다.")}});
-$("realizedPnlStartDate").max=new Date().toISOString().slice(0,10);
-$("realizedPnlEndDate").max=new Date().toISOString().slice(0,10);
+$("realizedPnlStartDate").max=isoDate(new Date());
+$("realizedPnlEndDate").max=isoDate(new Date());
 function updateEtfPickerScrollHint(){const picker=$("etfPicker"),wrap=picker.parentElement,remaining=picker.scrollWidth-picker.clientWidth-picker.scrollLeft;wrap.classList.toggle("scrollable",remaining>4)}
 $("etfPicker").addEventListener("scroll",updateEtfPickerScrollHint);
 window.addEventListener("resize",updateEtfPickerScrollHint);
