@@ -92,6 +92,30 @@ def recent_findings(board: Board, days: int = 3) -> str:
     return "\n".join(lines)
 
 
+def collected_headlines(board: Board, since: str, limit: int = 40) -> str:
+    """Listed-company headlines the RSS collector (fetch_news.py) saw since the last curated news.
+    Web search misses Korean news that the collector already has (e.g. an FDA fast-track designation),
+    so the news refresh gets them as must-check candidates. Price-move headlines are left out."""
+    try:
+        items = json.loads((board.data_dir / "news" / "news.json").read_text(encoding="utf-8")).get("items") or []
+    except (OSError, ValueError):
+        return ""
+    floor = time.strftime("%Y-%m-%d", time.localtime(time.time() - 7 * 86400))
+    start = max(since, floor) if re.match(r"^\d{4}-\d{2}-\d{2}$", since) else floor
+    rank = {"approval": 0, "clinical": 1, "deal": 2, "policy": 3, "etc": 4}
+    picked = [n for n in items if n.get("companies") and n.get("category") in rank and str(n.get("date", "")) >= start]
+    picked.sort(key=lambda n: (rank[n["category"]], n.get("region") != "kr", -int(str(n["date"]).replace("-", ""))))
+    per: dict[str, int] = {}
+    lines = []
+    for n in picked:     # at most 3 per company, so a busy global name doesn't crowd out the listed Korean ones
+        lead = n["companies"][-1]
+        if per.get(lead, 0) >= 3:
+            continue
+        per[lead] = per.get(lead, 0) + 1
+        lines.append(f"- {n['date']} [{','.join(n['companies'])}] {n.get('titleKo') or n['title']} ({n.get('source', '')})")
+    return "\n".join(lines[:limit])
+
+
 def _events_text(events: list[dict]) -> str:
     """The last AI-refreshed calendar, in the same one-line-per-event shape the page source uses."""
     return "\n".join(json.dumps({k: e.get(k) for k in ("date", "label", "desc", "status", "past", "region")}, ensure_ascii=False)
@@ -208,11 +232,16 @@ def prompt(board: Board, text: str, ids: dict[str, str], part: str, since: dict[
 - {board.macro_hint}
 - 같은 4개 지표를 최신 수치로 갱신하세요(지표 자체가 더 이상 의미 없으면 비슷한 성격의 다른 지표로 교체 가능). sub 에 기준일을 밝히세요."""
     have = "\n".join(f"- {n.get('date', '')} {n.get('title', '')}" for n in recent[:40])
+    collected = collected_headlines(board, since["news"])
+    candidates = f"""
+- 자동 수집된 수록 기업 헤드라인(RSS, 제목만). 웹 검색에서 잘 안 잡히는 국내 소식이 많아요. 허가·지정(패스트트랙·혁신치료제 등)·임상 결과·계약 소식은 기사를 열어 사실을 확인한 뒤 빠짐없이 news 에 넣으세요(같은 사건을 다룬 여러 제목은 1건으로, 위 기존 기사와 겹치면 제외):
+{collected}""" if collected else ""
     news = f"""[큐레이션 뉴스(news)] {since["news"]} 이후의 새로운 주요 뉴스 최대 25건
 - 대시보드에 이미 있는 최근 기사(겹치지 않게):
 {have}
 - 카테고리: {cats}
 - 수록 기업 id: {names}
+{candidates}
 - 최신순으로, 중요한 소식 위주로. 반드시 오늘·어제 소식부터 검색하세요('{board.topic} 오늘' 같은 검색어로). 허가·임상 결과·대형 계약·주요 종목 신고가는 빠뜨리지 마세요.
 - summary·why 는 초보 투자자도 이해할 수 있는 한국어로. 확인한 사실만 쓰고 url 은 실제 방문한 기사만."""
     body = "\n\n".join({"calendar": [calendar], "news": [news]}.get(part, [calendar, news]))

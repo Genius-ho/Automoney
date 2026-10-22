@@ -49,7 +49,7 @@ ALIASES = {
     "celltrionph": ["셀트리온제약"], "hanall": ["한올바이오"], "kolontissue": ["코오롱티슈진", "tg-c"], "skbiopharm": ["sk바이오팜"],
 }
 CATS = [  # (category, regex on lower-cased title) — first match wins
-    ("approval", r"fda|ema|식약처|허가|승인|approv|crl|pdufa|보완요구|advisory committee|자문위|품목허가|nda|bla"),
+    ("approval", r"fda|ema|식약처|허가|승인|approv|crl|pdufa|보완요구|advisory committee|자문위|품목허가|nda|bla|패스트\s?트랙|fast track|혁신치료제|breakthrough therapy|희귀의약품|orphan drug|신속심사|priority review"),
     ("clinical", r"임상|phase|trial|topline|톱라인|데이터|data|readout|results|효능|1상|2상|3상|esmo|asco|aacr|wclc|ctad|easd"),
     ("deal",     r"마일스톤|milestone|로열티|royalt|기술수출|기술이전|라이선스|licens|acqui|인수|m&a|merger|deal|계약|파트너십|partnership|collaborat|공동개발"),
     ("finance",  r"실적|매출|영업이익|earnings|revenue|유상증자|offering|ipo|상장|목표주가|target price|guidance|주가"),

@@ -29,6 +29,7 @@ FEEDS = [
 GENERAL_QUERIES = [
     ("kr", "반도체 소부장"), ("kr", "반도체 수주"), ("kr", "반도체 증설"),
     ("gl", "semiconductor equipment order"), ("gl", "chip export controls"), ("gl", "fab capacity expansion"),
+    ("kr", "테라팹"), ("gl", "Terafab chip fab"),
 ]
 # 영문 기업명 → 검색어 (구글 뉴스에서 정확도를 높이기 위해 따옴표 사용)
 GL_QUERY = {
@@ -37,6 +38,7 @@ GL_QUERY = {
     "teradyne": "Teradyne", "asetech": '"ASE Technology"', "amkor": "Amkor",
     "asmpt": "ASMPT", "besi": "BESI semiconductor", "shinetsu": '"Shin-Etsu"',
     "sumco": "SUMCO", "entegris": "Entegris", "ibiden": "Ibiden semiconductor",
+    "spacex": 'SpaceX (Terafab OR chip OR "data center")',
 }
 # 제목에서 기업을 찾아 태그하기 위한 별칭 (국내는 대시보드 이름 자동 사용)
 ALIASES = {
@@ -46,6 +48,7 @@ ALIASES = {
     "asetech": ["ase technology", "ase"], "amkor": ["amkor", "앰코"], "asmpt": ["asmpt"],
     "besi": ["besi"], "shinetsu": ["shin-etsu", "신에츠"], "sumco": ["sumco", "섬코"],
     "entegris": ["entegris", "인테그리스"], "ibiden": ["ibiden", "이비덴"],
+    "spacex": ["spacex", "스페이스x", "스페이스엑스", "terafab", "테라팹"],
 }
 CATS = [  # (category, regex on lower-cased title) — first match wins
     ("approval", r"인증|승인|품질인증|양산 승인|qualification|approv"),

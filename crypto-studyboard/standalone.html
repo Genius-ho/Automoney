@@ -112,6 +112,8 @@
   .ncard .why{color:var(--accent)}
   .nfoot{font-size:12.5px;color:var(--ink-faint);margin-top:6px}
   .nline{display:flex;gap:10px;padding:7px 0;border-bottom:1px solid var(--line);font-size:14px}
+  .tbl-scroll{overflow-x:auto}
+  .tbl-scroll table{min-width:560px}
   .nline .d{color:var(--ink-faint);font-variant-numeric:tabular-nums;white-space:nowrap}
   .nline small{color:var(--ink-faint);margin-left:6px}
   .learn{display:grid;grid-template-columns:repeat(2,1fr);gap:12px}
@@ -207,6 +209,19 @@
 
   <section>
     <div class="sec-head">
+      <h2>🏢 코인을 사들이는 상장사 (트레저리 기업)</h2>
+      <span class="note">보유량은 회사 공시 기준 · 보유 가치와 주가는 실시간이에요</span>
+    </div>
+    <div class="tbl-scroll"><table>
+      <thead><tr><th>기업</th><th>코인</th><th>보유량 (공시일)</th><th>보유 가치</th><th>주가</th></tr></thead>
+      <tbody id="treasury-body"></tbody>
+    </table></div>
+    <p class="note">회사가 주식·전환사채·우선주를 팔아 마련한 돈으로 코인을 사는 구조예요. 주가가 보유 코인 가치보다 비쌀 때(mNAV &gt; 1) 새 주식을 팔아 코인을 더 사고, 싸지면 매입이 멈추거나 자사주 매입으로 바뀌어요. 그래서 매입 소식만큼 '자금을 어떻게 마련했는지'가 중요해요.</p>
+    <div id="treasury-news"></div>
+  </section>
+
+  <section>
+    <div class="sec-head">
       <h2>📰 뉴스</h2>
       <span class="note" id="news-note"></span>
     </div>
@@ -222,6 +237,7 @@
       <div class="card"><h3>🏦 현물 ETF가 중요한 이유</h3><p>거래소 계정 없이 증권 계좌로 살 수 있어서 연기금·자산운용사 같은 큰 자금이 들어올 길이 열렸어요. 매일 발표되는 ETF 순유입·순유출이 단기 가격의 주요 지표가 됐어요.</p></div>
       <div class="card"><h3>🇰🇷 김치 프리미엄</h3><p>국내 거래소(업비트) 원화 가격이 해외 달러 가격을 환율로 바꾼 값보다 얼마나 비싼지를 말해요. 국내 매수세가 과열되면 크게 벌어지고(2018년 초 약 50%), 위 카드에 실시간으로 계산해 보여줘요.</p></div>
       <div class="card"><h3>💥 연쇄 파산과 디레버리징</h3><p>2022년 테라·루나 붕괴 → 셀시우스·3AC 파산 → FTX 파산처럼, 레버리지를 크게 쓴 회사 하나가 무너지면 담보 청산이 연쇄적으로 일어나 시장 전체가 급락해요. 2025년 10월 10일처럼 하루에 수십조 원어치 레버리지 포지션이 강제 청산되기도 해요.</p></div>
+      <div class="card"><h3>🏢 트레저리 기업과 mNAV</h3><p>스트래티지(2020년~)처럼 회사 돈으로 코인을 사서 쌓아 두는 상장사를 '트레저리 기업'이라고 해요. 2025년 여름부터 이더리움을 사는 비트마인·샤프링크까지 크게 늘었어요. mNAV는 시가총액 ÷ 보유 코인 가치예요. 1보다 크면 새 주식을 팔아 코인을 더 살수록 주당 코인이 늘지만, 1 아래로 떨어지면 매입 동력이 사라지고 최악에는 코인을 팔아야 할 수도 있어요. 대량 매입 뉴스는 가격을 받쳐 주지만, 이 기업들이 한꺼번에 매입을 멈추면 반대로 수요가 줄어든다는 점도 기억하세요.</p></div>
       <div class="card"><h3>🌐 금리·달러와의 관계</h3><p>코인은 이자가 없는 위험자산이라 금리가 오르고 달러가 강해지면 약해지는 경향이 있어요. 2022년 미국 금리 인상기, 2024년 8월 엔 캐리 청산 때 함께 급락했어요.</p></div>
     </div>
   </section>
@@ -473,6 +489,34 @@
     syncFilters(); renderChart(); renderTimeline();
   });
 
+  /* ---------------- treasury companies ---------------- */
+  // holdings from each company's own disclosure; value and share price come from api/prices
+  var SUPPLY = {btc:19940000, eth:122100000};   // circulating supply, approximate (2026-10)
+  var TREASURY = [
+    {sym:'BMNR', n:'비트마인', coin:'eth', amt:6041481, d:'2026-10-18', u:'https://www.theblock.co/news/business/2026-10-19-bitmine-adds-12535-eth-as-treasury-reaches-6-04-million-tokens-421018',
+     note:'이더리움 최대 보유사. 공급량 5% 목표에 근접했고 보유분 약 84%를 스테이킹해요.'},
+    {sym:'MSTR', n:'스트래티지', coin:'btc', amt:848517, d:'2026-10-18', u:'https://www.theblock.co/news/business/2026-10-19-we-found-room-for-more-orange-michael-saylors-strategy-buys-more-bitcoin-418895',
+     note:'비트코인 최대 보유사. 최근엔 코인 매입보다 우선주(STRC) 재매입에 더 많은 돈을 쓰고 있어요.'},
+    {sym:'SBET', n:'샤프링크', coin:'eth', amt:893506, d:'2026-10-12', u:'https://www.sharplink.com/dashboard',
+     note:'이더리움 2위 보유사. 일부를 Ether.fi·Lido에 맡겨 수익을 내요.'},
+    {sym:'3350.T', n:'메타플래닛', coin:'btc', amt:44000, d:'2026-10', u:'https://www.benzinga.com/crypto/cryptocurrency/26/10/62458087/metaplanet-super-league-acquisition-bitcoin-treasury-nasdaq',
+     note:'일본 상장. 美 나스닥 상장사(슈퍼리그)에 2,100 BTC를 넘기는 거래로 미국 진출을 추진 중이에요.'}
+  ];
+  function fmtAmt(v){ return Math.round(v).toLocaleString('en-US'); }
+  function fmtBig(v){ return v >= 1e9 ? '$' + (v / 1e9).toFixed(1) + 'B' : '$' + Math.round(v / 1e6).toLocaleString('en-US') + 'M'; }
+  function renderTreasury(){
+    var px = last && last.items || {}, st = last && last.stocks || {};
+    document.getElementById('treasury-body').innerHTML = TREASURY.map(function(c){
+      var coin = px[c.coin.toUpperCase()], q = st[c.sym], u = safeUrl(c.u);
+      var share = (c.amt / SUPPLY[c.coin] * 100).toFixed(c.amt / SUPPLY[c.coin] >= 0.01 ? 1 : 2);
+      return '<tr><td><b>'+esc(c.n)+'</b> <small class="note">'+esc(c.sym)+'</small><div class="note">'+esc(c.note)+'</div></td>'+
+        '<td><span class="tag '+c.coin+'">'+c.coin.toUpperCase()+'</span></td>'+
+        '<td class="num">'+fmtAmt(c.amt)+' <small class="note">공급량 약 '+share+'%</small><div class="note">'+(u ? '<a href="'+u+'" target="_blank" rel="noopener">'+esc(c.d)+' ↗</a>' : esc(c.d))+'</div></td>'+
+        '<td class="num">'+(coin ? fmtBig(c.amt * coin.usd) : '—')+'</td>'+
+        '<td class="num">'+(q ? (q.cur === 'JPY' ? '¥' + Math.round(q.price).toLocaleString('ja-JP') : '$' + q.price.toFixed(2))+' <small class="'+(q.change >= 0 ? 'up' : 'down')+'">'+(q.change > 0 ? '+' : '')+q.change.toFixed(2)+'%</small>' : '—')+'</td></tr>';
+    }).join('');
+  }
+
   /* ---------------- news ---------------- */
   var aiNews = [], liveNews = null;
   function renderNews(){
@@ -484,6 +528,10 @@
         '<p>'+esc(n.summary)+'</p>'+(n.why ? '<p class="why">💡 '+esc(n.why)+'</p>' : '')+
         '<div class="nfoot">'+esc(n.source)+' · '+esc(n.date)+'</div></div>';
     }).join('');
+    var tre = liveNews && liveNews.treasury || [];
+    document.getElementById('treasury-news').innerHTML = tre.length ? '<h3 style="font-size:15px;margin:16px 0 4px">🏢 트레저리 기업 헤드라인 <small class="note">매입·보유량·자금 조달 소식 · 자동 수집 · 제목만</small></h3>'+
+      tre.slice(0, 12).map(function(n){ var u = safeUrl(n.url);
+        return '<div class="nline"><span class="d">'+esc(n.date.slice(5).replace('-', '.'))+'</span><span>'+(u ? '<a href="'+u+'" target="_blank" rel="noopener">'+esc(n.title)+'</a>' : esc(n.title))+'<small>'+esc(n.source)+'</small></span></div>'; }).join('') : '';
     var live = liveNews && liveNews.items || [];
     document.getElementById('news-live').innerHTML = live.length ? '<h3 style="font-size:15px;margin:16px 0 4px">🔄 최신 헤드라인 <small class="note">'+esc(liveNews.generatedAt||'')+' 자동 수집 · 제목만</small></h3>'+
       live.slice(0, 20).map(function(n){ var u = safeUrl(n.url);
@@ -518,7 +566,7 @@
       '<div class="kv"><span>원/달러 환율</span><b>₩'+last.usdkrw.toFixed(1)+'</b></div><div class="kv"><span>기준</span><b>'+esc(last.asOf)+'</b></div>'+
       '<div class="kv"><span>ETH/BTC가 오르면</span><b>이더리움이 상대적으로 강세</b></div>';
   }
-  function loadPrices(){ getJSON('api/prices').then(function(d){ if(d && d.ok){ last = d; renderCards(); } }); }
+  function loadPrices(){ getJSON('api/prices').then(function(d){ if(d && d.ok){ last = d; renderCards(); renderTreasury(); } }); }
 
   /* AI refresh: POST api/update has the server run Claude (Sonnet 5.5, medium, web search);
      update/latest.json adds events after the seed history plus summarized news */
@@ -554,7 +602,7 @@
 
   var wasNarrow = null;
   window.addEventListener('resize', function(){ var n = chartEl.clientWidth < 600; if(n !== wasNarrow){ wasNarrow = n; renderChart(); } });
-  syncFilters(); renderChart(); renderTimeline(); renderNews();
+  syncFilters(); renderChart(); renderTimeline(); renderNews(); renderTreasury();
   if(onServer){
     updBtn.hidden = false;
     loadHistory('BTC'); loadHistory('ETH'); loadPrices(); loadUpdate();

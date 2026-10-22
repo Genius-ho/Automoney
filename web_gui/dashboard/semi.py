@@ -199,7 +199,8 @@ def start_refreshers() -> None:
     try:
         batch = json.loads(BATCH_PATH.read_text(encoding="utf-8"))
         if batch.get("status") == "running":
-            _write_batch({**batch, "status": "error", "error": "서버가 재시작되어 중단되었어요. 다시 누르면 남은 종목부터 이어서 진행해요."})
+            _write_batch({**batch, "status": "error", "finishedAt": time.strftime("%Y-%m-%d %H:%M:%S"),
+                          "error": "서버가 재시작되어 중단되었어요. 다시 누르면 남은 종목부터 이어서 진행해요."})
     except (OSError, ValueError):
         pass
     for script, interval in (("fetch_news.py", NEWS_INTERVAL), ("fetch_reports.py", REPORTS_INTERVAL)):
@@ -485,7 +486,7 @@ UPDATE_BOARD = board_update.Board(
     label="semi", topic="반도체 소재·부품·장비(소부장)", page=BIO_PAGE, data_dir=BIO_DATA, claude_bin=CLAUDE_BIN,
     news_cats={"clinical": "개발·양산", "approval": "인증·허가", "deal": "수주·M&A", "finance": "실적·자금", "policy": "정책"},
     macro_hint="SOX·반도체 장비 지출·美 기준금리(FOMC)·국내 반도체 수출 같은 업황 지표를 최신 수치로 확인하세요.",
-    calendar_hint="주요 기업 실적 발표일, 신제품 양산·고객사 인증, 증설·투자 발표, 수출규제·관세 등 정책 일정, 업계 행사(SEMICON 등)를 담으세요.",
+    calendar_hint="주요 기업 실적 발표일, 신제품 양산·고객사 인증, 증설·투자 발표, 수출규제·관세 등 정책 일정, 업계 행사(SEMICON 등)를 담으세요. 스페이스X·테슬라 테라팹(착공·장비 발주·인텔 14A)과 우주 데이터센터 일정도 확인하세요.",
     after=[score_missing],
 )
 

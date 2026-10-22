@@ -942,7 +942,8 @@
     <div class="section-head"><h2>📚 반도체 기본 지식</h2><span class="section-note">대시보드에 나오는 용어를 비유와 그림으로 풀었어요</span></div>
     <p class="learn-intro">반도체 뉴스가 어려운 이유는 대부분 <strong>용어</strong> 때문이에요. 아래 순서대로 읽으면 기업별 상세 화면의 '업황 현황', '주요 제품·기술', '경쟁사' 이야기가 무슨 뜻인지 이해할 수 있어요. 각 설명 끝의 링크를 누르면 해당 기업 화면으로 바로 이동해요.</p>
     <nav class="learn-toc" aria-label="목차">
-      <a href="#learn-cxmt" data-learn="learn-cxmt">오늘의 이슈 · CXMT 4F² D램</a>
+      <a href="#learn-spacex" data-learn="learn-spacex">오늘의 이슈 · 스페이스X 테라팹·우주 데이터센터</a>
+      <a href="#learn-cxmt" data-learn="learn-cxmt">이슈 · CXMT 4F² D램</a>
       <a href="#learn-stages" data-learn="learn-stages">① 반도체 8대 공정</a>
       <a href="#learn-node" data-learn="learn-node">② 미세공정(나노)이란?</a>
       <a href="#learn-idm" data-learn="learn-idm">③ IDM · 파운드리 · 팹리스</a>
@@ -954,6 +955,53 @@
       <a href="#learn-patent" data-learn="learn-patent">⑨ 특허 · 독점 기간</a>
       <a href="#learn-check" data-learn="learn-check">⑩ 투자 체크리스트</a>
     </nav>
+
+    <article class="lcard" id="learn-spacex">
+      <h3>오늘의 이슈 · 스페이스X는 왜 반도체 공부에 나올까요? (테라팹·우주 데이터센터)</h3>
+      <p class="one">AI 칩을 가장 많이 사는 회사 중 하나 → 칩이 모자라 공장(테라팹)을 직접 짓겠다 → 전기·냉각이 모자라 데이터센터를 우주로 올리겠다.</p>
+      <p class="inbook">자료 기준: 2026-10-21 · 회사 발표와 공시, 주요 언론 보도로 정리했어요. 일정은 회사 목표치이고 머스크 본인도 '매우 공격적'이라고 했어요.</p>
+
+      <h4>1. 로켓 회사가 어떻게 AI 반도체 회사가 됐나요?</h4>
+      <p>스페이스X는 2026년 2월 머스크의 AI 회사 <strong>xAI를 합병</strong>했어요. 그래서 지금은 로켓·스타링크 위성에 더해 멤피스의 대형 AI 데이터센터 <strong>콜로서스</strong>를 가진 회사예요. 이 연산을 앤트로픽·구글에 빌려주면서 3분기 AI 부문 매출이 약 76억 달러(1년 새 약 9배)가 됐고, 매달 엔비디아 GB300을 약 20만 대씩 설치하고 있어요. 즉 <strong>엔비디아 GPU·HBM·서버 D램의 대형 고객</strong>이에요.</p>
+
+      <h4>2. 테라팹 — 칩이 모자라니 공장을 직접 짓겠다</h4>
+      <p>2026년 3월 21일 머스크는 “지금 지구의 반도체 공장은 우리가 필요한 칩의 약 2%만 만든다”며 테슬라와 함께 <strong>AI 칩과 메모리를 직접 만드는 공장, 테라팹</strong>을 발표했어요. 4월에는 인텔이 합류했고 본공장에는 <strong>인텔 14A(1.4나노급) 공정</strong>을 쓰겠다고 했어요.</p>
+      <div class="table-wrap">
+        <table>
+          <caption>테라팹 핵심 숫자 (회사 목표치)</caption>
+          <thead><tr><th>항목</th><th>내용</th></tr></thead>
+          <tbody>
+            <tr><th scope="row">장소</th><td>미국 텍사스 그라임스 카운티(본공장) · 오스틴(시제품 팹)</td></tr>
+            <tr><th scope="row">투자</th><td>1단계 약 168억 달러(8월 발표), 전체 최대 약 1,190억 달러(카운티 서류)</td></tr>
+            <tr><th scope="row">일정</th><td>12월 1일 착공 예정 → 오스틴 시험 칩 2027년 5~6월 → 대량 생산 2028년 3분기 목표</td></tr>
+            <tr><th scope="row">장기 목표</th><td>연 1테라와트(TW)어치 연산 칩, 월 웨이퍼 100만 장(시제품 단계는 월 수천 장)</td></tr>
+            <tr><th scope="row">만들 칩</th><td>테슬라 자율주행·로봇(옵티머스)용 칩, 스페이스X 데이터센터·우주 데이터센터용 AI 칩, 메모리</td></tr>
+          </tbody>
+        </table>
+      </div>
+      <div class="analogy"><b>식당이 너무 잘돼서 농장을 직접 사는 것</b>과 비슷해요. 재료(칩)를 사 오는 것만으로는 원하는 만큼 못 구하니 직접 키우겠다는 거예요. 다만 반도체 공장은 경험 많은 TSMC·삼성도 수율을 잡는 데 몇 년이 걸리는, 세상에서 가장 짓기 어려운 공장이에요.</div>
+
+      <h4>3. 우주 데이터센터 — 전기와 냉각을 하늘에서</h4>
+      <p>지상 데이터센터의 가장 큰 병목은 <strong>전기(발전소·전력망 연결 대기)와 냉각</strong>이에요. 스페이스X는 2026년 1월 미국 연방통신위원회(FCC)에 <strong>AI 연산 위성을 최대 100만 기</strong> 띄우겠다고 신청했어요. 위성이 태양광으로 전기를 얻고, 우주로 열을 직접 내보내(복사냉각) 식히는 구조예요. 위성 하나에 연산 장비를 실은 'AI1' 설계를 공개했고, 첫 시험 발사는 2027년 4분기가 목표예요. 거대 로켓 <strong>스타십</strong>을 매주 쏠 수 있어야 경제성이 나와요.</p>
+
+      <h4>4. 소부장 투자자에게 무슨 의미인가요?</h4>
+      <div class="table-wrap">
+        <table>
+          <caption>조건부 해석이에요 — 실제 발주·공급 계약이 확인된 기업은 아직 없어요</caption>
+          <thead><tr><th>분야</th><th>왜 연결되나</th><th>확인할 것</th></tr></thead>
+          <tbody>
+            <tr><th scope="row">노광·전공정 장비</th><td>새 첨단 팹 하나가 통째로 장비 수요예요. 1.4나노급이면 EUV(ASML)와 증착·식각(어플라이드·램리서치·도쿄일렉트론)이 필요해요</td><td>착공 후 장비 발주 공시, 장비사 실적 발표의 '신규 고객' 언급</td></tr>
+            <tr><th scope="row">검사·테스트·패키징</th><td>신규 팹은 수율을 잡으려고 검사·계측(KLA)과 테스트 장비를 많이 써요. 자체 칩이면 패키징(OSAT)도 필요해요</td><td>테라팹 패키징을 직접 할지, 외주(앰코·ASE)를 쓸지</td></tr>
+            <tr><th scope="row">메모리</th><td>테라팹 계획에 메모리 생산도 들어 있어요. 당장은 콜로서스 증설로 HBM·서버 D램 수요를 더 키우는 쪽이에요</td><td>메모리 생산 파트너·방식 공개 여부</td></tr>
+            <tr><th scope="row">파운드리 경쟁 구도</th><td>인텔 14A의 대형 고객이 되면 TSMC·삼성 파운드리 구도에 변수가 돼요. TSMC 일부 참여설도 나왔지만 머스크는 '공간 일부 임대 이상은 아니다'라고 했어요</td><td>인텔 14A 고객 확정, 계약 조건</td></tr>
+          </tbody>
+        </table>
+      </div>
+
+      <h4>5. 회의적으로 봐야 할 부분</h4>
+      <p>테라팹은 상장 투자설명서에도 <strong>'매우 초기 단계'</strong>로 적혀 있고, 테슬라·인텔과의 재무 조건·지식재산권도 아직 별도 합의 대상이에요. 머스크의 일정은 자주 늦어졌어요. 우주에서는 고장 난 GPU를 고칠 수 없고 방사선·발열·통신 지연 문제가 있어, 지상보다 싸다는 건 아직 증명되지 않았어요. 스페이스X 주가(SPCX)는 상장 때부터 고평가 논란(모닝스타 적정가치 약 7,800억 달러 vs 공모 약 1.77조 달러)이 있어요. 테슬라와의 합병 검토도 진행 중이에요.</p>
+      <p class="inbook">출처: <a href="https://en.wikipedia.org/wiki/Terafab" target="_blank" rel="noopener">Terafab 개요(Wikipedia)</a> · <a href="https://money.usnews.com/investing/news/articles/2026-10-20/spacex-and-teslas-terafab-targets-2028-for-volume-chip-production-musk-says" target="_blank" rel="noopener">테라팹 2028년 양산 목표(로이터)</a> · <a href="https://techcrunch.com/2026/10/20/spacexs-ai-business-is-beating-expectations/" target="_blank" rel="noopener">스페이스X 3분기 AI 부문(TechCrunch)</a> · <a href="https://docs.fcc.gov/public/attachments/DA-26-113A1.pdf" target="_blank" rel="noopener">FCC 궤도 데이터센터 신청</a> · <a href="https://www.enr.com/articles/63809-spacex-records-fight-exposes-119b-terafab-buildout-plans" target="_blank" rel="noopener">1,190억 달러 계획(ENR)</a></p>
+    </article>
 
     <article class="lcard" id="learn-cxmt">
       <h3>오늘의 이슈 · CXMT 4F² D램, 무엇이고 왜 주가가 빠졌나요?</h3>
@@ -1385,6 +1433,11 @@
       id:"ibiden", name:"Ibiden", ticker:"4062.T·TSE", region:"gl",
       platform:"반도체 패키지 기판(FC-BGA) 세계 1위, 일본",
       clinical:null, pipeline:[], stock:null, funding:[], custom:true
+    },
+    {
+      id:"spacex", name:"SpaceX", ticker:"SPCX·NASDAQ", region:"gl",
+      platform:"AI 칩 대형 수요처(xAI·콜로서스) — 테슬라와 자체 칩 공장 '테라팹'·우주 데이터센터 추진",
+      clinical:null, pipeline:[], stock:null, funding:[], custom:true
     }
   ];
 
@@ -1397,7 +1450,8 @@
   var fundingGL = [
     {title:"글로벌 반도체 장비 지출", amt:"$1.3조", date:"2026 전망", desc:"전년 대비 +64%. AI 데이터센터 수요가 파운드리·메모리 투자를 동시에 밀어올리는 중."},
     {title:"필라델피아 반도체지수(SOX)", amt:"YTD +64.5%", date:"2026.09", desc:"전년 대비 +150%. 지수 출범(1993년) 이후 최장 연속 상승 기록 경신."},
-    {title:"HBM 공급 경쟁", amt:"삼성 HBM 점유율 21%→33%", date:"2026 1Q→2Q", desc:"HBM4 양산 출하 이후 삼성전자가 SK하이닉스와의 점유율 격차를 좁히는 추세."}
+    {title:"HBM 공급 경쟁", amt:"삼성 HBM 점유율 21%→33%", date:"2026 1Q→2Q", desc:"HBM4 양산 출하 이후 삼성전자가 SK하이닉스와의 점유율 격차를 좁히는 추세."},
+    {title:"스페이스X·테슬라 테라팹", amt:"1단계 약 $168억 · 전체 최대 $1,190억", date:"2026.08~", desc:"텍사스 그라임스 카운티에 AI 칩·메모리 자체 공장. 12월 1일 착공 예정, 인텔 14A 공정, 대량 생산 목표 2028년 3분기. 새 팹 하나가 통째로 장비·소재 수요가 돼요."}
   ];
 
   /*RESEARCH:BEGIN*/
@@ -2579,8 +2633,9 @@
         var running = !!b && b.status === 'running';
         batchBtn.disabled = running;
         batchBtn.textContent = running ? '⏳ 종목 업데이트 중…' : '🔄 전 종목 AI 업데이트';
-        batchMsg.classList.toggle('err', !!b && b.status === 'error');
-        batchMsg.textContent = !b ? '' : running ? (b.done+b.failed)+'/'+b.total+' 완료'+(b.failed ? ' (실패 '+b.failed+')' : '')+' · 진행 중: '+(b.current||[]).join(', ') :
+        var stale = !!b && b.status === 'error' && Date.now() - new Date(String(b.finishedAt||b.startedAt||'').replace(' ','T')).getTime() > 86400000;   // an interruption older than a day is no longer news
+        batchMsg.classList.toggle('err', !!b && b.status === 'error' && !stale);
+        batchMsg.textContent = !b || stale ? '' : running ? (b.done+b.failed)+'/'+b.total+' 완료'+(b.failed ? ' (실패 '+b.failed+')' : '')+' · 진행 중: '+(b.current||[]).join(', ') :
           b.status === 'error' ? '중단: '+(b.error||'')+' ('+(b.done||0)+'/'+b.total+' 완료)' :
           '마지막 전 종목 업데이트 '+String(b.finishedAt||'').slice(0,16)+' · 갱신 '+b.done+'개'+(b.failed ? ', 실패 '+b.failed+'개' : '');
         var progress = b ? b.done + b.failed : 0;

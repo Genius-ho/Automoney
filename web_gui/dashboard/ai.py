@@ -46,6 +46,7 @@ SYMBOLS = {
     "OKLO": "오클로", "267260.KS": "HD현대일렉트릭", "034020.KS": "두산에너빌리티",
     "ETN": "이튼", "010120.KS": "LS ELECTRIC", "298040.KS": "효성중공업", "MRVL": "마벨", "INTC": "인텔", "ARM": "Arm", "RMBS": "램버스", "688825.SS": "창신메모리(CXMT)", "LRCX": "램리서치", "ASM.AS": "ASM인터내셔널", "6525.T": "고쿠사이일렉트릭", "084370.KQ": "유진테크", "036930.KQ": "주성엔지니어링", "240810.KQ": "원익IPS", "ALAB": "아스테라랩스", "AMAT": "어플라이드 머티어리얼즈",
     "009150.KS": "삼성전기", "007660.KS": "이수페타시스", "3110.T": "닛토보", "4062.T": "이비덴",
+    "SPCX": "스페이스X", "TSLA": "테슬라",
 }
 TYPES = ("model", "chip", "earnings", "capex", "bottleneck", "policy", "rally", "crash", "macro")
 IMPACTS = ("up", "down", "neutral")
@@ -129,7 +130,8 @@ def quotes() -> dict[str, object]:
 
 # ---------------------------------------------------------------- live headlines (Google News RSS)
 NEWS_QUERIES = [("kr", "AI 반도체"), ("kr", "HBM 메모리"), ("kr", "AI 데이터센터 전력"),
-                ("gl", "Nvidia AI"), ("gl", "AI data center"), ("gl", "AI memory shortage")]
+                ("gl", "Nvidia AI"), ("gl", "AI data center"), ("gl", "AI memory shortage"),
+                ("kr", "스페이스X 테라팹"), ("gl", "SpaceX orbital data center Terafab")]
 
 
 def _rss(region: str, query: str) -> list[dict]:
@@ -240,6 +242,7 @@ def _prompt(events: list[dict], since: str, news_since: str) -> str:
 
 [2] news — {news_since} 이후 AI 산업·관련주 주요 뉴스 최대 15건(최신순, 국내·해외 모두). why 에는 '다음 병목' 관점의 의미를 적으세요.
 - 반드시 오늘·어제 소식부터 검색하세요(예: 'AI 반도체 오늘', '엔비디아 주가 오늘', 'Nvidia stock today'). 주요 종목의 사상 최고가(신고가)·급등락, 실적, 대형 계약은 빠뜨리지 마세요.
+- 스페이스X(SPCX: xAI 합병, 콜로서스 연산 임대, 우주 데이터센터 AI1, 테슬라와의 테라팹 칩 공장) 소식도 확인하세요. 칩·전력 병목을 우회하려는 시도라 이 보드의 흐름과 직결돼요.
 
 작성 규칙:
 - 모든 설명은 한국어 해요체(~예요/~해요), '제가' 같은 1인칭이나 조사 과정 메모는 쓰지 마세요. 그런 메모는 summary 에만.

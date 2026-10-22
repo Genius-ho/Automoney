@@ -27,6 +27,8 @@ CLAUDE_BIN = Path.home() / ".npm-global" / "bin" / "claude"
 
 UA = "Mozilla/5.0"
 SYMBOLS = {"BTC": "BTC-USD", "ETH": "ETH-USD"}
+# Listed companies that hold BTC/ETH as a treasury asset; the page lists their holdings
+TREASURY_STOCKS = ("BMNR", "MSTR", "SBET", "3350.T")
 START = "2018-01-01"
 HISTORY_TTL = 6 * 3600
 PRICE_TTL = 60
@@ -105,13 +107,25 @@ def prices() -> dict[str, object]:
                 }
         except Exception as error:  # noqa: BLE001
             return {"ok": False, "error": str(error)[:200]}
-        return {"ok": True, "usdkrw": usdkrw, "items": items, "asOf": time.strftime("%Y-%m-%d %H:%M KST")}
+        stocks = {}
+        for sym in TREASURY_STOCKS:
+            try:
+                meta = json.loads(_get(f"https://query1.finance.yahoo.com/v8/finance/chart/{sym}?range=1d&interval=1d"))["chart"]["result"][0]["meta"]
+            except Exception:  # noqa: BLE001 - a missing stock quote must not blank the coin prices
+                continue
+            price, prev = float(meta["regularMarketPrice"]), float(meta.get("chartPreviousClose") or 0)
+            stocks[sym] = {"price": price, "change": round((price / prev - 1) * 100, 2) if prev else 0.0, "cur": meta.get("currency", "USD")}
+        return {"ok": True, "usdkrw": usdkrw, "items": items, "stocks": stocks, "asOf": time.strftime("%Y-%m-%d %H:%M KST")}
 
     return _cached("prices", PRICE_TTL, build)
 
 
 # ---------------------------------------------------------------- live headlines (Google News RSS)
 NEWS_QUERIES = [("kr", "비트코인"), ("kr", "이더리움"), ("gl", "bitcoin"), ("gl", "ethereum")]
+# Treasury-company buying (BitMine, Strategy, ...) is drowned out by the general feeds, so it gets its own list
+TREASURY_QUERIES = [("kr", "비트마인 이더리움"), ("kr", "스트래티지 비트코인 매입"), ("kr", "메타플래닛 비트코인"),
+                    ("gl", "Bitmine ETH holdings"), ("gl", "Strategy bitcoin purchase Saylor"), ("gl", "SharpLink ETH"),
+                    ("gl", "Metaplanet bitcoin"), ("gl", "bitcoin treasury company buys"), ("gl", "ethereum treasury company")]
 
 
 def _rss(region: str, query: str) -> list[dict]:
@@ -133,19 +147,26 @@ def _rss(region: str, query: str) -> list[dict]:
 
 def news() -> dict[str, object]:
     def build() -> dict:
-        items, seen = [], set()
-        for region, query in NEWS_QUERIES:
-            try:
-                found = _rss(region, query)
-            except Exception:  # noqa: BLE001 - one feed failing must not blank the rest
-                continue
-            for item in found:
-                key = re.sub(r"\W+", "", item["title"].lower())[:60]
-                if key not in seen:
-                    seen.add(key)
-                    items.append(item)
-        items.sort(key=lambda x: x["date"], reverse=True)
-        return {"ok": bool(items), "generatedAt": time.strftime("%Y-%m-%d %H:%M"), "items": items[:40]}
+        seen: set[str] = set()
+
+        def collect(queries: list[tuple[str, str]]) -> list[dict]:
+            items = []
+            for region, query in queries:
+                try:
+                    found = _rss(region, query)
+                except Exception:  # noqa: BLE001 - one feed failing must not blank the rest
+                    continue
+                for item in found:
+                    key = re.sub(r"\W+", "", item["title"].lower())[:60]
+                    if key not in seen:
+                        seen.add(key)
+                        items.append(item)
+            items.sort(key=lambda x: x["date"], reverse=True)
+            return items
+
+        treasury = collect(TREASURY_QUERIES)[:30]
+        items = collect(NEWS_QUERIES)[:40]
+        return {"ok": bool(items or treasury), "generatedAt": time.strftime("%Y-%m-%d %H:%M"), "items": items, "treasury": treasury}
 
     return _cached("news", NEWS_TTL, build)
 
@@ -218,6 +239,7 @@ def _prompt(events: list[dict], since: str, news_since: str) -> str:
 - date 는 실제로 확인한 날짜(YYYY-MM-DD). 가격 수치는 '약'을 붙여 대략적으로, sources 에는 실제 방문한 URL만.
 
 [2] news — {news_since} 이후 비트코인·이더리움 관련 주요 뉴스 최대 15건(최신순, 국내·해외 모두).
+- 상장사의 코인 대량 매입(트레저리 기업: 비트마인 BMNR·스트래티지 MSTR·샤프링크 SBET·메타플래닛 3350.T 등)도 꼭 검색하세요. 매입 수량·총보유량·매입 자금 조달 방식(유상증자·전환사채·우선주)을 수치로 적고, 대규모 매입·매입 중단·보유 코인 매도는 events(adoption 또는 crash)에도 넣으세요.
 
 작성 규칙:
 - 모든 설명은 한국어 해요체(~예요/~해요), '제가' 같은 1인칭이나 조사 과정 메모는 쓰지 마세요. 그런 메모는 summary 에만.
