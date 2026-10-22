@@ -33,3 +33,5 @@ __pycache__/
 # Virtual investment board: records are kept in data/virtualstudy/
 virtual/stock_ai_data/
 virtual/dist/
+
+*.env.from-server
