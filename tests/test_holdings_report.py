@@ -84,6 +84,24 @@ class BuildMessagesTests(unittest.TestCase):
         self.assertEqual(len(message), 1)
         self.assertIn("보유 중인 종목이 없습니다", message[0])
 
+    def test_long_sections_are_split_between_holdings_under_telegrams_limit(self):
+        rows = [item(f"{n:06d}", f"종목{n}", "KR", "1", "1000", "1000", "1000", "1000", "0", "0", "0", "0")
+                for n in range(80)]
+
+        messages = hr.build_messages({"result": {"items": rows}}, now=NOW)
+
+        self.assertGreater(len(messages), 1)
+        for message in messages:
+            self.assertLessEqual(len(message.encode("utf-16-le")) // 2, 4096)
+            self.assertEqual(message.count("<b>"), message.count("</b>"))
+        self.assertEqual(sum(m.count("평단 ") for m in messages), 80)
+
+    def test_non_finite_numbers_do_not_break_the_report(self):
+        raw = {"result": {"items": [item("X", "이상값", "KR", "NaN", "1", "1", "Infinity", "1", "0", "0", "0", "0"),
+                                    RAW["result"]["items"][0]]}}
+
+        self.assertIn("삼성전자", hr.build_messages(raw, now=NOW)[0])
+
 
 class MainTests(unittest.TestCase):
     def test_weekend_runs_are_skipped_unless_forced(self):

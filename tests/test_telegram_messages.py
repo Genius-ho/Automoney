@@ -43,6 +43,8 @@ class AutoResultMessageTests(unittest.TestCase):
         text = auto_result_message("SOXL", [line("UNCONFIRMED", False)], [], [])
 
         self.assertIn("⏳ 종가(LOC) · 접수 확인 대기", text)
+        self.assertIn("⏳ 확인 대기 1건", text)
+        self.assertNotIn("실패", text)
 
     def test_errors_and_user_text_are_escaped(self):
         text = auto_result_message("A<B>", [], ["bad <order> & more"], ["id<1>"])

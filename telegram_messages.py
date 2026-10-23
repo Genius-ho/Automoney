@@ -158,10 +158,14 @@ def auto_result_message(
         parts.extend(_order_block(line))
         parts.append("")
     ok = sum(1 for line in lines if line.confirmed)
-    failed = len(lines) - ok + len(errors)
+    # 접수 확인 대기(UNCONFIRMED)는 실패가 아니다: 실패로 세면 이미 들어간 주문을 다시 넣게 만들 수 있다.
+    waiting = sum(1 for line in lines if not line.confirmed and line.status == "UNCONFIRMED")
+    failed = len(lines) - ok - waiting + len(errors)
     summary = []
     if ok:
         summary.append(f"✅ 접수 성공 {ok}건")
+    if waiting:
+        summary.append(f"⏳ 확인 대기 {waiting}건")
     if failed:
         summary.append(f"❌ 실패 {failed}건")
     if lines or errors:

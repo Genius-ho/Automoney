@@ -17,13 +17,17 @@ KST = ZoneInfo("Asia/Seoul")
 _WEEKDAYS = "월화수목금토일"
 _RULE = "──────────"
 ZERO = Decimal("0")
+# Telegram rejects messages over 4096 UTF-16 units; keep a margin for the HTML entities.
+MESSAGE_LIMIT = 3900
 
 
 def _dec(value: object) -> Decimal:
     try:
-        return Decimal(str(value))
+        result = Decimal(str(value))
     except (InvalidOperation, ValueError):
         return ZERO
+    # NaN/Infinity would raise on comparison (e.g. quantity <= 0) and break the whole report.
+    return result if result.is_finite() else ZERO
 
 
 def _text(value: object) -> str:
@@ -161,7 +165,29 @@ def build_messages(
     messages.append("\n\n".join(first))
     if us_section:
         messages.append(us_section)
-    return messages
+    return [chunk for message in messages for chunk in _fit(message)]
+
+
+def _units(text: str) -> int:
+    return len(text.encode("utf-16-le")) // 2
+
+
+def _fit(message: str, limit: int = MESSAGE_LIMIT) -> list[str]:
+    """Split an over-long message between holdings (blank lines) so each part stays valid HTML."""
+    if _units(message) <= limit:
+        return [message]
+    chunks: list[str] = []
+    current = ""
+    for block in message.split("\n\n"):
+        candidate = f"{current}\n\n{block}" if current else block
+        if current and _units(candidate) > limit:
+            chunks.append(current)
+            current = block
+        else:
+            current = candidate
+    if current:
+        chunks.append(current)
+    return chunks
 
 
 def load_cycle_labels(data_dir: Path) -> dict[str, str]:
@@ -216,8 +242,12 @@ def main(argv: list[str] | None = None) -> int:
     if not notifier.enabled:
         print("Telegram 미설정 (MUMAE_TELEGRAM_BOT_TOKEN/CHAT_ID 없음) -- 전송 건너뜀")
         return 1
-    for message in messages:
-        notifier.send_message(message, parse_mode="HTML")
+    try:
+        for message in messages:
+            notifier.send_message(message, parse_mode="HTML")
+    except Exception as error:
+        print(f"보유 종목 현황 전송 실패: {error}", file=sys.stderr)
+        return 1
     print(f"보유 종목 현황 {len(messages)}건 전송")
     return 0
 
