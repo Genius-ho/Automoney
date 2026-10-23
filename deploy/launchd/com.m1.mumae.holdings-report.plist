@@ -1,0 +1,18 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0"><dict>
+  <key>Label</key><string>com.m1.mumae.holdings-report</string>
+  <key>ProgramArguments</key><array><string>/Users/m1/moohan/deploy/run-holdings-report-mac.sh</string></array>
+  <key>WorkingDirectory</key><string>/Users/m1/moohan</string>
+  <!-- 평일(월~금) 16:00 KST: 국장 마감(15:30) 직후 -->
+  <key>StartCalendarInterval</key>
+  <array>
+    <dict><key>Weekday</key><integer>1</integer><key>Hour</key><integer>16</integer><key>Minute</key><integer>0</integer></dict>
+    <dict><key>Weekday</key><integer>2</integer><key>Hour</key><integer>16</integer><key>Minute</key><integer>0</integer></dict>
+    <dict><key>Weekday</key><integer>3</integer><key>Hour</key><integer>16</integer><key>Minute</key><integer>0</integer></dict>
+    <dict><key>Weekday</key><integer>4</integer><key>Hour</key><integer>16</integer><key>Minute</key><integer>0</integer></dict>
+    <dict><key>Weekday</key><integer>5</integer><key>Hour</key><integer>16</integer><key>Minute</key><integer>0</integer></dict>
+  </array>
+  <key>StandardOutPath</key><string>/Users/m1/moohan/logs/holdings-report.out.log</string>
+  <key>StandardErrorPath</key><string>/Users/m1/moohan/logs/holdings-report.err.log</string>
+</dict></plist>
