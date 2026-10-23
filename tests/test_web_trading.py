@@ -1083,7 +1083,7 @@ class AutoTickTests(unittest.TestCase):
             def __init__(self):
                 self.messages = []
 
-            def send_message(self, text):
+            def send_message(self, text, **kwargs):
                 self.messages.append(text)
 
         with tempfile.TemporaryDirectory() as temp:

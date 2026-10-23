@@ -11,6 +11,7 @@ from urllib.error import HTTPError, URLError
 from urllib.request import Request, urlopen
 
 from local_env import load_env
+from telegram_messages import retry_failure_message, retry_success_message
 
 
 class TelegramApiError(RuntimeError):
@@ -67,10 +68,14 @@ class TelegramNotifier:
         text: str,
         *,
         reply_markup: dict[str, Any] | None = None,
+        parse_mode: str | None = None,
     ) -> dict[str, Any]:
         payload: dict[str, Any] = {"chat_id": self.chat_id, "text": str(text)}
         if reply_markup is not None:
             payload["reply_markup"] = reply_markup
+        if parse_mode:
+            payload["parse_mode"] = parse_mode
+            payload["link_preview_options"] = {"is_disabled": True}
         return self._call("sendMessage", payload)
 
     def answer_callback_query(self, callback_query_id: str, text: str | None = None) -> dict[str, Any]:
@@ -153,12 +158,18 @@ class TelegramCommandLoop:
         if self._thread and self._thread.is_alive():
             self._thread.join(timeout=2)
 
-    def _send(self, text: str, reply_markup: dict[str, Any] | None = None) -> dict[str, Any] | None:
+    def _send(
+        self, text: str, reply_markup: dict[str, Any] | None = None, *, html: bool = False,
+    ) -> dict[str, Any] | None:
+        # Only pass the optional kwargs that are needed, to stay compatible with
+        # lightweight test/dry-run notifiers.
+        kwargs: dict[str, Any] = {}
+        if reply_markup is not None:
+            kwargs["reply_markup"] = reply_markup
+        if html:
+            kwargs["parse_mode"] = "HTML"
         try:
-            if reply_markup is None:
-                # Keep compatibility with lightweight test/dry-run notifiers.
-                return self.notifier.send_message(text)
-            return self.notifier.send_message(text, reply_markup=reply_markup)
+            return self.notifier.send_message(text, **kwargs)
         except TelegramApiError as error:
             print(f"Telegram 알림 실패: {error}", file=sys.stderr)
             return None
@@ -217,27 +228,24 @@ class TelegramCommandLoop:
             )
             confirmed = int(result.get("confirmed") or 0)
             if confirmed:
-                if quantity is not None:
-                    self._send(
-                        f"✅ 수량 수정 후 재시도 접수 성공\n{client_order_id}\n새 수량: {quantity}주"
-                    )
-                elif price is not None:
-                    self._send(
-                        f"✅ 가격 수정 후 재시도 접수 성공\n{client_order_id}\n새 지정가: ${price}"
-                    )
-                else:
-                    self._send(f"✅ 재시도 접수 성공\n{client_order_id}\n토스 상태: 확인됨")
+                self._send(
+                    retry_success_message(client_order_id, price=price, quantity=quantity),
+                    html=True,
+                )
                 return True
             errors = "; ".join(str(item) for item in result.get("errors") or [])
             self._send(
-                f"❌ 재시도 실패\n{client_order_id}\n"
-                f"{errors or '토스에서 접수 상태를 확인하지 못했습니다.'}",
+                retry_failure_message(
+                    client_order_id, errors or "토스에서 접수 상태를 확인하지 못했습니다.",
+                ),
                 self.retry_keyboard([client_order_id]),
+                html=True,
             )
         except Exception as error:
             self._send(
-                f"❌ 재시도 실패\n{client_order_id}\n{error}",
+                retry_failure_message(client_order_id, error),
                 self.retry_keyboard([client_order_id]),
+                html=True,
             )
         return False
 

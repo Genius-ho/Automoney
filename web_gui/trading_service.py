@@ -16,6 +16,7 @@ from etf_long_term import analyze_individual_etfs
 from mumae_core import CENT, OrderIntent, OrderKind, apply_fill, money
 from runtime_store import STRATEGY_VR_SKILL, get_strategy_type
 from telegram_bot import TelegramCommandLoop, TelegramNotifier
+from telegram_messages import OrderLine, auto_failure_message, auto_result_message
 from toss_api import TossApiError, order_time_in_force
 from trade_history import aggregate_daily_trades, summarize_realized_pnl
 from volatility import ETF_UNIVERSE
@@ -744,20 +745,20 @@ class TradingWebService(VRWebServiceMixin, WebService):
         if not self.telegram.enabled:
             return
         try:
-            if reply_markup is None:
-                self.telegram.send_message(text)
-            else:
-                self.telegram.send_message(text, reply_markup=reply_markup)
+            kwargs: dict[str, Any] = {"parse_mode": "HTML"}
+            if reply_markup is not None:
+                kwargs["reply_markup"] = reply_markup
+            self.telegram.send_message(text, **kwargs)
         except Exception as error:
             # Notification failure must never interrupt a broker order or the
             # background auto-tick loop.
             print(f"Telegram 알림 실패: {error}", file=sys.stderr)
 
     def _notify_auto_failure(self, symbol: str, item_ids: list[str], error: object) -> None:
-        lines = [f"❌ 자동주문 실패: {symbol}", str(error)]
-        for item_id in item_ids:
-            lines.append(f"재시도: /retry {item_id}")
-        self._telegram_send("\n".join(lines), TelegramCommandLoop.retry_keyboard(item_ids))
+        self._telegram_send(
+            auto_failure_message(symbol, error, item_ids),
+            TelegramCommandLoop.retry_keyboard(item_ids),
+        )
 
     def _notify_auto_result(
         self,
@@ -769,37 +770,43 @@ class TradingWebService(VRWebServiceMixin, WebService):
         errors = result.get("errors") or []
         if not submitted and not errors:
             return
-        lines = [f"🤖 자동주문 결과: {symbol}"]
+        lines: list[OrderLine] = []
+        rejected_seen = False
         retry_ids: list[str] = []
         submitted_ids: set[str] = set()
         for item in submitted:
             client_id = str(item.get("id") or "")
             submitted_ids.add(client_id)
             status = self.order_statuses.get(symbol, {}).get(client_id, "UNKNOWN")
-            if status in CONFIRMED_STATUSES:
-                lines.append(
-                    f"✅ 접수 성공 · {client_id} · {item.get('quantity', '')}주 @ ${item.get('price', '')} · {status}"
+            confirmed = status in CONFIRMED_STATUSES
+            lines.append(
+                OrderLine(
+                    order_id=client_id,
+                    side=str(item.get("side") or ""),
+                    quantity=item.get("quantity", ""),
+                    price=item.get("price", ""),
+                    order_kind=str(item.get("kind") or ""),
+                    status=status,
+                    confirmed=confirmed,
                 )
-            else:
-                label = "⏳ 접수 확인 대기" if status == "UNCONFIRMED" else "❌ 접수 실패"
-                lines.append(f"{label} · {client_id} · 토스 상태: {status}")
-                if status == "REJECTED":
-                    lines.append("상세 거절 사유는 토스 주문 목록 API에서 제공되지 않습니다. 토스 앱의 주문 내역을 확인하세요.")
+            )
+            if not confirmed:
+                rejected_seen = rejected_seen or status == "REJECTED"
                 if status in RETRYABLE_STATUSES:
-                    lines.append(f"재시도: /retry {client_id}")
                     retry_ids.append(client_id)
-        for error in errors:
-            lines.append(f"❌ {error}")
         if errors:
             retry_ids.extend(
                 client_id for client_id in (item_ids or [])
                 if client_id not in submitted_ids and client_id not in retry_ids
             )
-            for client_id in retry_ids:
-                if f"재시도: /retry {client_id}" not in lines:
-                    lines.append(f"재시도: /retry {client_id}")
         markup = TelegramCommandLoop.retry_keyboard(retry_ids) if retry_ids else None
-        self._telegram_send("\n".join(lines), markup)
+        self._telegram_send(
+            auto_result_message(
+                symbol, lines, [str(error) for error in errors], retry_ids,
+                rejected_seen=rejected_seen,
+            ),
+            markup,
+        )
 
     def clear_last_error(self, symbol: str) -> dict[str, Any]:
         """Dismiss a symbol's last new-order error from the dashboard (e.g. a
