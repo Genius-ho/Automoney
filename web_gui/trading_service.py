@@ -13,10 +13,10 @@ from typing import Any
 
 from etf_linkage import analyze_etf_pairs
 from etf_long_term import analyze_individual_etfs
-from mumae_core import CENT, OrderIntent, OrderKind, apply_fill, money
-from runtime_store import STRATEGY_VR_SKILL, get_strategy_type
+from mumae_core import CENT, OrderIntent, OrderKind, apply_fill, final_take_profit_price, money, star_price
+from runtime_store import STRATEGY_MUMAE, STRATEGY_VR_SKILL, get_strategy_type
 from telegram_bot import TelegramCommandLoop, TelegramNotifier
-from telegram_messages import OrderLine, auto_failure_message, auto_result_message
+from telegram_messages import OrderLine, Standing, auto_failure_message, auto_result_message
 from toss_api import TossApiError, order_time_in_force
 from trade_history import aggregate_daily_trades, summarize_realized_pnl
 from volatility import ETF_UNIVERSE
@@ -754,9 +754,37 @@ class TradingWebService(VRWebServiceMixin, WebService):
             # background auto-tick loop.
             print(f"Telegram 알림 실패: {error}", file=sys.stderr)
 
+    def _standing(self, symbol: str) -> Standing | None:
+        """Cycle standing for the alert footer, from cached state and the last fetched quote.
+
+        Never touches the network and never raises: a notification must not depend on
+        (or interrupt) order handling, so anything unexpected just drops the block.
+        """
+        try:
+            if get_strategy_type(self.runtime, symbol) != STRATEGY_MUMAE:
+                return None
+            state = self.store.load(symbol)
+            quote = self.quote_cache.get(symbol)
+            held = state.position_qty > 0 and state.avg_cost > 0
+            return Standing(
+                current_price=quote[0] if quote else None,
+                previous_close=quote[1] if quote else None,
+                avg_cost=state.avg_cost,
+                position_qty=state.position_qty,
+                t_value=state.t_value,
+                split_count=state.split_count,
+                mode=str(state.mode),
+                cash_usd=state.cash_usd,
+                star_price=star_price(state) if held else None,
+                take_profit_price=final_take_profit_price(state) if held else None,
+                take_profit_pct=state.final_tp_pct if held else None,
+            )
+        except Exception:
+            return None
+
     def _notify_auto_failure(self, symbol: str, item_ids: list[str], error: object) -> None:
         self._telegram_send(
-            auto_failure_message(symbol, error, item_ids),
+            auto_failure_message(symbol, error, item_ids, standing=self._standing(symbol)),
             TelegramCommandLoop.retry_keyboard(item_ids),
         )
 
@@ -804,6 +832,7 @@ class TradingWebService(VRWebServiceMixin, WebService):
             auto_result_message(
                 symbol, lines, [str(error) for error in errors], retry_ids,
                 rejected_seen=rejected_seen,
+                standing=self._standing(symbol),
             ),
             markup,
         )

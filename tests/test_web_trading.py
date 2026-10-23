@@ -1105,6 +1105,10 @@ class AutoTickTests(unittest.TestCase):
 
             self.assertEqual(len(service.telegram.messages), 1)
             self.assertIn("접수 성공", service.telegram.messages[0])
+            # 알림 하단에는 마지막으로 조회한 현재가와 사이클 진행 상태가 붙는다.
+            self.assertIn("현재가 <b>$84.50</b>", service.telegram.messages[0])
+            self.assertIn("현재 상태", service.telegram.messages[0])
+            self.assertIn("/ 40회", service.telegram.messages[0])
 
     def test_rejected_status_notification_explains_that_toss_list_has_no_reason(self):
         class Telegram:

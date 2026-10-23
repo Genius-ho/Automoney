@@ -1,7 +1,10 @@
 import unittest
 
+from decimal import Decimal as D
+
 from telegram_messages import (
     OrderLine,
+    Standing,
     auto_failure_message,
     auto_result_message,
     retry_failure_message,
@@ -76,6 +79,74 @@ class OtherMessageTests(unittest.TestCase):
 
         self.assertIn("재시도 실패", text)
         self.assertIn("<blockquote>거부 &amp; 사유</blockquote>", text)
+
+
+def standing(**overrides):
+    base = dict(
+        current_price=D("112.40"), previous_close=D("111.05"), avg_cost=D("105.178958"),
+        position_qty=144, t_value=D("5.5"), split_count=40, mode="GENERAL", cash_usd=D("31.76"),
+        star_price=D("108.52"), take_profit_price=D("120.95"), take_profit_pct=D("15"),
+    )
+    base.update(overrides)
+    return Standing(**base)
+
+
+class StandingTests(unittest.TestCase):
+    def test_header_shows_price_and_daily_change(self):
+        text = auto_result_message("SOXL", [line()], [], [], standing=standing())
+
+        self.assertIn("💵 현재가 <b>$112.40</b>  (전일 대비 ▲1.2%)", text)
+
+    def test_status_block_has_average_pnl_progress_and_targets(self):
+        text = auto_result_message("SOXL", [line()], [], [], standing=standing())
+
+        self.assertIn("평단가 <b>$105.18</b>  ·  평단 대비 ▲6.9%", text)
+        self.assertIn("보유 144주  ·  평가손익 +$1,039.83", text)
+        self.assertIn("진행 T <b>5.5</b> / 40회  ▰▱▱▱▱▱▱▱▱▱ 13.8%  ·  일반 모드", text)
+        self.assertIn("별가격 $108.52  ·  익절 목표 $120.95 (+15%)", text)
+        self.assertIn("잔여 현금 $31.76", text)
+
+    def test_loss_and_reverse_mode_render_with_down_arrow(self):
+        text = auto_result_message(
+            "SOXL", [line()], [], [],
+            standing=standing(current_price=D("94.66"), mode="REVERSE", t_value=D("40")),
+        )
+
+        self.assertIn("평단 대비 ▼10.0%", text)
+        self.assertIn("평가손익 -$1,514.73", text.replace("\u2212", "-"))
+        self.assertIn("리버스 모드", text)
+        self.assertIn("▰▰▰▰▰▰▰▰▰▰ 100.0%", text)
+
+    def test_empty_position_says_waiting_and_hides_average(self):
+        text = auto_result_message(
+            "TQQQ", [line()], [], [],
+            standing=standing(position_qty=0, avg_cost=D("0"), t_value=D("0"), star_price=None, take_profit_price=None),
+        )
+
+        self.assertIn("보유 없음 · 첫 매수 대기", text)
+        self.assertNotIn("평단가", text)
+        self.assertNotIn("익절 목표", text)
+
+    def test_missing_quote_omits_price_but_keeps_status(self):
+        text = auto_result_message(
+            "SOXL", [line()], [], [], standing=standing(current_price=None, previous_close=None),
+        )
+
+        self.assertNotIn("현재가", text)
+        self.assertNotIn("평단 대비", text)
+        self.assertIn("평단가 <b>$105.18</b>", text)
+
+    def test_no_standing_matches_the_plain_layout(self):
+        text = auto_result_message("SOXL", [line()], [], [])
+
+        self.assertNotIn("현재 상태", text)
+        self.assertNotIn("현재가", text)
+
+    def test_failure_message_also_carries_status(self):
+        text = auto_failure_message("SOXL", "timeout", ["a"], standing=standing())
+
+        self.assertIn("💵 현재가 <b>$112.40</b>", text)
+        self.assertIn("📊 <b>현재 상태</b>", text)
 
 
 if __name__ == "__main__":
