@@ -218,16 +218,29 @@ def _schema() -> dict:
         "impact": {"type": "string", "enum": ["positive", "negative", "mixed"]},
         "source": {"type": "string"}, "url": {"type": "string"}},
         "required": ["date", "asset", "title", "summary", "why", "impact", "source", "url"]}
+    upcoming = {"type": "object", "properties": {
+        "date": {"type": "string", "description": "YYYY-MM-DD. 날짜가 확정되지 않았으면 가장 이른 예상일"},
+        "tentative": {"type": "boolean", "description": "날짜가 공식 확정되지 않았으면 true"},
+        "when": {"type": "string", "description": "tentative 일 때 '11월 중순', '2027년 상반기' 같은 표현, 아니면 빈 문자열"},
+        "asset": {"type": "string", "enum": list(ASSETS), "description": "btc / eth / both(시장 전체)"},
+        "type": {"type": "string", "enum": list(TYPES)},
+        "title": {"type": "string", "description": "짧은 제목"},
+        "desc": {"type": "string", "description": "무엇이 예정돼 있는지 1~2문장, 해요체"},
+        "why": {"type": "string", "description": "초보 투자자가 무엇을 보면 되는지 1문장"},
+        "sources": {"type": "array", "items": {"type": "object", "properties": {
+            "title": {"type": "string"}, "url": {"type": "string"}}, "required": ["title", "url"]}}},
+        "required": ["date", "tentative", "when", "asset", "type", "title", "desc", "why", "sources"]}
     return {"type": "object", "properties": {
         "events": {"type": "array", "maxItems": 20, "items": event},
         "news": {"type": "array", "maxItems": 20, "items": item},
-        "summary": {"type": "string"}}, "required": ["events", "news", "summary"]}
+        "upcoming": {"type": "array", "maxItems": 25, "items": upcoming},
+        "summary": {"type": "string"}}, "required": ["events", "news", "upcoming", "summary"]}
 
 
 def _prompt(events: list[dict], since: str, news_since: str) -> str:
     listed = "\n".join(f"- {e['date']} [{e['asset']}/{e['type']}] {e['title']}" for e in events)
     types = ", ".join(f"{k}({v})" for k, v in TYPE_LABEL.items())
-    return f"""오늘은 {time.strftime("%Y-%m-%d")}입니다. 비트코인·이더리움 투자 학습용 대시보드의 '가격 히스토리' 타임라인과 뉴스를 갱신해 주세요.
+    return f"""오늘은 {time.strftime("%Y-%m-%d")}입니다. 비트코인·이더리움 투자 학습용 대시보드의 '가격 히스토리' 타임라인, 뉴스, '다가오는 일정'을 갱신해 주세요.
 
 [현재 타임라인] ({since}까지 반영)
 {listed}
@@ -240,6 +253,10 @@ def _prompt(events: list[dict], since: str, news_since: str) -> str:
 
 [2] news — {news_since} 이후 비트코인·이더리움 관련 주요 뉴스 최대 15건(최신순, 국내·해외 모두).
 - 상장사의 코인 대량 매입(트레저리 기업: 비트마인 BMNR·스트래티지 MSTR·샤프링크 SBET·메타플래닛 3350.T 등)도 꼭 검색하세요. 매입 수량·총보유량·매입 자금 조달 방식(유상증자·전환사채·우선주)을 수치로 적고, 대규모 매입·매입 중단·보유 코인 매도는 events(adoption 또는 crash)에도 넣으세요.
+
+[3] upcoming — 오늘 이후 약 6개월 안에 예정된 비트코인·이더리움 관련 일정 15~25건(날짜순). 과거가 아니라 앞으로 볼 것들이에요.
+- 이더리움 등 네트워크 업그레이드(하드포크) 일정, 현물 ETF·신규 ETF 승인 심사 시한, 미국 가상자산 법안·SEC·CFTC 규제 일정, 국내 가상자산 법·제도 시행일, 대규모 토큰 언락·거래소 상환(예: 마운트곡스) 시한, 트레저리 기업 실적·주총, 주요 컨퍼런스, FOMC·CPI 같은 거시 일정.
+- 공식 발표나 신뢰할 만한 보도로 확인한 것만 넣고, sources 에 실제 방문한 URL을 적으세요. 날짜가 공식 확정되지 않았으면 tentative=true, when 에 '11월 중순' 처럼 적고 date 는 가장 이른 예상일로.
 
 작성 규칙:
 - 모든 설명은 한국어 해요체(~예요/~해요), '제가' 같은 1인칭이나 조사 과정 메모는 쓰지 마세요. 그런 메모는 summary 에만.
@@ -261,6 +278,15 @@ def _clean_event(e: dict) -> dict | None:
             "title": str(e["title"])[:120], "desc": board_update.tidy(e.get("desc", ""))[:600],
             "sources": [{"title": str(s.get("title", ""))[:80], "url": s["url"]} for s in e.get("sources", [])
                         if re.match(r"^https?://", str(s.get("url", "")))][:3]}
+
+
+def _clean_upcoming(u: dict) -> dict | None:
+    event = _clean_event({**u, "impact": "neutral"})
+    if not event:
+        return None
+    del event["impact"]
+    return {**event, "tentative": bool(u.get("tentative")), "when": str(u.get("when") or "")[:30] if u.get("tentative") else "",
+            "why": board_update.tidy(u.get("why", ""))[:300]}
 
 
 def _clean_news(n: dict) -> dict | None:
@@ -296,11 +322,16 @@ def _run_update() -> None:
         cutoff = time.strftime("%Y-%m-%d", time.localtime(time.time() - 45 * 86400))
         merged = [n for n in fresh + [o for o in old_news if (o.get("url") or o.get("title")) not in seen] if n["date"] >= cutoff]
         merged.sort(key=lambda n: n["date"], reverse=True)
+        today = time.strftime("%Y-%m-%d")
+        upcoming = [u for u in (_clean_upcoming(x) for x in data.get("upcoming", [])) if u and u["date"] >= today]
+        if not upcoming:   # a run that found nothing keeps the last list rather than blanking the section
+            upcoming = [u for u in old.get("upcoming") or [] if u.get("date", "") >= today]
         finished = time.strftime("%Y-%m-%d %H:%M:%S")
         board_update.write_update(board, {"status": "done", "startedAt": started, "finishedAt": finished,
                                     "model": f"{board_update.MODEL} · {board_update.EFFORT}",
                                     "data": {"asOf": time.strftime("%Y.%m.%d"), "events": sorted(added, key=lambda e: e["date"]),
-                                             "news": merged[:60], "summary": str(data.get("summary", ""))[:800]}})
+                                             "news": merged[:60], "upcoming": sorted(upcoming, key=lambda u: u["date"]),
+                                             "summary": str(data.get("summary", ""))[:800]}})
     except Exception as error:  # noqa: BLE001 - keep the last good data, show the error
         board_update.write_update(board, {**(previous or {}), "status": "error", "startedAt": started,
                                     "finishedAt": time.strftime("%Y-%m-%d %H:%M:%S"), "error": str(error)[:500]})

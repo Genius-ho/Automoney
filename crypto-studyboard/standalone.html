@@ -53,6 +53,19 @@
   .kv b{color:var(--ink);font-weight:600}
   /* sections */
   section{margin-top:30px}
+  main section[data-tab]{display:none}
+  main[data-tab="upcoming"] section[data-tab="upcoming"],main[data-tab="flow"] section[data-tab="flow"],
+  main[data-tab="treasury"] section[data-tab="treasury"],main[data-tab="news"] section[data-tab="news"],main[data-tab="learn"] section[data-tab="learn"]{display:block}
+  main[data-tab="milestones"] section[data-tab="milestones"]{display:grid}
+  nav.tabs{position:sticky;top:0;z-index:20;background:color-mix(in srgb, var(--bg) 88%, transparent);backdrop-filter:blur(10px);border-bottom:1px solid var(--line)}
+  .tabs-inner{max-width:1180px;margin:0 auto;display:flex;gap:4px;padding:10px 20px;overflow-x:auto;scrollbar-width:none}
+  .tabs-inner::-webkit-scrollbar{display:none}
+  .tab-btn{font-family:inherit;font-size:14.5px;font-weight:600;color:var(--ink-soft);background:transparent;border:1px solid transparent;border-radius:99px;padding:8px 15px;cursor:pointer;white-space:nowrap;flex:0 0 auto}
+  .tab-btn:hover{color:var(--ink);background:var(--surface-2)}
+  .tab-btn.active{background:var(--accent);color:#fff;border-color:var(--accent)}
+  .umonth{font-size:15px;font-weight:700;margin:16px 0 6px}
+  .ncard .dday{font-weight:700;color:var(--accent);margin-right:6px}
+  .ncard .tag.tent{opacity:.75}
   .sec-head{display:flex;flex-wrap:wrap;align-items:baseline;justify-content:space-between;gap:8px 16px;margin-bottom:12px}
   .sec-head h2{margin:0;font-size:20px;letter-spacing:-.01em}
   .note{font-size:13px;color:var(--ink-faint)}
@@ -137,7 +150,7 @@
     <p class="subtitle">2018년부터 지금까지 비트코인·이더리움의 가격과 반감기, ETF 출시, 네트워크 업그레이드, 폭락·급등, 규제 같은 주요 사건을 한 페이지에서 따라가는 학습용 대시보드입니다.</p>
     <div class="meta-row">
       <span class="pill" id="upd-date">히스토리 기준 2025.12</span>
-      <button type="button" class="upd-btn" id="upd-btn" hidden title="Claude Sonnet 5.5 (medium)가 웹 검색으로 새 사건과 뉴스를 찾아 추가해요">🔄 AI 업데이트</button>
+      <button type="button" class="upd-btn" id="upd-btn" hidden title="Claude Sonnet 5.5 (medium)가 웹 검색으로 새 사건·뉴스와 다가오는 일정을 찾아 추가해요">🔄 AI 업데이트</button>
       <span class="upd-msg" id="upd-msg"></span>
       <span class="pill">정보 제공 목적 · 투자 권유 아님</span>
     </div>
@@ -149,8 +162,27 @@
   </div>
 </header>
 
+<nav class="tabs">
+  <div class="tabs-inner" id="tabbar">
+    <button type="button" class="tab-btn" data-tab="upcoming">🔜 다가오는 일정</button>
+    <button type="button" class="tab-btn" data-tab="flow">📈 가격 흐름·히스토리</button>
+    <button type="button" class="tab-btn" data-tab="milestones">⛏ 반감기·ETF</button>
+    <button type="button" class="tab-btn" data-tab="treasury">🏢 트레저리 기업</button>
+    <button type="button" class="tab-btn" data-tab="news">📰 뉴스</button>
+    <button type="button" class="tab-btn" data-tab="learn">📚 기본 지식</button>
+  </div>
+</nav>
+
 <main class="wrap">
-  <section>
+  <section data-tab="upcoming">
+    <div class="sec-head">
+      <h2>🔜 다가오는 일정 <span class="note" id="up-count"></span></h2>
+    </div>
+    <p class="note" id="up-note"></p>
+    <div id="upcoming"></div>
+  </section>
+
+  <section data-tab="flow">
     <div class="sec-head">
       <h2>📈 2018년 이후 가격 흐름</h2>
       <span class="note">주간 종가(달러) · 선이나 점을 누르면 아래 히스토리의 해당 사건으로 이동해요</span>
@@ -165,7 +197,7 @@
     </div>
   </section>
 
-  <section>
+  <section data-tab="flow">
     <div class="sec-head">
       <h2>🗓 히스토리 <span class="note" id="tl-count"></span></h2>
       <div class="seg" role="group" aria-label="정렬"><button type="button" data-order="asc" aria-pressed="true">과거부터</button><button type="button" data-order="desc" aria-pressed="false">최신부터</button></div>
@@ -177,7 +209,7 @@
     <div id="timeline"></div>
   </section>
 
-  <section class="grid2">
+  <section class="grid2" data-tab="milestones">
     <div>
       <div class="sec-head"><h2>⛏ 비트코인 반감기</h2></div>
       <table>
@@ -207,7 +239,7 @@
     </div>
   </section>
 
-  <section>
+  <section data-tab="treasury">
     <div class="sec-head">
       <h2>🏢 코인을 사들이는 상장사 (트레저리 기업)</h2>
       <span class="note">보유량은 회사 공시 기준 · 보유 가치와 주가는 실시간이에요</span>
@@ -220,7 +252,7 @@
     <div id="treasury-news"></div>
   </section>
 
-  <section>
+  <section data-tab="news">
     <div class="sec-head">
       <h2>📰 뉴스</h2>
       <span class="note" id="news-note"></span>
@@ -229,7 +261,7 @@
     <div id="news-live"></div>
   </section>
 
-  <section>
+  <section data-tab="learn">
     <div class="sec-head"><h2>📚 기본 지식</h2></div>
     <div class="learn">
       <div class="card"><h3>⛏ 반감기와 4년 사이클</h3><p>비트코인은 새 블록을 만든 채굴자에게 보상을 주는데, 이 보상이 21만 블록(약 4년)마다 절반으로 줄어요. 새로 풀리는 공급이 줄어드는 셈이라, 과거에는 반감기 후 1~1.5년 사이에 고점이 온 경우가 많았어요. 다만 ETF·기관 자금이 커지면서 이 패턴이 그대로 반복될지는 논쟁이 있어요.</p></div>
@@ -519,6 +551,38 @@
 
   /* ---------------- news ---------------- */
   var aiNews = [], liveNews = null;
+  /* ---------------- tabs ---------------- */
+  var mainEl = document.querySelector('main.wrap'), tabBtns = [].slice.call(document.querySelectorAll('.tab-btn'));
+  function showTab(k){
+    if(mainEl.dataset.tab === k) return;
+    mainEl.dataset.tab = k;
+    tabBtns.forEach(function(b){ b.classList.toggle('active', b.dataset.tab === k); });
+    try{ localStorage.setItem('crypto-board-tab', k); }catch(e){}
+    if(k === 'flow'){ renderChart(); renderTimeline(); }   // the chart measures its width, so draw it once visible
+  }
+  tabBtns.forEach(function(b){ b.addEventListener('click', function(){ showTab(b.dataset.tab); window.scrollTo(0, 0); }); });
+
+  /* ---------------- upcoming ---------------- */
+  var aiUpcoming = [];
+  function renderUpcoming(){
+    var now = new Date(), today = now.getFullYear()+'-'+('0'+(now.getMonth()+1)).slice(-2)+'-'+('0'+now.getDate()).slice(-2);
+    var list = aiUpcoming.filter(function(u){ return u.date >= today; }), h = '', month = null;
+    list.forEach(function(u){
+      var m = u.date.slice(0, 7);
+      if(m !== month){ month = m; h += '<div class="umonth">'+m.slice(0, 4)+'년 '+(+m.slice(5))+'월</div>'; }
+      var t = TYPE_MAP[u.type] || {l:u.type, i:''}, days = Math.round((Date.parse(u.date) - Date.parse(today)) / 86400000);
+      h += '<div class="ncard"><div class="item-top"><span class="dday">'+(days === 0 ? 'D-DAY' : 'D-'+days)+'</span>'+
+        '<span class="date">'+(u.tentative ? esc(u.when || u.date.replace(/-/g, '.')+' 무렵') : esc(u.date.replace(/-/g, '.')))+'</span>'+
+        '<span class="tag '+esc(u.asset)+'">'+esc(ASSET_LABEL[u.asset]||u.asset)+'</span><span class="tag">'+t.i+' '+esc(t.l)+'</span>'+(u.tentative ? '<span class="tag tent">미확정</span>' : '')+'</div>'+
+        '<h4>'+esc(u.title)+'</h4><p>'+esc(u.desc)+'</p>'+(u.why ? '<p class="why">💡 '+esc(u.why)+'</p>' : '')+
+        ((u.sources||[]).length ? '<div class="src">'+u.sources.map(function(s){ var x = safeUrl(s.url); return x ? '<a href="'+x+'" target="_blank" rel="noopener">'+esc(s.title||'근거')+' ↗</a>' : ''; }).join('')+'</div>' : '')+
+        '</div>';
+    });
+    document.getElementById('up-count').textContent = list.length ? list.length + '건' : '';
+    document.getElementById('up-note').textContent = list.length ? '업그레이드·ETF 심사·규제 시행·거시 일정 등 앞으로 예정된 일정이에요. 날짜는 바뀔 수 있어요.' : '';
+    document.getElementById('upcoming').innerHTML = h || '<p class="empty">'+(onServer ? '아직 일정이 없어요. 🔄 AI 업데이트를 누르면 웹 검색으로 채워요.' : '일정은 서버에서 열었을 때만 보여요.')+'</p>';
+  }
+
   function renderNews(){
     var IMP = {positive:'▲ 호재', negative:'▼ 악재', mixed:'◆ 엇갈림'};
     document.getElementById('news-ai').innerHTML = aiNews.slice(0, 12).map(function(n){
@@ -582,17 +646,17 @@
       updMsg.title = (u && u.data && u.data.summary) || '';
       if(u && u.data && u.finishedAt && u.finishedAt !== updApplied){
         updApplied = u.finishedAt;
-        aiEvents = u.data.events || []; aiNews = u.data.news || [];
+        aiEvents = u.data.events || []; aiNews = u.data.news || []; aiUpcoming = u.data.upcoming || [];
         events = allEvents(); pinned = null;
         if(u.data.asOf) document.getElementById('upd-date').textContent = '업데이트 ' + u.data.asOf;
-        renderChart(); renderTimeline(); renderNews();
+        renderChart(); renderTimeline(); renderNews(); renderUpcoming();
       }
       clearTimeout(updPoll);
       if(running) updPoll = setTimeout(loadUpdate, 10000);
     });
   }
   updBtn.addEventListener('click', function(){
-    if(!confirm('AI가 웹 검색으로 새 사건과 뉴스를 찾아 히스토리에 추가합니다 (Claude Sonnet 5.5 · medium, 수 분 소요). 진행할까요?')) return;
+    if(!confirm('AI가 웹 검색으로 새 사건·뉴스와 다가오는 일정을 찾아 갱신합니다 (Claude Sonnet 5.5 · medium, 수 분 소요). 진행할까요?')) return;
     updBtn.disabled = true;
     fetch('api/update', {method:'POST'}).then(function(r){ return r.json(); }).then(function(d){
       if(!d.ok) alert(d.error || '업데이트 요청 실패');
@@ -602,7 +666,10 @@
 
   var wasNarrow = null;
   window.addEventListener('resize', function(){ var n = chartEl.clientWidth < 600; if(n !== wasNarrow){ wasNarrow = n; renderChart(); } });
-  syncFilters(); renderChart(); renderTimeline(); renderNews(); renderTreasury();
+  var savedTab = 'upcoming';
+  try{ savedTab = localStorage.getItem('crypto-board-tab') || savedTab; }catch(e){}
+  showTab(tabBtns.some(function(b){ return b.dataset.tab === savedTab; }) ? savedTab : 'upcoming');
+  syncFilters(); renderChart(); renderTimeline(); renderNews(); renderTreasury(); renderUpcoming();
   if(onServer){
     updBtn.hidden = false;
     loadHistory('BTC'); loadHistory('ETH'); loadPrices(); loadUpdate();
