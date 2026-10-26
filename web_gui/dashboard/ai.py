@@ -217,17 +217,30 @@ def _schema() -> dict:
         "impact": {"type": "string", "enum": ["positive", "negative", "mixed"]},
         "source": {"type": "string"}, "url": {"type": "string"}},
         "required": ["date", "title", "summary", "why", "impact", "source", "url"]}
+    upcoming = {"type": "object", "properties": {
+        "date": {"type": "string", "description": "YYYY-MM-DD. 날짜가 확정되지 않았으면 가장 이른 예상일"},
+        "tentative": {"type": "boolean", "description": "날짜가 공식 확정되지 않았으면 true"},
+        "when": {"type": "string", "description": "tentative 일 때 '11월 중순', '2027년 상반기' 같은 표현, 아니면 빈 문자열"},
+        "type": {"type": "string", "enum": list(TYPES)},
+        "title": {"type": "string", "description": "짧은 제목"},
+        "desc": {"type": "string", "description": "무엇이 예정돼 있는지 1~2문장, 해요체"},
+        "why": {"type": "string", "description": "'다음 병목' 관점에서 무엇을 보면 되는지 1문장"},
+        "stocks": {"type": "array", "items": {"type": "string", "enum": list(SYMBOLS)}, "maxItems": 4},
+        "sources": {"type": "array", "items": {"type": "object", "properties": {
+            "title": {"type": "string"}, "url": {"type": "string"}}, "required": ["title", "url"]}}},
+        "required": ["date", "tentative", "when", "type", "title", "desc", "why", "stocks", "sources"]}
     return {"type": "object", "properties": {
         "events": {"type": "array", "maxItems": 20, "items": event},
         "news": {"type": "array", "maxItems": 20, "items": item},
-        "summary": {"type": "string"}}, "required": ["events", "news", "summary"]}
+        "upcoming": {"type": "array", "maxItems": 25, "items": upcoming},
+        "summary": {"type": "string"}}, "required": ["events", "news", "upcoming", "summary"]}
 
 
 def _prompt(events: list[dict], since: str, news_since: str) -> str:
     listed = "\n".join(f"- {e['date']} [{e['type']}] {e['title']}" for e in events)
     types = ", ".join(f"{k}({v})" for k, v in TYPE_LABEL.items())
     symbols = ", ".join(f"{k}({v})" for k, v in SYMBOLS.items())
-    return f"""오늘은 {time.strftime("%Y-%m-%d")}입니다. AI 산업과 관련 주식(나스닥·특징주) 학습용 대시보드의 '히스토리' 타임라인과 뉴스를 갱신해 주세요.
+    return f"""오늘은 {time.strftime("%Y-%m-%d")}입니다. AI 산업과 관련 주식(나스닥·특징주) 학습용 대시보드의 '히스토리' 타임라인, 뉴스, '다가오는 일정'을 갱신해 주세요.
 이 보드는 AI 붐이 연산(GPU) → 패키징·HBM → 전력·네트워크 → 추론용 메모리·SSD 순으로 병목을 옮겨 온 흐름과 '다음 병목'을 공부하는 곳이에요.
 
 [현재 타임라인] ({since}까지 반영)
@@ -243,6 +256,10 @@ def _prompt(events: list[dict], since: str, news_since: str) -> str:
 [2] news — {news_since} 이후 AI 산업·관련주 주요 뉴스 최대 15건(최신순, 국내·해외 모두). why 에는 '다음 병목' 관점의 의미를 적으세요.
 - 반드시 오늘·어제 소식부터 검색하세요(예: 'AI 반도체 오늘', '엔비디아 주가 오늘', 'Nvidia stock today'). 주요 종목의 사상 최고가(신고가)·급등락, 실적, 대형 계약은 빠뜨리지 마세요.
 - 스페이스X(SPCX: xAI 합병, 콜로서스 연산 임대, 우주 데이터센터 AI1, 테슬라와의 테라팹 칩 공장) 소식도 확인하세요. 칩·전력 병목을 우회하려는 시도라 이 보드의 흐름과 직결돼요.
+
+[3] upcoming — 오늘 이후 약 6개월 안에 예정된 AI 관련 일정 15~25건(날짜순). 과거가 아니라 앞으로 볼 것들이에요.
+- 주요 종목 실적 발표일(엔비디아·마이크론·브로드컴·TSMC·SK하이닉스·삼성전자·빅테크 등), 칩·모델 발표 행사(GTC, re:Invent, CES, Computex, OpenAI·구글 개발자 행사 등), 신제품 출시·양산 일정(차세대 GPU, HBM4·HBM4E, 2나노 등), 대형 데이터센터·전력 프로젝트 가동, 수출통제·관세 등 정책 시한, FOMC 같은 거시 일정.
+- 회사·주최측 공식 발표나 신뢰할 만한 보도로 확인한 것만 넣고, sources 에 실제 방문한 URL을 적으세요. 날짜가 공식 확정되지 않았으면 tentative=true, when 에 '11월 중순' 처럼 적고 date 는 가장 이른 예상일로.
 
 작성 규칙:
 - 모든 설명은 한국어 해요체(~예요/~해요), '제가' 같은 1인칭이나 조사 과정 메모는 쓰지 마세요. 그런 메모는 summary 에만.
@@ -263,6 +280,15 @@ def _clean_event(e: dict) -> dict | None:
             "stocks": [s for s in e.get("stocks", []) if s in SYMBOLS][:4],
             "sources": [{"title": str(s.get("title", ""))[:80], "url": s["url"]} for s in e.get("sources", [])
                         if re.match(r"^https?://", str(s.get("url", "")))][:3]}
+
+
+def _clean_upcoming(u: dict) -> dict | None:
+    event = _clean_event({**u, "impact": "neutral"})
+    if not event:
+        return None
+    del event["impact"]
+    return {**event, "tentative": bool(u.get("tentative")), "when": str(u.get("when") or "")[:30] if u.get("tentative") else "",
+            "why": board_update.tidy(u.get("why", ""))[:300]}
 
 
 def _clean_news(n: dict) -> dict | None:
@@ -297,11 +323,16 @@ def _run_update() -> None:
         cutoff = time.strftime("%Y-%m-%d", time.localtime(time.time() - 45 * 86400))
         merged = [n for n in fresh + [o for o in old_news if (o.get("url") or o.get("title")) not in seen] if n["date"] >= cutoff]
         merged.sort(key=lambda n: n["date"], reverse=True)
+        today = time.strftime("%Y-%m-%d")
+        upcoming = [u for u in (_clean_upcoming(x) for x in data.get("upcoming", [])) if u and u["date"] >= today]
+        if not upcoming:   # a run that found nothing keeps the last list rather than blanking the section
+            upcoming = [u for u in old.get("upcoming") or [] if u.get("date", "") >= today]
         finished = time.strftime("%Y-%m-%d %H:%M:%S")
         board_update.write_update(board, {"status": "done", "startedAt": started, "finishedAt": finished,
                                           "model": f"{board_update.MODEL} · {board_update.EFFORT}",
                                           "data": {"asOf": time.strftime("%Y.%m.%d"), "events": sorted(added, key=lambda e: e["date"]),
-                                                   "news": merged[:60], "summary": str(data.get("summary", ""))[:800]}})
+                                                   "news": merged[:60], "upcoming": sorted(upcoming, key=lambda u: u["date"]),
+                                                   "summary": str(data.get("summary", ""))[:800]}})
     except Exception as error:  # noqa: BLE001 - keep the last good data, show the error
         board_update.write_update(board, {**(previous or {}), "status": "error", "startedAt": started,
                                           "finishedAt": time.strftime("%Y-%m-%d %H:%M:%S"), "error": str(error)[:500]})
