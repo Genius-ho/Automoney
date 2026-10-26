@@ -11,6 +11,7 @@ from __future__ import annotations
 
 import json
 import re
+import shutil
 import subprocess
 import threading
 import time
@@ -27,6 +28,20 @@ STATUSES = ("good", "neutral", "warn", "crit")
 IMPACTS = ("positive", "negative", "mixed")
 REGIONS = ("kr", "gl")
 PARTS = ("all", "calendar", "news")   # calendar = catalyst calendar + macro strip
+
+
+def _find_claude() -> Path:
+    """The server runs under launchd with a bare PATH, so look in the usual install spots
+    (native installer, old npm global) before falling back to whatever PATH has."""
+    for candidate in (Path.home() / ".local" / "bin" / "claude",
+                      Path.home() / ".npm-global" / "bin" / "claude",
+                      Path("/opt/homebrew/bin/claude"), Path("/usr/local/bin/claude")):
+        if candidate.exists():
+            return candidate
+    return Path(shutil.which("claude") or "claude")
+
+
+CLAUDE_BIN = _find_claude()
 
 
 @dataclass

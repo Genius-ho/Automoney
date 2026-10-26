@@ -25,7 +25,7 @@ from web_gui.dashboard import board_update
 PROJECT_ROOT = Path(__file__).resolve().parents[2]
 PAGE = PROJECT_ROOT / "ai-studyboard" / "standalone.html"
 DATA = PROJECT_ROOT / "data" / "aistudy"
-CLAUDE_BIN = Path.home() / ".npm-global" / "bin" / "claude"
+CLAUDE_BIN = board_update.CLAUDE_BIN
 
 UA = "Mozilla/5.0"
 START = "2017-01-01"
