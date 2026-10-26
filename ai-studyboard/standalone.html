@@ -49,6 +49,15 @@
   .kv{display:flex;justify-content:space-between;gap:8px;font-size:13px;color:var(--ink-soft);margin-top:4px;font-variant-numeric:tabular-nums}
   .kv b{color:var(--ink);font-weight:600}
   section{margin-top:32px}
+  main section[data-tab]{display:none}
+  main[data-tab="upcoming"] section[data-tab="upcoming"],main[data-tab="flow"] section[data-tab="flow"],main[data-tab="next"] section[data-tab="next"],
+  main[data-tab="leaders"] section[data-tab="leaders"],main[data-tab="news"] section[data-tab="news"],main[data-tab="learn"] section[data-tab="learn"]{display:block}
+  nav.tabs{position:sticky;top:0;z-index:20;background:color-mix(in srgb, var(--bg) 88%, transparent);backdrop-filter:blur(10px);border-bottom:1px solid var(--line)}
+  .tabs-inner{max-width:1180px;margin:0 auto;display:flex;gap:4px;padding:10px 20px;overflow-x:auto;scrollbar-width:none}
+  .tabs-inner::-webkit-scrollbar{display:none}
+  .tab-btn{font-family:inherit;font-size:14.5px;font-weight:600;color:var(--ink-soft);background:transparent;border:1px solid transparent;border-radius:99px;padding:8px 15px;cursor:pointer;white-space:nowrap;flex:0 0 auto}
+  .tab-btn:hover{color:var(--ink);background:var(--surface-2)}
+  .tab-btn.active{background:var(--accent);color:#fff;border-color:var(--accent)}
   .sec-head{display:flex;flex-wrap:wrap;align-items:baseline;justify-content:space-between;gap:8px 16px;margin-bottom:12px}
   .sec-head h2{margin:0;font-size:20px;letter-spacing:-.01em}
   .note{font-size:13px;color:var(--ink-faint)}
@@ -246,8 +255,26 @@
   </div>
 </header>
 
+<nav class="tabs">
+  <div class="tabs-inner" id="tabbar">
+    <button type="button" class="tab-btn" data-tab="upcoming">🔜 다가오는 일정</button>
+    <button type="button" class="tab-btn" data-tab="flow">📈 흐름·히스토리</button>
+    <button type="button" class="tab-btn" data-tab="next">🧩 병목·다음 병목</button>
+    <button type="button" class="tab-btn" data-tab="leaders">🏆 특징주 성적표</button>
+    <button type="button" class="tab-btn" data-tab="news">📰 뉴스</button>
+    <button type="button" class="tab-btn" data-tab="learn">📚 기본 지식</button>
+  </div>
+</nav>
+
 <main class="wrap">
-  <section>
+  <section data-tab="upcoming">
+    <div class="sec-head">
+      <h2>🔜 다가오는 일정 <span class="note" id="up-count"></span></h2>
+    </div>
+    <p class="note" id="up-note"></p>
+    <div id="upcoming"></div>
+  </section>
+  <section data-tab="flow">
     <div class="sec-head">
       <h2>🎬 AI 붐의 5막 — 병목이 옮겨 간 순서</h2>
       <span class="note">수익률은 각 시기 시작 주의 종가 대비(실시간 계산) · 카드를 누르면 차트와 히스토리가 그 시기로 좁혀져요</span>
@@ -255,7 +282,7 @@
     <div class="eras" id="eras"></div>
   </section>
 
-  <section>
+  <section data-tab="flow">
     <div class="sec-head">
       <h2>📈 나스닥과 특징주 차트</h2>
       <span class="note">주간 종가 · 선이나 점을 누르면 아래 히스토리의 해당 사건으로 이동해요</span>
@@ -272,7 +299,7 @@
     </div>
   </section>
 
-  <section>
+  <section data-tab="flow">
     <div class="sec-head">
       <h2>🗓 히스토리 <span class="note" id="tl-count"></span></h2>
       <div class="seg" role="group" aria-label="정렬"><button type="button" data-order="asc" aria-pressed="true">과거부터</button><button type="button" data-order="desc" aria-pressed="false">최신부터</button></div>
@@ -284,15 +311,8 @@
     <div id="timeline"></div>
   </section>
 
-  <section>
-    <div class="sec-head">
-      <h2>🔜 다가오는 일정 <span class="note" id="up-count"></span></h2>
-    </div>
-    <p class="note" id="up-note"></p>
-    <div id="upcoming"></div>
-  </section>
 
-  <section>
+  <section data-tab="next">
     <div class="sec-head">
       <h2>🧩 병목 지도: 지금까지 막혔던 곳</h2>
       <span class="note">지나간 병목 → 현재 병목 · 종목을 누르면 차트로 봐요 · 숫자는 1년 수익률</span>
@@ -301,7 +321,7 @@
     <div class="bns" id="bns"></div>
   </section>
 
-  <section id="next">
+  <section id="next" data-tab="next">
     <div class="sec-head">
       <h2>🔭 다음 병목 심층 분석</h2>
       <span class="note">2026년 10월 기준 공개 자료로 정리한 공부용 가설이에요 · 투자 권유가 아니에요</span>
@@ -330,7 +350,7 @@
     </ol>
   </section>
 
-  <section>
+  <section data-tab="leaders">
     <div class="sec-head">
       <h2>🏆 특징주 성적표</h2>
       <span class="note" id="lb-note">제목을 누르면 정렬 · 행을 누르면 차트로 봐요</span>
@@ -339,13 +359,13 @@
     <div class="tbl-wrap"><table id="lb"></table></div>
   </section>
 
-  <section>
+  <section data-tab="news">
     <div class="sec-head"><h2>📰 뉴스</h2><span class="note" id="news-note"></span></div>
     <div id="news-ai"></div>
     <div id="news-live"></div>
   </section>
 
-  <section>
+  <section data-tab="learn">
     <div class="sec-head"><h2>📚 기본 지식</h2></div>
     <div class="learn">
       <div class="card"><h3>🧠 학습(Training)과 추론(Inference)</h3><p>학습은 모델을 만드는 단계로 GPU 수만 개를 몇 달 돌려요. 추론은 만든 모델을 사람들이 쓰는 단계예요. 사용자가 늘고, o1처럼 '오래 생각하는' 추론 모델과 스스로 일하는 에이전트가 나오면서 2025년부터는 추론에 드는 연산·메모리가 학습을 앞지르기 시작했어요.</p></div>
@@ -984,6 +1004,7 @@
   }
   function openDeep(k){
     var d = document.getElementById('dp-'+k); if(!d) return;
+    showTab('next');
     d.open = true; d.scrollIntoView({behavior:'smooth', block:'start'});
   }
   function renderGantt(){
@@ -1081,11 +1102,11 @@
     document.querySelectorAll('[data-grp]').forEach(function(b){ b.setAttribute('aria-pressed', String(b.dataset.grp === state.grp)); });
   }
   function showSym(sym){
-    state.sym = sym; syncFilters(); renderChart();
+    showTab('flow'); state.sym = sym; syncFilters(); renderChart();
     document.querySelector('.chart-box').scrollIntoView({behavior:'smooth', block:'center'});
   }
   function setEra(k){
-    if(k === 'e5'){ document.getElementById('next').scrollIntoView({behavior:'smooth', block:'start'}); return; }
+    if(k === 'e5'){ showTab('next'); document.getElementById('next').scrollIntoView({behavior:'smooth', block:'start'}); return; }
     state.era = state.era === k ? 'all' : k; pinned = null;
     syncFilters(); renderChart(); renderTimeline();
   }
@@ -1123,6 +1144,19 @@
         return '<div class="nline"><span class="d">'+esc(n.date.slice(5).replace('-', '.'))+'</span><span>'+(u ? '<a href="'+u+'" target="_blank" rel="noopener">'+esc(n.title)+'</a>' : esc(n.title))+'<small>'+esc(n.source)+'</small></span></div>'; }).join('') : '';
     document.getElementById('news-note').textContent = aiNews.length ? 'AI 요약 '+aiNews.length+'건' : (onServer ? '' : '뉴스는 서버에서 열었을 때만 보여요');
   }
+
+  /* ---------------- tabs ---------------- */
+  var mainEl = document.querySelector('main.wrap'), tabBtns = [].slice.call(document.querySelectorAll('.tab-btn'));
+  function showTab(k){
+    if(mainEl.dataset.tab === k) return;
+    mainEl.dataset.tab = k;
+    tabBtns.forEach(function(b){ b.classList.toggle('active', b.dataset.tab === k); });
+    try{ localStorage.setItem('ai-board-tab', k); }catch(e){}
+    if(k === 'flow'){ renderChart(); renderTimeline(); }
+    if(k === 'next'){ renderBottlenecks(); renderNext(); }
+    if(k === 'leaders') renderLeaderboard();
+  }
+  tabBtns.forEach(function(b){ b.addEventListener('click', function(){ showTab(b.dataset.tab); window.scrollTo(0, 0); }); });
 
   /* ---------------- upcoming ---------------- */
   var aiUpcoming = [];
@@ -1189,6 +1223,9 @@
 
   var wasNarrow = null;
   window.addEventListener('resize', function(){ var n = chartEl.clientWidth < 600; if(n !== wasNarrow){ wasNarrow = n; renderChart(); } });
+  var savedTab = 'upcoming';
+  try{ savedTab = localStorage.getItem('ai-board-tab') || savedTab; }catch(e){}
+  showTab(tabBtns.some(function(b){ return b.dataset.tab === savedTab; }) ? savedTab : 'upcoming');
   syncFilters(); renderData(); renderNews(); renderUpcoming();
   if(onServer){
     updBtn.hidden = false;
